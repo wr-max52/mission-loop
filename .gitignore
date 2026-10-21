@@ -2,3 +2,4 @@
 data/
 missions/
 __pycache__/
+.env

@@ -25,25 +25,29 @@ class Mission(BaseModel):
     wait_until: datetime | None = None
     approved: bool = False
     reviewed: bool = False
-    validator_notes: str = ""
+    validator_notes: str = ""              # validator failures or human feedback
+
+class Claim(BaseModel):
+    text: str
+    source_ids: list[str]
 
 class Source(BaseModel):
     id: str
     url: str
     title: str
-    quote: str
+    quote: str                             # exact sentence copied from the page
     stance: Literal["supports", "contradicts"]
 
 class POC(BaseModel):
     name: str
     role: str
     email: str
-    contact_source_url: str
+    contact_source_url: str                # public page where the email appears
     why_them: str
 
 class ResearchBrief(BaseModel):
     thesis: str
-    claims: list[dict]                     # {"text": ..., "source_ids": [...]}
+    claims: list[Claim]
     counterpoint: str
     sources: list[Source]
     pocs: list[POC] = Field(min_length=3)  # 3 or more POCs
@@ -53,4 +57,4 @@ class OutreachRecord(BaseModel):
     poc_email: str
     gmail_thread_id: str
     sent_at: datetime
-    replies: list[dict] = []               # {"text", "received_at", "is_comment", "ok_to_quote"}
+    replies: list[dict] = []

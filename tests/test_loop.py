@@ -4,14 +4,9 @@ import pytest
 import orchestrator, store
 from contracts import Mission, State
 
-T0 = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
+pytestmark = pytest.mark.usefixtures("stub_agents")
 
-@pytest.fixture(autouse=True)
-def fresh(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(store, "DB", tmp_path / "data" / "loop.db")
-    monkeypatch.setattr(orchestrator, "STOP_FLAG", tmp_path / "data" / "STOP")
-    store.init()
+T0 = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
 
 def run_at(t):
     orchestrator.run_until_idle(lambda: t)

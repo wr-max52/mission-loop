@@ -1,10 +1,10 @@
 from pathlib import Path
-from contracts import Mission, ResearchBrief, Source, POC, OutreachRecord
+from contracts import Mission, ResearchBrief, Source, POC, Claim, OutreachRecord
 
 def research(m: Mission) -> ResearchBrief:
     return ResearchBrief(
         thesis=f"Stub thesis about {m.topic}",
-        claims=[{"text": "Stub claim", "source_ids": ["s1", "s2"]}],
+        claims=[Claim(text="Stub claim", source_ids=["s1", "s2"])],
         counterpoint="Stub counterpoint answering s4",
         sources=[
             Source(id="s1", url="https://a.example.com", title="A", quote="stub", stance="supports"),
@@ -36,5 +36,5 @@ def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Pa
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         f"---\ntitle: {brief.thesis}\nsources: {[s.id for s in brief.sources]}\n---\n\n"
-        f"# {brief.thesis}\n\n{brief.claims[0]['text']}\n\nComments received: {len(comments)}\n")
+        f"# {brief.thesis}\n\n{brief.claims[0].text}\n\nComments received: {len(comments)}\n")
     return out
