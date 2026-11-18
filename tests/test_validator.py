@@ -1,7 +1,10 @@
+import httpx
 import pytest
+from agents.researcher import _failed_source_ids
 from checks import validator
 from contracts import Mission, ResearchBrief, Source, POC, Claim
 
+REAL_FETCH = validator.fetch               # the fake_web fixture replaces validator.fetch
 M = Mission(slug="v", topic="t")
 Q = "Heat pumps kept homes above 20C at minus 25C during the trial."
 
@@ -106,3 +109,38 @@ def test_outreach_needs_three_pocs(monkeypatch):
     monkeypatch.setattr(validator.settings, "OUTREACH", True)
     ok, notes = validator.validate(M, brief(pocs=[]))
     assert not ok and "need 3" in notes
+
+def test_researcher_can_tell_which_sources_failed():
+    b = brief()
+    b.sources[0].quote = "Heat pumps are the best technology ever invented for every home."
+    b.sources[1].url = "https://dead.example/404"
+    ok, notes = validator.validate(M, b)
+    assert not ok
+    failed = _failed_source_ids(notes)
+    assert {"s1", "s2"} <= failed and not {"s3", "s4"} & failed
+
+def scripted_get(monkeypatch, outcomes):
+    """Make httpx.get play back responses or raise exceptions; return the list of calls."""
+    calls = []
+    it = iter(outcomes)
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        outcome = next(it)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(validator.httpx, "get", fake_get)
+    monkeypatch.setattr(validator, "_cache", {})
+    return calls
+
+@pytest.mark.parametrize("failure", [httpx.Response(403), httpx.ReadTimeout("slow")], ids=["403", "timeout"])
+def test_failed_fetch_is_tried_again(monkeypatch, failure):
+    calls = scripted_get(monkeypatch, [failure, httpx.Response(200, text="<p>back</p>")])
+    assert REAL_FETCH("https://a.com/1") is None
+    assert REAL_FETCH("https://a.com/1")[0] == "<p>back</p>"
+    assert len(calls) == 2
+
+def test_successful_fetch_is_cached(monkeypatch):
+    calls = scripted_get(monkeypatch, [httpx.Response(200, text="<p>once</p>")])
+    assert REAL_FETCH("https://a.com/1") == REAL_FETCH("https://a.com/1")
+    assert len(calls) == 1

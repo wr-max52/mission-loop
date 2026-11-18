@@ -4,7 +4,7 @@ from ollama import Message
 from agents import researcher as research_mod
 from agents import llm
 from agents.stubs import research as stub_brief
-from contracts import Mission
+from contracts import Mission, RejectedBrief
 
 M = Mission(slug="r", topic="Heat pumps", tools=["search"])
 BRIEF_JSON = stub_brief(M).model_dump_json()
@@ -71,6 +71,33 @@ async def test_validator_notes_reach_the_prompt(monkeypatch):
     m = M.model_copy(update={"validator_notes": "s1: quote not found"})
     await research_mod.run_research(m, toolbox_factory=FakeToolbox)
     assert "s1: quote not found" in captured["system"]
+
+async def test_retry_revises_the_rejected_brief(monkeypatch):
+    sent = []
+    async def fake_chat(messages, tools=None, format=None):
+        sent.append([dict(x) if isinstance(x, dict) else x for x in messages])
+        return text("DONE") if format is None else text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    notes = "s2: could not fetch https://b.example.com\nOnly 2 verified supporting domain(s); need 3"
+    m = M.model_copy(update={"validator_notes": "research crashed: RuntimeError: boom",
+                             "rejected_brief": RejectedBrief(brief=stub_brief(M), notes=notes)})
+    await research_mod.run_research(m, toolbox_factory=FakeToolbox)
+    system = sent[0][0]["content"]
+    assert "Stub thesis" in system and "https://a.example.com" in system   # the brief itself is passed on
+    assert "Sources that passed verification: s1, s3, s4." in system
+    assert "s2: could not fetch" in system                                 # its own notes, not the crash
+    assert "research crashed" not in system
+    assert sent[-1][-1]["content"] == research_mod.REVISE_FINAL
+
+async def test_first_attempt_has_no_revision_prompt(monkeypatch):
+    sent = []
+    async def fake_chat(messages, tools=None, format=None):
+        sent.append(list(messages))
+        return text("DONE") if format is None else text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert "passed verification" not in sent[0][0]["content"]
+    assert sent[-1][-1]["content"] == research_mod.FINAL
 
 async def test_contact_hunting_only_when_outreach_is_on(monkeypatch):
     import settings

@@ -39,11 +39,32 @@ NO_POC_RULE = "- Do not look for points of contact; leave pocs as an empty list.
 
 FINAL = ("Now output the research brief as JSON matching the schema. "
          "Use only sources you fetched, with quotes copied exactly from those pages.")
+REVISE_FINAL = ("Now output the revised research brief as JSON matching the schema. "
+                "Use only the verified sources listed above and sources you fetched in this session, "
+                "with quotes copied exactly from those pages.")
 
 class ResearchFailed(Exception):
     pass
 
+def _failed_source_ids(notes: str) -> set[str]:
+    """The validator starts every per-source problem with "<source id>: "."""
+    return {line.split(":", 1)[0] for line in notes.splitlines()}
+
 def _notes(m: Mission) -> str:
+    if m.rejected_brief:
+        brief, notes = m.rejected_brief.brief, m.rejected_brief.notes
+        failed = _failed_source_ids(notes)
+        verified = [s.id for s in brief.sources if s.id not in failed]
+        return f"""
+Your previous brief was rejected. Revise it instead of starting over:
+{brief.model_dump_json(indent=2)}
+
+Sources that passed verification: {", ".join(verified) or "none"}.
+Keep these exactly as they are (same id, url, title, quote and stance). They count as fetched, so do
+not search for them or fetch them again. Spend your research only on fixing every problem below, and
+update any claim that cites a source you replace:
+{notes}
+"""
     if not m.validator_notes:
         return ""
     return f"\nYour previous brief was rejected. Fix every problem below:\n{m.validator_notes}\n"
@@ -70,7 +91,7 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
                 result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
                 messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
 
-    messages.append({"role": "user", "content": FINAL})
+    messages.append({"role": "user", "content": REVISE_FINAL if m.rejected_brief else FINAL})
     schema = ResearchBrief.model_json_schema()
     error = None
     for _ in range(2):                     # one repair attempt for malformed JSON

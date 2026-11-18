@@ -2,7 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 import agents                              # switchboard: see agents/__init__.py
 import store
-from contracts import Mission, State, ResearchBrief, OutreachRecord, Article
+from contracts import Mission, State, ResearchBrief, RejectedBrief, OutreachRecord, Article
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -44,10 +44,12 @@ def step(m: Mission, now) -> str | None:
             store.save_artifact(m.slug, "brief", brief)
             path = _write_brief_md(m, brief)
             m.validator_notes = ""
+            m.rejected_brief = None
             m.state = State.BRIEF_READY
             return f"brief passed on attempt {m.attempts}; review {path}"
         m.validator_notes = notes
-        if brief is not None:              # keep the failed brief so a human can see what went wrong
+        if brief is not None:              # keep the failed brief for the next attempt and for humans
+            m.rejected_brief = RejectedBrief(brief=brief, notes=notes)
             path = Path("missions") / m.slug / "brief.rejected.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(brief_markdown(m.slug, brief) + f"\n## Validator notes\n{notes}\n")
