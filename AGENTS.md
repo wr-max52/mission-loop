@@ -13,7 +13,7 @@ into `site/` on this machine; nothing is uploaded anywhere.
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue show status`
-- Tests: `pytest -q` (expects 94 passed; no Ollama or network needed)
+- Tests: `pytest -q` (expects 95 passed; no Ollama or network needed)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 

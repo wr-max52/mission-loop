@@ -165,6 +165,15 @@ def test_stale_record_is_ignored_when_the_loop_is_off(client):
     html = client.get("/").text
     assert 'class="agent' not in html and "card active" not in html
 
+def test_mission_page_drops_loop_panel_and_nav_shows_loop_state(client, monkeypatch):
+    store.save_mission(Mission(slug="b", topic="Outages"))
+    assert '<div class="loop">' in client.get("/").text
+    html = client.get("/m/b").text
+    assert '<div class="loop">' not in html
+    assert "</span>Loop off</span>" in html and "</span>Running</span>" not in html
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    assert '<span class="dot on" aria-hidden="true"></span>Running</span>' in client.get("/m/b").text
+
 def test_unknown_mission(client):
     assert "No such mission" in client.get("/m/nope").text
     assert client.post("/m/nope/approve").status_code == 404
