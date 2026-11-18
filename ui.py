@@ -153,7 +153,17 @@ body { font-family: -apple-system, system-ui, sans-serif; font-size: 16px; }
 nav.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
           border-bottom:1px solid var(--rule); padding-bottom:1rem; margin-bottom:1.5rem; }
 nav.top a.brand { font-weight:700; font-size:1.1rem; color:var(--fg); text-decoration:none; }
-nav.top .links a { margin-left:1rem; color:var(--muted); text-decoration:none; }
+nav.top .links { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+nav.top .links a { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .8rem; border-radius:8px;
+                   border:1px solid var(--muted); background:var(--quote); color:var(--fg);
+                   font-size:.9rem; font-weight:600; text-decoration:none; }
+nav.top .links a:hover { border-color:var(--fg); }
+nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
+                     stroke-linecap:round; stroke-linejoin:round; }
+.status { display:inline-flex; align-items:center; gap:.4rem; margin-right:.5rem;
+          color:var(--muted); font-size:.9rem; font-weight:600; }
+.status.on { color:var(--fg); }
+.status .dot.on { animation:blink 1.4s ease-in-out infinite; }
 .loop { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; padding:.8rem 1rem;
         border:1px solid var(--rule); border-radius:10px; margin-bottom:1.5rem; }
 .loop form { display:flex; gap:.4rem; align-items:center; margin:0; }
@@ -168,7 +178,8 @@ nav.top .links a { margin-left:1rem; color:var(--muted); text-decoration:none; }
 .now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
 .now strong, .now a { color:var(--fg); }
 @keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
-@media (prefers-reduced-motion: reduce) { .agent.on { animation:none; } }
+@keyframes blink { 50% { opacity:.2; } }
+@media (prefers-reduced-motion: reduce) { .agent.on, .status .dot.on { animation:none; } }
 h1 { font-family: Georgia, serif; }
 h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .5rem; }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
@@ -218,6 +229,20 @@ const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e =>
 setInterval(showElapsed, 1000);
 </script>"""
 
+ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
+ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
+             '<path d="M12 3c3 3 3.6 6 3.6 9s-.6 6-3.6 9c-3-3-3.6-6-3.6-9s.6-6 3.6-9z"/></svg>')
+
+def nav_status() -> str:
+    """The loop's state for the top bar. It only says Running while the loop really holds the lock."""
+    if not loop_running():
+        text, dot = "Loop off", ""
+    elif orchestrator.STOP_FLAG.exists():
+        text, dot = "Stopping", "stopping"
+    else:
+        text, dot = "Running", "on"
+    return f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span>'
+
 def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     # Refresh itself when the loop changes something, unless the human is typing.
     script = f"""<script>
@@ -233,7 +258,8 @@ setInterval(async () => {{
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title><style>{CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
-            f'<span class="links"><a href="/">Missions</a><a href="/site/" target="_blank">Published site</a></span></nav>'
+            f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
+            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a></span></nav>'
             f"{body}</main>{script}</body></html>")
     return HTMLResponse(html)
 
@@ -360,7 +386,7 @@ async def mission(request: Request) -> Response:
         return page("Not found", '<h1>No such mission</h1><p><a href="/">Back to missions</a></p>')
     badge = "you" if needs_you(m) and m.state != State.PARKED else \
             "parked" if m.state == State.PARKED else "done" if m.state == State.DONE else ""
-    body = [flash(request), loop_panel(f"/m/{quote(slug)}"),
+    body = [flash(request),
             f'<p><span class="badge {badge}">{escape(label(m))}</span> <span class="muted">{escape(m.slug)}</span></p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
