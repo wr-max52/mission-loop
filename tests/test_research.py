@@ -1,6 +1,7 @@
 import json
 import pytest
 from ollama import Message
+import activity
 from agents import researcher as research_mod
 from agents import llm
 from checks import validator
@@ -80,6 +81,17 @@ async def test_validator_notes_reach_the_prompt(monkeypatch):
     m = M.model_copy(update={"validator_notes": "s1: quote not found"})
     await research_mod.run_research(m, toolbox_factory=FakeToolbox)
     assert "s1: quote not found" in captured["system"]
+
+async def test_brief_writer_is_shown_once_the_main_model_starts(monkeypatch):
+    seen = []
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        if format is None:
+            return text("DONE")
+        seen.append(activity.current()["agent"])
+        return text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert seen == ["brief"]
 
 async def test_retry_revises_the_rejected_brief(monkeypatch):
     sent = []

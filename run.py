@@ -3,7 +3,7 @@ import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
-import agents, clock, notify, orchestrator, store
+import activity, agents, clock, notify, orchestrator, store
 from contracts import Mission
 
 app = typer.Typer()
@@ -18,6 +18,7 @@ def _lock():
     except BlockingIOError:
         print(f"another run or loop is already working (lock: {LOCK})")
         raise typer.Exit(1) from None
+    activity.clear()                       # a killed loop may have left its last task behind
     return f                               # keep the handle open to hold the lock
 
 def _set(slug: str, **fields):

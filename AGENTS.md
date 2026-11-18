@@ -13,7 +13,7 @@ into `site/` on this machine; nothing is uploaded anywhere.
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue show status`
-- Tests: `pytest -q` (expects 88 passed; no Ollama or network needed)
+- Tests: `pytest -q` (expects 94 passed; no Ollama or network needed)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -47,7 +47,8 @@ The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists ever
 article previews, and has buttons for approve / send back / publish / requeue / add mission and to start,
 stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`). `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts.
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
+the agent working at that moment, read from `data/activity.json` (written by `activity.py`).
 
 | You want to | Command |
 |---|---|
