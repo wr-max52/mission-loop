@@ -35,6 +35,17 @@ def test_review_publishes_to_static_site():
     assert "Stub thesis" in page and 'href="#src-1"' in page
     assert 'href="p/"' in Path("site/index.html").read_text()
 
+def test_theme_toggle_reaches_the_published_and_preview_pages():
+    to_article_ready("p")
+    preview = Path("missions/p/preview.html").read_text()
+    assert 'class="theme-toggle"' in preview and "window.toggleTheme" in preview
+    flag("p", reviewed=True)
+    run_at(T0 + timedelta(hours=49))
+    site = Path("site/p/index.html").read_text()
+    index = Path("site/index.html").read_text()
+    for html in (site, index):
+        assert 'class="theme-toggle"' in html and "window.toggleTheme" in html
+
 def test_no_outreach_skips_the_wait(monkeypatch):
     monkeypatch.setattr(agents, "interview", stubs.no_interview)
     store.save_mission(Mission(slug="n", topic="x"))
