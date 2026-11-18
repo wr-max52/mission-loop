@@ -3,11 +3,17 @@ import pytest
 from ollama import Message
 from agents import researcher as research_mod
 from agents import llm
+from checks import validator
+import settings
 from agents.stubs import research as stub_brief
-from contracts import Mission, RejectedBrief
+from contracts import Mission, RejectedBrief, POC
 
 M = Mission(slug="r", topic="Heat pumps", tools=["search"])
 BRIEF_JSON = stub_brief(M).model_dump_json()
+POCS = [POC(name=f"Person {i}", role="Analyst", email=f"poc{i}@example.com",
+            contact_source_url="https://a.example.com/team", why_them="x") for i in range(1, 4)]
+CONTACTS_JSON = research_mod.Contacts(contacts=POCS).model_dump_json()
+TEAM_PAGE = ("<p>Person poc1@example.com poc2@example.com poc3@example.com</p>", "team")
 
 def tool_call(name, **args):
     return Message(role="assistant", content="", tool_calls=[
@@ -26,15 +32,17 @@ class FakeToolbox:
         return "result"
 
 @pytest.fixture(autouse=True)
-def reset():
+def reset(monkeypatch):
     FakeToolbox.calls = []
+    monkeypatch.setattr(settings, "OUTREACH", False)
+    monkeypatch.setattr(validator, "fetch", lambda url: TEAM_PAGE)   # contact check never hits the web
 
 def script(monkeypatch, replies):
     """Make llm.chat return the given replies in order; record what it was sent."""
     seen = []
     it = iter(replies)
-    async def fake_chat(messages, tools=None, format=None):
-        seen.append({"tools": tools, "format": format})
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        seen.append({"tools": tools, "format": format, "model": model})
         return next(it)
     monkeypatch.setattr(llm, "chat", fake_chat)
     return seen
@@ -45,6 +53,7 @@ async def test_tool_loop_then_brief(monkeypatch):
     assert brief.thesis.startswith("Stub thesis")
     assert FakeToolbox.calls == [("search", {"query": "heat pumps"})]
     assert seen[-1]["format"] is not None         # final call asks for the JSON schema
+    assert [c["model"] for c in seen] == [llm.SEARCH_MODEL, llm.SEARCH_MODEL, None]   # small model searches, main model writes
 
 async def test_tool_budget_is_enforced(monkeypatch):
     replies = [tool_call("search", query=str(i)) for i in range(100)]
@@ -64,7 +73,7 @@ async def test_bad_json_twice_raises(monkeypatch):
 
 async def test_validator_notes_reach_the_prompt(monkeypatch):
     captured = {}
-    async def fake_chat(messages, tools=None, format=None):
+    async def fake_chat(messages, tools=None, format=None, model=None):
         captured.setdefault("system", messages[0]["content"])
         return text("DONE") if format is None else text(BRIEF_JSON)
     monkeypatch.setattr(llm, "chat", fake_chat)
@@ -74,7 +83,7 @@ async def test_validator_notes_reach_the_prompt(monkeypatch):
 
 async def test_retry_revises_the_rejected_brief(monkeypatch):
     sent = []
-    async def fake_chat(messages, tools=None, format=None):
+    async def fake_chat(messages, tools=None, format=None, model=None):
         sent.append([dict(x) if isinstance(x, dict) else x for x in messages])
         return text("DONE") if format is None else text(BRIEF_JSON)
     monkeypatch.setattr(llm, "chat", fake_chat)
@@ -91,7 +100,7 @@ async def test_retry_revises_the_rejected_brief(monkeypatch):
 
 async def test_first_attempt_has_no_revision_prompt(monkeypatch):
     sent = []
-    async def fake_chat(messages, tools=None, format=None):
+    async def fake_chat(messages, tools=None, format=None, model=None):
         sent.append(list(messages))
         return text("DONE") if format is None else text(BRIEF_JSON)
     monkeypatch.setattr(llm, "chat", fake_chat)
@@ -99,17 +108,30 @@ async def test_first_attempt_has_no_revision_prompt(monkeypatch):
     assert "passed verification" not in sent[0][0]["content"]
     assert sent[-1][-1]["content"] == research_mod.FINAL
 
-async def test_contact_hunting_only_when_outreach_is_on(monkeypatch):
-    import settings
-    prompts = []
-    async def fake_chat(messages, tools=None, format=None):
-        if format is None:
-            prompts.append(messages[0]["content"])
-        return text("DONE") if format is None else text(BRIEF_JSON)
-    monkeypatch.setattr(llm, "chat", fake_chat)
-    monkeypatch.setattr(settings, "OUTREACH", False)
+async def test_no_contacts_run_while_outreach_is_off(monkeypatch):
+    seen = script(monkeypatch, [text("DONE"), text(BRIEF_JSON)])
     await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert len(seen) == 2                          # one sources run, one brief; nothing else
+
+async def test_outreach_runs_contacts_separately_and_checks_them(monkeypatch):
     monkeypatch.setattr(settings, "OUTREACH", True)
-    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    assert "Do not look for points of contact" in prompts[0]
-    assert "at least 3 points of contact" in prompts[1]
+    prompts = []
+    replies = iter([tool_call("search", query="heat pumps"), text("DONE"),
+                    tool_call("search", query="experts"), text("DONE"), text(CONTACTS_JSON), text(BRIEF_JSON)])
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        prompts.append((messages[0]["content"], model))
+        return next(replies)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert "separate run finds them" in prompts[0][0]                 # sources run doesn't hunt contacts
+    assert "finding people to interview" in prompts[2][0]             # contacts run has its own prompt
+    assert [model for _, model in prompts] == [llm.SEARCH_MODEL] * 5 + [None]
+    assert brief.pocs == POCS                                         # the checked contacts, set by code
+
+async def test_unverified_contacts_stop_before_the_main_model(monkeypatch):
+    monkeypatch.setattr(settings, "OUTREACH", True)
+    monkeypatch.setattr(validator, "fetch", lambda url: ("<p>Person poc1@example.com</p>", "team"))
+    seen = script(monkeypatch, [text("DONE"), text("DONE"), text(CONTACTS_JSON), text(BRIEF_JSON)])
+    with pytest.raises(research_mod.ResearchFailed, match="only 1 verified contact"):
+        await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert all(c["model"] == llm.SEARCH_MODEL for c in seen)          # the main model was never called
