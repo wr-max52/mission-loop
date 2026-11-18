@@ -1,10 +1,12 @@
 # AGENTS.md
 
-## Critical constraint: local only
+## Critical constraint: missions stay local
 
-Everything in this project stays on this machine. Do NOT add a git remote and do NOT push.
-All commits (including `m1`) and tags are local only. Publishing writes a static site into `site/`
-on this machine; nothing is uploaded anywhere.
+The code lives in the private GitHub repo `wr-max52/mission-loop` (`origin`). Push only when asked.
+Never commit or push `missions.yaml`, `missions/`, `data/`, `site/`, or `.env`; they stay on this
+machine. A local `pre-push` hook blocks commits containing them. Branches started before the repo
+moved to GitHub must be rebased onto `origin/main` before pushing. Publishing writes a static site
+into `site/` on this machine; nothing is uploaded anywhere.
 
 ## Running
 
