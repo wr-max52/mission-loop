@@ -144,3 +144,10 @@ def test_successful_fetch_is_cached(monkeypatch):
     calls = scripted_get(monkeypatch, [httpx.Response(200, text="<p>once</p>")])
     assert REAL_FETCH("https://a.com/1") == REAL_FETCH("https://a.com/1")
     assert len(calls) == 1
+
+def test_poc_name_not_on_page_fails(monkeypatch):
+    monkeypatch.setattr(validator.settings, "OUTREACH", True)
+    b = brief()
+    b.pocs[0].name = "Zed Quux"
+    ok, notes = validator.validate(M, b)
+    assert not ok and "POC Zed Quux: name not found" in notes

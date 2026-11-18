@@ -57,6 +57,19 @@ def closest_sentence(quote: str, page_text: str, max_chars: int = 300) -> str:
 def _domain(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 
+def poc_problems(pocs) -> list[str]:
+    """Each contact's email and surname must appear on their contact page."""
+    problems = []
+    for p in pocs:
+        page = fetch(p.contact_source_url)
+        html = page[0].lower() if page else ""
+        surname = (p.name.split() or [""])[-1].lower()
+        if "@" not in p.email or p.email.lower() not in html:
+            problems.append(f"POC {p.name}: {p.email} not found on {p.contact_source_url}")
+        elif not surname or surname not in html:
+            problems.append(f"POC {p.name}: name not found on {p.contact_source_url}")
+    return problems
+
 def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     problems: list[str] = []
     ids = {s.id for s in brief.sources}
@@ -110,12 +123,10 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     if not brief.counterpoint.strip():
         problems.append("Counterpoint is empty")
 
-    # 6. Outreach only: 3+ POCs, and every POC's email appears on their contact page
+    # 6. Outreach only: 3+ POCs, and every POC's name and email appear on their contact page
     if settings.OUTREACH and len(brief.pocs) < MIN_POCS:
         problems.append(f"Only {len(brief.pocs)} point(s) of contact; need {MIN_POCS}")
-    for p in brief.pocs if settings.OUTREACH else []:
-        page = fetch(p.contact_source_url)
-        if page is None or p.email.lower() not in page[0].lower():
-            problems.append(f"POC {p.name}: {p.email} not found on {p.contact_source_url}")
+    if settings.OUTREACH:
+        problems += poc_problems(brief.pocs)
 
     return (not problems, "\n".join(problems))
