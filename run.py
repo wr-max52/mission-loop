@@ -89,6 +89,7 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1")):
     import uvicorn
     import ui as web
     store.init()
+    Path("site").mkdir(exist_ok=True)      # /site errors if the folder is missing; publishing creates it later
     print(f"Mission Loop UI: http://127.0.0.1:{port}  (Ctrl-C to quit)", flush=True)
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
 
