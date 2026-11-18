@@ -56,10 +56,14 @@ def _source_numbers(b: ResearchBrief, a: Article) -> dict[str, int]:
 
 CSS = """
 :root { --bg:#fbfaf7; --fg:#1d1d1f; --muted:#6b6b70; --rule:#e3e1dc; --accent:#8a2b2b; --quote:#f1efe9; }
+:root[data-theme="dark"] { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --rule:#2c2c30;
+                           --accent:#e08a8a; --quote:#1f1f23; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --rule:#2c2c30; --accent:#e08a8a; --quote:#1f1f23; }
+  :root:not([data-theme]) { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --rule:#2c2c30;
+                            --accent:#e08a8a; --quote:#1f1f23; }
 }
 * { box-sizing: border-box; }
+html[data-theme="dark"] { color-scheme: dark; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font: 18px/1.65 Georgia, "Iowan Old Style", "Times New Roman", serif; }
 main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
@@ -85,7 +89,40 @@ ul.index { list-style: none; padding: 0; }
 ul.index li { border-bottom: 1px solid var(--rule); padding: 1.1rem 0; }
 ul.index a.title { font-size: 1.25rem; font-weight: 600; text-decoration: none; color: var(--fg); }
 ul.index p { margin: .3rem 0 0; color: var(--muted); }
+.theme-toggle { display:inline-flex; align-items:center; gap:.35rem; padding:.3rem .55rem;
+               border:1px solid var(--rule); border-radius:999px; background:var(--bg); color:var(--fg);
+               font:600 0.8rem/1 -apple-system, system-ui, sans-serif; cursor:pointer; }
+.theme-toggle:hover { border-color:var(--muted); }
+.theme-toggle svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
+                    stroke-linecap:round; stroke-linejoin:round; display:none; }
+html:not([data-theme="dark"]) .theme-toggle .moon { display:block; }
+html[data-theme="dark"] .theme-toggle .sun { display:block; }
 """
+
+# Sets the theme before first paint so a saved choice never flashes the wrong one, and
+# flips it on click. Falls back to the OS preference until the human chooses for the first time.
+THEME_INIT = """<script>
+(function () {
+  try {
+    var theme = localStorage.getItem("theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.dataset.theme = theme;
+  } catch (e) { document.documentElement.dataset.theme = "light"; }
+  window.toggleTheme = function () {
+    try {
+      var theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem("theme", theme);
+    } catch (e) {}
+  };
+})();
+</script>"""
+
+THEME_TOGGLE = '<button type="button" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle light / dark">' \
+    '<svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/>' \
+    '<path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>' \
+    '<svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>' \
+    "</button>"
 
 def brief_html(b: ResearchBrief, checked: bool = True) -> str:
     """The brief as an HTML fragment (no page shell) for the review UI."""
@@ -112,8 +149,8 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
 def _page(title: str, body: str, home: str) -> str:
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<title>{escape(title)}</title><style>{CSS}</style></head>\n"
-            f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a></header>\n"
+            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}</style></head>\n"
+            f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a>{THEME_TOGGLE}</header>\n"
             f"{body}\n</main></body></html>\n")
 
 def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../",

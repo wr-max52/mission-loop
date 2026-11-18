@@ -214,3 +214,16 @@ def test_unknown_mission(client):
     assert "No such mission" in client.get("/m/nope").text
     assert client.post("/m/nope/approve").status_code == 404
     assert client.get("/m/nope/preview").status_code == 404
+
+def test_theme_toggle_is_on_every_ui_page(client):
+    brief_ready()
+    for route in ("/", "/m/b"):
+        html = client.get(route).text
+        assert 'class="theme-toggle"' in html           # the button, in the nav
+        assert "window.toggleTheme" in html              # the no-flash init script
+# The dark theme wins over the system fallback: an explicit choice sets data-theme, and the
+# system palette is gated behind :not([data-theme]) so a saved "dark" beats an OS light.
+def test_system_dark_is_gated_behind_an_explicit_choice():
+    from render import CSS
+    assert ':root[data-theme="dark"]' in CSS and "--bg:#151517" in CSS
+    assert "@media (prefers-color-scheme: dark) {" in CSS and ":root:not([data-theme])" in CSS

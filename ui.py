@@ -16,7 +16,7 @@ from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 import activity, clock, orchestrator, settings, store
 from contracts import Mission, State, ResearchBrief, Article
-from render import CSS, brief_html
+from render import CSS, brief_html, THEME_INIT, THEME_TOGGLE
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -270,10 +270,10 @@ setInterval(async () => {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title><style>{CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a></span></nav>'
+            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a>{THEME_TOGGLE}</span></nav>'
             f"{body}</main>{script}</body></html>")
     return HTMLResponse(html)
 
