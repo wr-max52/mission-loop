@@ -13,7 +13,7 @@ into `site/` on this machine; nothing is uploaded anywhere.
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue push show status`
-- Tests: `pytest -q` (expects 136 passed; no Ollama or network needed)
+- Tests: `pytest -q` (expects 140 passed; no Ollama or network needed)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -38,10 +38,12 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
-- Claims have a `kind`: `fact` or `possibility`. Research explores widely, rules out the unlikely, reports
-  what stays possible, and verifies facts separately. Code can't verify a possibility, so it enforces the
-  label instead: possibilities must say "It is possible that", a brief needs at least one fact, and the
-  article marks each one "Possibility, not verified".
+- Claims have a `kind`: `fact` or `possibility`. The prompts treat every source as part truth, part spin.
+  Research explores widely, drops only what specific evidence contradicts, and leads with pointed
+  possibilities that each rest on a cited detail. A `fact` means only what the record directly shows (what
+  a document says, what someone said). Code can't verify a possibility, so it enforces the label instead:
+  possibilities must say "It is possible that", a brief needs at least one fact, and the article marks
+  each one "Possibility, not verified".
 - A parked mission can be pushed through: its last failed brief or article moves to the human review
   that follows, and stays marked as failing its check (`unchecked_brief` / `unchecked_article`), including
   on the published page. This needs a failed draft; if every attempt crashed, only requeue works.

@@ -127,10 +127,21 @@ async def test_prompt_separates_exploring_possibilities_and_verifying(monkeypatc
         return text("DONE") if format is None else text(BRIEF_JSON)
     monkeypatch.setattr(llm, "chat", fake_chat)
     await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    stages = ["Explore widely", "Rule out", "Report what is possible", "Verify what is known"]
+    stages = ["Explore widely", "Rule out", "Report what is possible", "Pin down the record"]
     positions = [captured["system"].index(s) for s in stages]
     assert positions == sorted(positions)
     assert 'kind "possibility"' in captured["system"] and 'kind "fact"' in captured["system"]
+
+async def test_prompt_is_skeptical_but_keeps_its_limits(monkeypatch):
+    captured = {}
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        captured.setdefault("system", messages[0]["content"])
+        return text("DONE") if format is None else text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert "Assume every source is spinning" in captured["system"]
+    assert "Doubt alone proves nothing" in captured["system"]          # suspicion is not evidence
+    assert "a named person committed a crime" in captured["system"]    # provocation has a limit
 
 async def test_no_contacts_run_while_outreach_is_off(monkeypatch):
     seen = script(monkeypatch, [text("DONE"), text(BRIEF_JSON)])
