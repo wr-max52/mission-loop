@@ -6,6 +6,7 @@ ollama>=0.6,<0.7
 mcp>=2,<3
 httpx
 trafilatura
+lxml
 rapidfuzz
 pytest
 pytest-asyncio

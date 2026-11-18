@@ -13,6 +13,7 @@ MIN_QUOTE_CHARS = 20
 MIN_POCS = 3
 MAX_TEXT_CHARS = 300_000
 BLOCKED_FILE = Path("blocked_domains.txt")  # one domain per line; subdomains are blocked too
+HEADERS = {"User-Agent": "Mozilla/5.0 (MissionLoop source validator)"}
 _cache: dict[str, tuple[str, str]] = {}    # successful fetches only; failures may be transient
 
 def blocked_domains(path: Path | None = None) -> set[str]:
@@ -25,18 +26,20 @@ def blocked_domains(path: Path | None = None) -> set[str]:
 def _is_blocked(domain: str, blocked: set[str]) -> bool:
     return any(domain == b or domain.endswith("." + b) for b in blocked)
 
+def readable_text(html: str) -> str:
+    return trafilatura.extract(html) or ""
+
 def fetch(url: str) -> tuple[str, str] | None:
     """Return (raw_html, readable_text) or None if the page can't be fetched."""
     if url in _cache:
         return _cache[url]
     try:
-        r = httpx.get(url, follow_redirects=True, timeout=20,
-                      headers={"User-Agent": "Mozilla/5.0 (MissionLoop source validator)"})
+        r = httpx.get(url, follow_redirects=True, timeout=20, headers=HEADERS)
     except httpx.HTTPError:
         return None
     if r.status_code != 200:
         return None
-    page = (r.text, trafilatura.extract(r.text) or "")
+    page = (r.text, readable_text(r.text))
     _cache[url] = page
     return page
 
@@ -44,14 +47,18 @@ def _norm(s: str) -> str:
     s = s.lower().replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
     return re.sub(r"\s+", " ", s).strip()
 
+def sentences(page_text: str) -> list[str]:
+    """The page's sentences that are long enough to be used as quotes."""
+    parts = (s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", page_text[:MAX_TEXT_CHARS]))
+    return [s for s in parts if len(s) >= MIN_QUOTE_CHARS]
+
 def closest_sentence(quote: str, page_text: str, max_chars: int = 300) -> str:
     """The page's real sentence nearest to a failed quote, so the next attempt can copy it exactly."""
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", page_text[:MAX_TEXT_CHARS])
-                 if len(s.strip()) >= MIN_QUOTE_CHARS]
-    if not sentences:
+    candidates = sentences(page_text)
+    if not candidates:
         return ""
     q = _norm(quote)
-    best = max(sentences, key=lambda s: fuzz.ratio(q, _norm(s)))
+    best = max(candidates, key=lambda s: fuzz.ratio(q, _norm(s)))
     return best[:max_chars] if fuzz.ratio(q, _norm(best)) >= 50 else ""
 
 def _domain(url: str) -> str:
