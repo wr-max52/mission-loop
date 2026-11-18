@@ -14,10 +14,25 @@ SYSTEM = """You are a nonpartisan political research analyst.
 Topic: {topic}
 Mission: {objective}
 {today}
-Find one specific, defensible thesis and prove it with sources.
+Work through these four stages in order. The brief may contain both verified facts and possibilities,
+but they are different things and must never be blurred.
+1. Explore widely. Before settling on an answer, think of many different explanations and potential
+   findings, including unobvious ones and ones that cut against your first idea. Search for evidence
+   on several of them, not only the first.
+2. Rule out. Drop what the evidence contradicts, what is unlikely, and what nothing you can cite makes
+   plausible.
+3. Report what is possible. Keep the explanations that survive as claims with kind "possibility". Each
+   must begin with the words "It is possible that", cite the fetched sources that make it plausible,
+   and say no more than those sources allow.
+4. Verify what is known, as its own separate job. Establish the facts as claims with kind "fact": what
+   happened, what someone said or did, or what a public record shows. Include at least one. A fact must
+   be directly shown by a source it cites; if it is not, make it a possibility or drop it.
 Rules:
-- The thesis must be a verifiable factual claim about what happened, what someone said or did, or what
-  a public record shows. Not an opinion, prediction, endorsement or moral judgement.
+- The thesis is one specific, defensible statement: the strongest conclusion the evidence allows. State
+  it as a fact if you verified it; otherwise word it "It is possible that ...".
+- No claim may be an opinion, endorsement or moral judgement.
+- Do not use a possibility to suggest that a named person committed a crime or acted in bad faith,
+  unless a source you cite raises it.
 - Prefer primary sources: official government and legislature websites, bill text and roll-call votes,
   court opinions and filings, election and campaign-finance records, official transcripts and press
   releases. Use news outlets and research organisations for context and for the opposing view.
@@ -57,11 +72,15 @@ Rules:
 LIST_CONTACTS = ("Now list the contacts as JSON matching the schema. Include only people whose name "
                  "and email you saw on a page you fetched, with that page as contact_source_url.")
 
+# The small model gathers the evidence; the main model makes these calls when it writes the brief.
+KIND_RULE = ("Rule out what the evidence above makes unlikely. Set kind on every remaining claim: \"fact\" "
+             "for what a cited source directly shows, \"possibility\" for what remains plausible but "
+             "unverified, worded \"It is possible that ...\".")
 FINAL = ("Now output the research brief as JSON matching the schema. "
-         "Use only sources you fetched, with quotes copied exactly from those pages.")
+         "Use only sources you fetched, with quotes copied exactly from those pages. " + KIND_RULE)
 REVISE_FINAL = ("Now output the revised research brief as JSON matching the schema. "
                 "Use only the verified sources listed above and sources you fetched in this session, "
-                "with quotes copied exactly from those pages.")
+                "with quotes copied exactly from those pages. " + KIND_RULE)
 
 class ResearchFailed(Exception):
     pass
@@ -79,7 +98,7 @@ def _notes(m: Mission) -> str:
         failed = _failed_source_ids(notes)
         verified = [s.id for s in brief.sources if s.id not in failed]
         return f"""
-Your previous brief was rejected. Revise it instead of starting over:
+Your previous brief was rejected. Revise it instead of starting over, and skip the exploring stage:
 {brief.model_dump_json(indent=2)}
 
 Sources that passed verification: {", ".join(verified) or "none"}.

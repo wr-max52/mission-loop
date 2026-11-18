@@ -108,6 +108,18 @@ async def test_first_attempt_has_no_revision_prompt(monkeypatch):
     assert "passed verification" not in sent[0][0]["content"]
     assert sent[-1][-1]["content"] == research_mod.FINAL
 
+async def test_prompt_separates_exploring_possibilities_and_verifying(monkeypatch):
+    captured = {}
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        captured.setdefault("system", messages[0]["content"])
+        return text("DONE") if format is None else text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    stages = ["Explore widely", "Rule out", "Report what is possible", "Verify what is known"]
+    positions = [captured["system"].index(s) for s in stages]
+    assert positions == sorted(positions)
+    assert 'kind "possibility"' in captured["system"] and 'kind "fact"' in captured["system"]
+
 async def test_no_contacts_run_while_outreach_is_off(monkeypatch):
     seen = script(monkeypatch, [text("DONE"), text(BRIEF_JSON)])
     await research_mod.run_research(M, toolbox_factory=FakeToolbox)

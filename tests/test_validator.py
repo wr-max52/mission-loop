@@ -71,6 +71,28 @@ def test_unknown_source_id_fails():
     ok, notes = validator.validate(M, brief(claims=[Claim(text="x", source_ids=["s9"])]))
     assert not ok and "unknown source id 's9'" in notes
 
+FACT = Claim(text="They hold temperature", source_ids=["s1"])
+
+def test_labeled_possibility_passes_alongside_a_fact():
+    maybe = Claim(text="It is possible that newer homes benefit most", source_ids=["s1"], kind="possibility")
+    ok, notes = validator.validate(M, brief(claims=[FACT, maybe]))
+    assert ok, notes
+
+def test_possibility_without_the_wording_fails():
+    maybe = Claim(text="Newer homes benefit most", source_ids=["s1"], kind="possibility")
+    ok, notes = validator.validate(M, brief(claims=[FACT, maybe]))
+    assert not ok and "must be worded" in notes
+
+def test_possibility_marked_as_fact_fails():
+    wrong = Claim(text="It is possible that newer homes benefit most", source_ids=["s1"])
+    ok, notes = validator.validate(M, brief(claims=[FACT, wrong]))
+    assert not ok and "its kind is 'fact'" in notes
+
+def test_brief_of_only_possibilities_fails():
+    maybe = Claim(text="It is possible that newer homes benefit most", source_ids=["s1"], kind="possibility")
+    ok, notes = validator.validate(M, brief(claims=[maybe]))
+    assert not ok and "No claim of kind 'fact'" in notes
+
 def test_poc_email_not_on_page_fails(monkeypatch):
     monkeypatch.setattr(validator.settings, "OUTREACH", True)
     b = brief()

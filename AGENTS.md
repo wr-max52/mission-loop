@@ -13,7 +13,7 @@ into `site/` on this machine; nothing is uploaded anywhere.
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue show status`
-- Tests: `pytest -q` (expects 75 passed; no Ollama or network needed)
+- Tests: `pytest -q` (expects 88 passed; no Ollama or network needed)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -35,6 +35,10 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
+- Claims have a `kind`: `fact` or `possibility`. Research explores widely, rules out the unlikely, reports
+  what stays possible, and verifies facts separately. Code can't verify a possibility, so it enforces the
+  label instead: possibilities must say "It is possible that", a brief needs at least one fact, and the
+  article marks each one "Possibility, not verified".
 - `agents/__init__.py` is still the only switchboard. Validators never call the LLM.
 
 ## Operating it

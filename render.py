@@ -1,11 +1,24 @@
 """Human-readable output: brief.md and article.md for review, HTML for the static site."""
 from datetime import datetime
 from html import escape
-from contracts import ResearchBrief, Article, CITATION, cited_ids
+from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
+
+FACTS_HEADING = "Facts (quotes verified against sources)"
+POSSIBILITIES_HEADING = "Possibilities (not verified)"
+POSSIBILITY_LABEL = "Possibility, not verified"
+
+def _claims_of(b: ResearchBrief, kind: str) -> list:
+    return [c for c in b.claims if c.kind == kind]
+
+def _has_possibility(a: Article) -> bool:
+    return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
 
 def brief_markdown(slug: str, b: ResearchBrief) -> str:
-    lines = [f"# Brief: {slug}", "", f"**Thesis:** {b.thesis}", "", "## Claims"]
-    lines += [f"- {c.text} [{', '.join(c.source_ids)}]" for c in b.claims]
+    claim_lines = lambda kind: [f"- {c.text} [{', '.join(c.source_ids)}]" for c in _claims_of(b, kind)]
+    lines = [f"# Brief: {slug}", "", f"**Thesis:** {b.thesis}", "", f"## {FACTS_HEADING}"]
+    lines += claim_lines("fact")
+    if _claims_of(b, "possibility"):
+        lines += ["", f"## {POSSIBILITIES_HEADING}"] + claim_lines("possibility")
     lines += ["", f"## Counterpoint", b.counterpoint, "", "## Sources"]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
     if b.pocs:
@@ -22,7 +35,7 @@ def article_markdown(slug: str, b: ResearchBrief, a: Article) -> str:
     for sec in a.sections:
         lines += [f"## {sec.heading}", ""]
         for p in sec.paragraphs:
-            lines += [p, ""]
+            lines += [POSSIBILITY.sub(lambda m: f"**[{POSSIBILITY_LABEL}]** {m.group(0)}", p), ""]
     lines += ["## Sources", ""]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
     return "\n".join(lines) + "\n"
@@ -76,10 +89,13 @@ def brief_html(b: ResearchBrief) -> str:
     """The brief as an HTML fragment (no page shell) for the review UI."""
     nums = {s.id: n for n, s in enumerate(b.sources, 1)}
     refs = lambda ids: "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
+    items = lambda kind: [f"<li>{escape(c.text)}{refs(c.source_ids)}</li>" for c in _claims_of(b, kind)]
     out = [f'<p class="thesis"><span class="stance">Thesis</span><br>{escape(b.thesis)}</p>',
-           "<h2>Claims</h2><ul>"]
-    out += [f"<li>{escape(c.text)}{refs(c.source_ids)}</li>" for c in b.claims]
-    out += ["</ul>", "<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}</p>",
+           f"<h2>{FACTS_HEADING}</h2><ul>"]
+    out += items("fact") + ["</ul>"]
+    if _claims_of(b, "possibility"):
+        out += [f"<h2>{POSSIBILITIES_HEADING}</h2><ul>"] + items("possibility") + ["</ul>"]
+    out += ["<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}</p>",
             '<h2>Sources</h2><ol class="sources">']
     out += [f'<li id="src-{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
             f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>'
@@ -105,8 +121,11 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
         ids = [i.strip() for i in match.group(1).split(",")]
         return "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
 
+    def label(match) -> str:
+        return f'<span class="stance">{POSSIBILITY_LABEL}</span> {match.group(0)}'
+
     def para(text: str) -> str:
-        return CITATION.sub(cite, escape(text, quote=False))
+        return POSSIBILITY.sub(label, CITATION.sub(cite, escape(text, quote=False)))
 
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
     body = [f"<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
@@ -120,8 +139,12 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                     f'<a href="{escape(s.url)}">{escape(s.title)}</a>'
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
+    possibilities_note = ("Passages labeled as possibilities are informed inferences, not verified facts: "
+                          "their sources were checked, but the possibility itself was not confirmed. "
+                          if _has_possibility(a) else "")
     body.append('<p class="note">Every source above was fetched and its quote matched against the page by code. '
                 "Direct quotes and citations in the article were checked against those sources. "
+                f"{possibilities_note}"
                 "A human approved the research and reviewed this article before it was published.</p></article>")
     return _page(a.title, "\n".join(body), home)
 

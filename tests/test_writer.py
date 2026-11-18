@@ -32,6 +32,11 @@ async def test_bad_json_twice_raises(monkeypatch):
     with pytest.raises(writer.WritingFailed):
         await writer.run_writer(M, BRIEF, [])
 
+async def test_prompt_keeps_possibilities_labeled(monkeypatch):
+    seen = script(monkeypatch, [ARTICLE_JSON])
+    await writer.run_writer(M, BRIEF, [])
+    assert 'kind "possibility" are unverified' in seen[0]["system"]
+
 async def test_prompt_has_notes_and_no_contact_emails(monkeypatch):
     seen = script(monkeypatch, [ARTICLE_JSON])
     m = M.model_copy(update={"validator_notes": "paragraph 2 has no citation"})

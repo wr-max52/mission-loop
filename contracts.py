@@ -34,6 +34,7 @@ class Mission(BaseModel):
 class Claim(BaseModel):
     text: str
     source_ids: list[str]
+    kind: Literal["fact", "possibility"] = "fact"   # possibilities are labeled, never presented as verified
 
 class Source(BaseModel):
     id: str
@@ -80,6 +81,9 @@ class Article(BaseModel):
 
 # Inline citation in article text: [s1] or [s1, s2]. Shared by the checker and the renderer.
 CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
+
+# The required wording of a possibility. Shared by the checkers and the renderer.
+POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
 
 def cited_ids(text: str) -> list[str]:
     return [i.strip() for group in CITATION.findall(text) for i in group.split(",")]

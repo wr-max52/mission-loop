@@ -14,9 +14,13 @@ only thing you know: do not add facts, numbers, names, dates or quotes that are 
 
 Rules:
 - Neutral, factual tone. Attribute claims to their source ("according to ...", "the filing shows ...").
-  Do not speculate about motives and do not take sides.
-- End every sentence that states a fact with an inline citation of the source id(s) it comes from,
-  in square brackets, e.g. "The bill passed 52-48 [senate]." or "[s1, s3]". Every paragraph needs one.
+  Do not take sides. The only speculation allowed is the brief's claims with kind "possibility".
+- Claims with kind "possibility" are unverified. Include them, each written with the words "It is
+  possible that" and cited, and never state or imply one as fact, including in the title and dek.
+  Do not use the words "it is possible that" for anything else.
+- End every sentence that states a fact or a possibility with an inline citation of the source id(s) it
+  comes from, in square brackets, e.g. "The bill passed 52-48 [senate]." or "[s1, s3]". Every paragraph
+  needs one.
 - Only use source ids listed in the brief. Never write URLs or Markdown links.
 - Put words in quotation marks only when they are copied exactly from a source quote below.
 - Include a section that fairly presents the strongest counterpoint, citing the contradicting source(s).
