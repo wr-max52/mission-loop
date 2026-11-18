@@ -39,10 +39,16 @@ Rules:
 - When you attribute words or actions to a named person, cite a page that shows their own words
   or the official record, not a summary of it.
 - For events, use sources published close to the event and put dates in the claims.
-- Use the tools to search, then fetch and read full pages. Only cite pages you actually fetched.
-  Prefer HTML pages; PDFs and paywalled pages usually cannot be verified.
-- For every source, copy one exact sentence from that page as its quote, character for character, from
-  the fetched text. Never paraphrase, shorten or merge sentences. Code checks every quote against the page.
+- Use the tools to search, then fetch pages. News search may cover only the last day unless you set
+  freshness, so set it when looking for older events.
+- fetch shows only the start of a long page. Use find_in_page to search the whole page for what you need.
+- Use page_links on useful articles to find the bill, filing, vote record, report or rebuttal they
+  point to, then read that page too.
+- Only cite pages you read with fetch or find_in_page. If find_in_page says CANNOT CITE, do not use
+  that page. Prefer HTML pages; PDFs and paywalled pages usually cannot be verified.
+- For every source, copy one exact sentence from that page as its quote, character for character. The
+  sentences find_in_page returns are safest. Never paraphrase, shorten or merge sentences. Code checks
+  every quote against the page.
 - Find at least 3 supporting sources on 3 different websites, and at least 1 credible source that
   disagrees or complicates the thesis, on a different website from all the supporting sources.
 {pocs}- When you have enough evidence, stop calling tools and reply with the word DONE.
@@ -115,6 +121,10 @@ def _contact_notes(m: Mission) -> str:
     lines = [l for l in m.validator_notes.splitlines() if l.startswith("POC ")]
     return "\nLast time these contacts failed the check. Do not repeat them:\n" + "\n".join(lines) + "\n" if lines else ""
 
+def _tool_servers(m: Mission) -> list[str]:
+    """Saved missions list only search and fetch, so anything that can fetch also gets the page tools."""
+    return m.tools + ["pages"] if "fetch" in m.tools and "pages" not in m.tools else m.tools
+
 async def tool_loop(system: str, tb, budget: int) -> list:
     """One run of the small model: search and fetch until it stops or the budget runs out."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
@@ -154,7 +164,7 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
                            pocs=POCS_LATER if settings.OUTREACH else NO_POC_RULE)
     pocs = None
-    async with toolbox_factory(m.tools) as tb:
+    async with toolbox_factory(_tool_servers(m)) as tb:
         messages = await tool_loop(system, tb, MAX_TOOL_CALLS)
         if settings.OUTREACH:                  # separate run; a failed check stops here, before the main model
             activity.begin(m.slug, "contacts")

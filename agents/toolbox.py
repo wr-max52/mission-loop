@@ -2,7 +2,7 @@
 
 Adding a research capability = adding an entry to mcp.json. No code change.
 """
-import json, os, re
+import json, os, re, sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
@@ -30,7 +30,9 @@ class Toolbox:
                 raise KeyError(f"tool server '{name}' is not defined in {self.config_path}")
             spec = cfg[name]
             env = {**os.environ, **{k: _expand(v) for k, v in spec.get("env", {}).items()}}
-            params = StdioServerParameters(command=spec["command"],
+            # "python" means this interpreter: launchd's PATH doesn't include the venv
+            command = sys.executable if spec["command"] == "python" else spec["command"]
+            params = StdioServerParameters(command=command,
                                            args=[_expand(a) for a in spec.get("args", [])], env=env)
             read, write = await self._stack.enter_async_context(stdio_client(params))
             session = await self._stack.enter_async_context(ClientSession(read, write))
