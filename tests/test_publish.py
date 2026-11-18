@@ -89,3 +89,38 @@ def test_source_numbers_follow_first_citation_without_gaps():
     html = article_html(brief, a, published_at=None)
     assert '<sup><a href="#src-1">[1]</a></sup>' in html and 'href="#src-5"' not in html
     assert 'id="src-1" value="1"><span class="stance">supports</span><br><a href="https://c.example.com"' in html
+
+def _brief_and_article(paragraph):
+    from contracts import Article, Claim, Section
+    brief = stubs.research(Mission(slug="x", topic="x"))
+    brief.claims.append(Claim(text="It is possible that a vendor was shared", source_ids=["s1"], kind="possibility"))
+    return brief, Article(title="t", dek="d", sections=[
+        Section(heading="A", paragraphs=[paragraph]), Section(heading="B", paragraphs=["Other [s4]."])])
+
+def test_possibilities_are_labeled_in_the_article():
+    from render import article_html, article_markdown, POSSIBILITY_LABEL
+    brief, a = _brief_and_article("A fact [s1]. It is possible that a vendor was shared [s2].")
+    html = article_html(brief, a, published_at=None)
+    assert f'<span class="stance">{POSSIBILITY_LABEL}</span> It is possible that' in html
+    assert "not verified facts" in html                # the footer must not imply they were checked
+    assert f"**[{POSSIBILITY_LABEL}]** It is possible that" in article_markdown("x", brief, a)
+
+def test_footer_stays_plain_without_possibilities():
+    from render import article_html, POSSIBILITY_LABEL
+    brief, a = _brief_and_article("A fact [s1].")
+    html = article_html(brief, a, published_at=None)
+    assert POSSIBILITY_LABEL not in html and "not verified facts" not in html
+
+def test_brief_lists_facts_and_possibilities_separately():
+    from render import brief_html, brief_markdown, FACTS_HEADING, POSSIBILITIES_HEADING
+    brief, _ = _brief_and_article("x")
+    for text in (brief_markdown("x", brief), brief_html(brief)):
+        assert text.index(FACTS_HEADING) < text.index("Stub claim") < text.index(POSSIBILITIES_HEADING) \
+            < text.index("a vendor was shared")
+
+def test_briefs_saved_before_kinds_existed_still_load_as_facts():
+    from contracts import ResearchBrief
+    data = stubs.research(Mission(slug="x", topic="x")).model_dump()
+    for claim in data["claims"]:
+        del claim["kind"]
+    assert ResearchBrief(**data).claims[0].kind == "fact"

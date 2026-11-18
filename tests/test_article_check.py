@@ -77,3 +77,23 @@ def test_too_short_fails():
     a = article(**{"One": ["Short [gov]."], "Two": ["Also short [op]."]})
     ok, notes = check_article(M, BRIEF, a)
     assert not ok and f"at least {MIN_WORDS}" in notes
+
+MAYBE = "It is possible that the vote was moved up [gov]."
+BRIEF_WITH_POSSIBILITY = BRIEF.model_copy(update={"claims": BRIEF.claims + [
+    Claim(text="It is possible that the vote was moved up", source_ids=["gov"], kind="possibility")]})
+
+def test_possibility_from_the_brief_passes():
+    a = article()
+    a.sections[0].paragraphs.append(MAYBE)
+    ok, notes = check_article(M, BRIEF_WITH_POSSIBILITY, a)
+    assert ok, notes
+
+def test_possibility_not_in_the_brief_fails():
+    a = article()
+    a.sections[0].paragraphs.append(MAYBE)
+    ok, notes = check_article(M, BRIEF, a)
+    assert not ok and "brief has no possibilities" in notes
+
+def test_brief_possibilities_must_reach_the_article():
+    ok, notes = check_article(M, BRIEF_WITH_POSSIBILITY, article())
+    assert not ok and "possibilities are missing" in notes

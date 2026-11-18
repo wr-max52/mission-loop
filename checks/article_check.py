@@ -2,12 +2,12 @@
 
 What code can check: every paragraph is cited, every citation points at a verified source in the
 approved brief, no outside links, every direct quote is copied from a source quote or a POC comment,
-and the opposing view is cited. Whether a citation actually supports its sentence is the human's job
-at the ARTICLE_READY review.
+the opposing view is cited, and possibilities appear only if the brief has them. Whether a citation
+actually supports its sentence is the human's job at the ARTICLE_READY review.
 """
 import re
 from rapidfuzz import fuzz
-from contracts import Mission, ResearchBrief, Article, OutreachRecord, cited_ids
+from contracts import Mission, ResearchBrief, Article, OutreachRecord, cited_ids, POSSIBILITY
 from checks.validator import _norm
 
 MIN_WORDS = 300
@@ -57,5 +57,13 @@ def check_article(m: Mission, brief: ResearchBrief, article: Article,
         problems.append(f"The opposing view is not cited; cite at least one of {sorted(contradicting)}")
     if words < MIN_WORDS:
         problems.append(f"Article is {words} words; write at least {MIN_WORDS}")
+
+    brief_has_possibilities = any(c.kind == "possibility" for c in brief.claims)
+    article_has_possibilities = any(POSSIBILITY.search(p) for sec in article.sections for p in sec.paragraphs)
+    if article_has_possibilities and not brief_has_possibilities:
+        problems.append("Article says 'it is possible that' but the brief has no possibilities; "
+                        "use only what is in the brief")
+    if brief_has_possibilities and not article_has_possibilities:
+        problems.append("The brief's possibilities are missing; include them, worded 'It is possible that ...'")
 
     return (not problems, "\n".join(problems))

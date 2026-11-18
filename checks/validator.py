@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import httpx, trafilatura
 from rapidfuzz import fuzz
 import settings
-from contracts import Mission, ResearchBrief
+from contracts import Mission, ResearchBrief, POSSIBILITY
 
 MIN_SUPPORT_DOMAINS = 3
 QUOTE_MATCH = 90                           # rapidfuzz partial_ratio threshold
@@ -81,6 +81,15 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
         for sid in c.source_ids:
             if sid not in ids:
                 problems.append(f"Claim cites unknown source id '{sid}'")
+        # Code can't verify a possibility, but it can make sure one is never passed off as a fact
+        worded_as_possibility = bool(POSSIBILITY.search(c.text))
+        if c.kind == "possibility" and not worded_as_possibility:
+            problems.append(f"Possibility must be worded 'It is possible that ...': '{c.text[:80]}'")
+        if c.kind == "fact" and worded_as_possibility:
+            problems.append(f"Claim is worded as a possibility but its kind is 'fact'; set kind to "
+                            f"'possibility': '{c.text[:80]}'")
+    if not any(c.kind == "fact" for c in brief.claims):
+        problems.append("No claim of kind 'fact'; verify at least one fact alongside any possibilities")
 
     # 2 + 3. Every source is allowed, fetches, and its quote appears on the page
     blocked = blocked_domains()
