@@ -93,6 +93,14 @@ def needs_you(m: Mission) -> bool:
             or (m.state == State.ARTICLE_READY and not m.reviewed)
             or m.state == State.PARKED)
 
+def tone(m: Mission) -> str:
+    """The highlight color class: blue brief to review, green article to publish, red parked."""
+    if m.state == State.BRIEF_READY and not m.approved:
+        return "review"
+    if m.state == State.ARTICLE_READY:
+        return "publish"
+    return "parked" if m.state == State.PARKED else ""
+
 def label(m: Mission) -> str:
     if m.state == State.BRIEF_READY and m.approved:
         return "Approved, writing next"
@@ -192,8 +200,12 @@ h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; colo
 .card .sub { color:var(--muted); font-size:.9rem; margin-top:.25rem; }
 .badge { font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap;
          padding:.2rem .5rem; border-radius:999px; background:var(--quote); color:var(--muted); }
-.badge.you { background:#8a2b2b; color:#fff; } .badge.done { background:#2f9e44; color:#fff; }
-.badge.parked { background:#e8a33d; color:#1d1d1f; }
+.review { --tone:#1f6feb; --tint:rgba(31,111,235,.12); }
+.publish { --tone:#237a35; --tint:rgba(47,158,68,.14); }
+.parked { --tone:#c92a2a; --tint:rgba(201,42,42,.12); }
+.card.review, .card.publish, .card.parked { border-color:var(--tone); background:var(--tint);
+                                            box-shadow:inset 3px 0 0 var(--tone); }
+.badge.review, .badge.publish, .badge.parked { background:var(--tone); color:#fff; }
 button, .btn { font:600 .9rem -apple-system, system-ui, sans-serif; padding:.5rem .9rem; border-radius:8px;
                border:1px solid var(--rule); background:var(--bg); color:var(--fg); cursor:pointer;
                text-decoration:none; display:inline-block; }
@@ -308,15 +320,14 @@ def loop_panel(back: str) -> str:
     return f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}{strip}</div>'
 
 def card(m: Mission, now: dict | None = None) -> str:
-    cls = "you" if needs_you(m) and m.state != State.PARKED else \
-          "parked" if m.state == State.PARKED else "done" if m.state == State.DONE else ""
+    color = tone(m)
     working = working_on(m, now)
     sub = working or next_step(m)
     if m.state == State.DONE and m.published_at:
         sub = f"Published {m.published_at:%b %-d, %Y}"
-    active = " active" if working else ""
-    return (f'<a class="card{active}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
-            f'<span class="badge {cls}">{escape(label(m))}</span></div>'
+    classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
+    return (f'<a class="{classes}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
+            f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
 
 # ---------- pages ----------
@@ -384,10 +395,8 @@ async def mission(request: Request) -> Response:
     m = store.get_mission(slug)
     if not m:
         return page("Not found", '<h1>No such mission</h1><p><a href="/">Back to missions</a></p>')
-    badge = "you" if needs_you(m) and m.state != State.PARKED else \
-            "parked" if m.state == State.PARKED else "done" if m.state == State.DONE else ""
     body = [flash(request),
-            f'<p><span class="badge {badge}">{escape(label(m))}</span> <span class="muted">{escape(m.slug)}</span></p>',
+            f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> <span class="muted">{escape(m.slug)}</span></p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
         body.append(f'<p class="muted">{escape(m.objective)}</p>')

@@ -174,6 +174,13 @@ def test_mission_page_drops_loop_panel_and_nav_shows_loop_state(client, monkeypa
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     assert '<span class="dot on" aria-hidden="true"></span>Running</span>' in client.get("/m/b").text
 
+def test_status_colors_on_cards_and_pills(client):
+    for slug, state, color in (("r", State.BRIEF_READY, "review"), ("w", State.ARTICLE_READY, "publish"),
+                               ("p", State.PARKED, "parked")):
+        store.save_mission(Mission(slug=slug, topic="T", state=state))
+        assert f'<a class="card {color}" href="/m/{slug}">' in client.get("/").text
+        assert f'<span class="badge {color}">' in client.get(f"/m/{slug}").text
+
 def test_unknown_mission(client):
     assert "No such mission" in client.get("/m/nope").text
     assert client.post("/m/nope/approve").status_code == 404
