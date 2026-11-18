@@ -27,7 +27,8 @@ def publish(m: Mission, brief: ResearchBrief, article: Article, now) -> Path:
     folder = SITE / m.slug
     folder.mkdir(parents=True, exist_ok=True)
     page = folder / "index.html"
-    page.write_text(article_html(brief, article, published_at=now))
+    page.write_text(article_html(brief, article, published_at=now, brief_checked=not m.unchecked_brief,
+                                 article_checked=not m.unchecked_article))
     (folder / "meta.json").write_text(json.dumps({
         "slug": m.slug, "title": article.title, "dek": article.dek, "published_at": now.isoformat()}))
     rebuild_index()

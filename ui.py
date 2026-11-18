@@ -1,7 +1,7 @@
 """Local web UI. Run it with `python run.py ui`, then open http://127.0.0.1:8770.
 
 It is a thin layer over the same store and orchestrator functions the CLI uses: it reads missions,
-shows briefs and articles, and records human decisions (approve, reject, publish, requeue). It never
+shows briefs and articles, and records human decisions (approve, reject, publish, requeue, push). It never
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
@@ -31,6 +31,7 @@ MESSAGES = {
     "published": "Marked for publishing. The loop publishes it on its next pass.",
     "rejected": "Sent back with your notes.",
     "requeued": "Requeued. It starts again on the next pass.",
+    "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
     "added": "Mission added. The loop starts researching it on its next pass.",
     "started": "Loop started.",
     "stopping": "Stop requested. The loop finishes its current task, then exits.",
@@ -114,8 +115,9 @@ def next_step(m: Mission) -> str:
     if m.state == State.ARTICLE_READY and not m.reviewed:
         return "Read the article, then publish it or send it back."
     if m.state == State.PARKED:
-        stage = "writing" if m.write_attempts >= m.max_attempts else "research"
-        return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then requeue it."
+        stage = "writing" if orchestrator.parked_while_writing(m) else "research"
+        then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
+        return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
     if m.state == State.RESEARCHING:
         return f"Research attempt {m.attempts + 1} of {m.max_attempts} on the next pass." if m.attempts \
             else "Researching on the next pass."
@@ -381,10 +383,18 @@ def actions_for(m: Mission) -> str:
                 + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings.")
                 + "</div>")
     if m.state == State.PARKED:
+        what = "article" if orchestrator.parked_while_writing(m) else "brief"
+        if orchestrator.parked_draft(m):
+            push = f'<form method="post" action="/m/{slug}/push"><button>Push through anyway</button></form>'
+            push_hint = (f"Push through sends the last failed {what} on to your review. It stays marked as "
+                         f"failing its check, including on the published page.")
+        else:
+            push = ""
+            push_hint = f"It can't be pushed through because no attempt left a finished {what}."
         return (f'<div class="actions"><div class="buttons">'
-                f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>'
-                f'</div><p class="hint">It gets a fresh set of {m.max_attempts} attempts and keeps the notes below '
-                f'so the agent can learn from them.</p></div>')
+                f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>{push}'
+                f'</div><p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
+                f'below so the agent can learn from them. {push_hint}</p></div>')
     if m.state == State.DONE:
         return (f'<div class="actions"><div class="buttons">'
                 f'<a class="btn" href="/site/{slug}/" target="_blank">View on the published site</a></div></div>')
@@ -410,18 +420,29 @@ async def mission(request: Request) -> Response:
                 "Feedback being worked on" if m.validator_notes.startswith("Human reviewer feedback") else \
                 "Last check's notes"
         body.append(f'<h2>{title}</h2><pre class="notes">{escape(m.validator_notes)}</pre>')
+    if m.unchecked_brief:
+        body.append('<h2>Brief pushed through despite failing the source check</h2>'
+                    f'<pre class="notes">{escape(m.unchecked_brief)}</pre>')
+    if m.unchecked_article:
+        body.append('<h2>Article pushed through despite failing its check</h2>'
+                    f'<pre class="notes">{escape(m.unchecked_article)}</pre>')
 
     brief, article = _brief(slug), _article(slug)
+    checked = not m.unchecked_brief
     preview = Path("missions") / slug / "preview.html"
     if article and preview.exists() and m.state in (State.ARTICLE_READY, State.DONE, State.WRITING):
         body.append(f'<h2>Article</h2><iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
     if brief and m.state == State.BRIEF_READY:
-        body.append(f'<h2>Research brief</h2><div class="doc">{brief_html(brief)}</div>')
+        body.append(f'<h2>Research brief</h2><div class="doc">{brief_html(brief, checked)}</div>')
     elif brief:
-        body.append(f'<details><summary>Research brief</summary><div class="doc">{brief_html(brief)}</div></details>')
+        body.append(f'<details><summary>Research brief</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
     rejected = Path("missions") / slug / "brief.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.RESEARCHING, State.QUEUED):
         body.append('<details><summary>Last brief that failed the source check</summary>'
+                    f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
+    rejected = Path("missions") / slug / "article.rejected.md"
+    if rejected.exists() and m.state in (State.PARKED, State.WRITING):
+        body.append('<details><summary>Last article that failed its check</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
 
     events = store.events(slug)
@@ -497,6 +518,12 @@ async def act(request: Request) -> Response:
         except ValueError:
             return go(here, error="state")
         done = "requeued"
+    elif action == "push":
+        try:
+            orchestrator.push_through(m, now)
+        except ValueError:
+            return go(here, error="state")
+        done = "pushed"
     else:
         return PlainTextResponse("Unknown action.", status_code=404)
     if loop_running():

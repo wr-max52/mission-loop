@@ -80,3 +80,51 @@ def test_rejected_brief_is_kept_for_humans():
     orchestrator.run_until_idle(lambda: T0)
     text = Path("missions/rj/brief.rejected.md").read_text()
     assert "**Thesis:**" in text and "stub: forced failure" in text
+
+def parked_at_research(slug="p"):
+    store.save_mission(Mission(slug=slug, topic="FAIL"))
+    orchestrator.run_until_idle(lambda: T0)
+    assert store.get_mission(slug).state == State.PARKED
+
+def test_push_through_moves_failed_brief_to_human_review():
+    from pathlib import Path
+    from render import UNCHECKED_FACTS_HEADING
+    parked_at_research()
+    orchestrator.push_through(store.get_mission("p"), T0)
+    m = store.get_mission("p")
+    assert m.state == State.BRIEF_READY and not m.approved
+    assert store.load_artifact("p", "brief")["thesis"] == "Stub thesis about FAIL"
+    assert m.unchecked_brief == "stub: forced failure" and m.rejected_brief is None
+    assert m.validator_notes == ""                 # or the writer would treat them as its own mistakes
+    assert UNCHECKED_FACTS_HEADING in Path("missions/p/brief.md").read_text()
+    assert store.events("p")[-1]["note"] == "failed brief pushed through by human"
+    orchestrator.run_until_idle(lambda: T0)
+    assert store.get_mission("p").state == State.BRIEF_READY       # still waits for approval
+
+def test_push_through_only_from_parked():
+    store.save_mission(Mission(slug="m", topic="x"))
+    with pytest.raises(ValueError, match="only PARKED"):
+        orchestrator.push_through(store.get_mission("m"), T0)
+
+def test_push_through_needs_a_draft(monkeypatch):
+    import agents
+    def boom(m, now): raise RuntimeError("ollama is not running")
+    monkeypatch.setattr(agents, "research", boom)
+    store.save_mission(Mission(slug="c", topic="x"))
+    orchestrator.run_until_idle(lambda: T0)
+    with pytest.raises(ValueError, match="no failed brief"):
+        orchestrator.push_through(store.get_mission("c"), T0)
+    assert store.get_mission("c").state == State.PARKED
+
+def test_a_brief_that_later_passes_is_no_longer_marked_unchecked(monkeypatch):
+    import agents
+    from pathlib import Path
+    from render import FACTS_HEADING
+    parked_at_research()
+    orchestrator.push_through(store.get_mission("p"), T0)
+    orchestrator.reject(store.get_mission("p"), "try again", T0)
+    monkeypatch.setattr(agents, "validate", lambda m, brief: (True, ""))
+    orchestrator.run_until_idle(lambda: T0)
+    m = store.get_mission("p")
+    assert m.state == State.BRIEF_READY and m.unchecked_brief == ""
+    assert FACTS_HEADING in Path("missions/p/brief.md").read_text()
