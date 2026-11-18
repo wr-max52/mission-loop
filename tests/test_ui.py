@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
-import orchestrator, store, ui
+import activity, agents, orchestrator, run as cli, store, ui
 from contracts import Mission, State
 
 pytestmark = pytest.mark.usefixtures("stub_agents")
@@ -115,6 +115,55 @@ def test_loop_running_detects_the_lock(client):
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         assert ui.loop_running()
     assert not ui.loop_running()
+
+def test_loop_records_the_working_agent_then_clears_it(monkeypatch):
+    seen, research, validate = [], agents.research, agents.validate
+    def spy(fn):
+        def wrapped(*args):
+            seen.append(activity.current()["agent"])
+            return fn(*args)
+        return wrapped
+    monkeypatch.setattr(agents, "research", spy(research))
+    monkeypatch.setattr(agents, "validate", spy(validate))
+    store.save_mission(Mission(slug="b", topic="Outages"))
+    run_at(T0)
+    assert seen == ["sources", "source_check"]
+    assert activity.current() is None
+
+def test_crashed_agent_is_not_left_showing(monkeypatch):
+    def boom(*args): raise RuntimeError("model down")
+    monkeypatch.setattr(agents, "research", boom)
+    store.save_mission(Mission(slug="b", topic="Outages"))
+    run_at(T0)
+    assert activity.current() is None
+
+def test_new_loop_clears_a_killed_loops_record():
+    activity.begin("b", "writer")
+    held = cli._lock()
+    assert activity.current() is None
+    held.close()
+
+def test_dashboard_highlights_the_working_agent(client, monkeypatch):
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
+    store.save_mission(Mission(slug="q", topic="Other topic"))
+    assert "No agent is working right now" in client.get("/").text
+    before = ui.signature()
+    activity.begin("b", "brief")
+    html = client.get("/").text
+    assert '<span class="agent on" aria-current="step">Brief writer</span>' in html
+    assert html.count('class="agent on"') == 1 and html.count('class="card active"') == 1
+    assert "Brief writer is working on this now." in html
+    assert "Contact finder" not in html            # outreach is off
+    assert ui.signature() != before                # open pages refresh when the agent changes
+    assert "Brief writer is working on this now." in client.get("/m/b").text
+    assert "working on this now" not in client.get("/m/q").text
+
+def test_stale_record_is_ignored_when_the_loop_is_off(client):
+    store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
+    activity.begin("b", "writer")
+    html = client.get("/").text
+    assert 'class="agent' not in html and "card active" not in html
 
 def test_unknown_mission(client):
     assert "No such mission" in client.get("/m/nope").text

@@ -1,5 +1,6 @@
 from datetime import timedelta
 from pathlib import Path
+import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
 from contracts import Mission, State, ResearchBrief, RejectedBrief, OutreachRecord, Article
@@ -36,7 +37,9 @@ def step(m: Mission, now) -> str | None:
     if m.state == State.RESEARCHING:
         m.attempts += 1
         try:
+            activity.begin(m.slug, "sources")
             brief = agents.research(m, now)
+            activity.begin(m.slug, "source_check")
             ok, notes = agents.validate(m, brief)
         except Exception as e:             # model, tool or network failure counts as a failed attempt
             brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
@@ -79,7 +82,9 @@ def step(m: Mission, now) -> str | None:
         m.write_attempts += 1
         brief, records = _brief(m), _outreach(m)
         try:
+            activity.begin(m.slug, "writer")
             article = agents.write(m, brief, records)
+            activity.begin(m.slug, "article_check")
             ok, notes = agents.check_article(m, brief, article, records)
         except Exception as e:             # same rule as research: a crash is a failed attempt
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
@@ -98,6 +103,7 @@ def step(m: Mission, now) -> str | None:
     if m.state == State.ARTICLE_READY:
         if not m.reviewed:
             return None                    # blocked on human
+        activity.begin(m.slug, "publisher")
         location = agents.publish(m, _brief(m), _article(m), now)
         m.published_at = now
         m.state = State.DONE
@@ -138,7 +144,10 @@ def tick(now) -> int:
         if STOP_FLAG.exists():
             break                          # stop between tasks, never mid-task
         before = m.state
-        note = step(m, now)
+        try:
+            note = step(m, now)
+        finally:
+            activity.clear()
         if note is not None:
             store.save_mission(m)          # saved after every task = resumable
             store.log_event(m.slug, now, before.value, m.state.value, note)

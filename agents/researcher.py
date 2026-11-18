@@ -1,7 +1,7 @@
 """Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
 import asyncio
 from pydantic import BaseModel, ValidationError
-import settings
+import activity, settings
 from contracts import Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
@@ -157,10 +157,12 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
     async with toolbox_factory(m.tools) as tb:
         messages = await tool_loop(system, tb, MAX_TOOL_CALLS)
         if settings.OUTREACH:                  # separate run; a failed check stops here, before the main model
+            activity.begin(m.slug, "contacts")
             pocs = await find_contacts(m, tb)
             messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
                              + Contacts(contacts=pocs).model_dump_json()})
 
+    activity.begin(m.slug, "brief")
     messages.append({"role": "user", "content": REVISE_FINAL if m.rejected_brief else FINAL})
     schema = ResearchBrief.model_json_schema()
     error = None

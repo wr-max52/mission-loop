@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
-import clock, orchestrator, store
+import activity, clock, orchestrator, settings, store
 from contracts import Mission, State, ResearchBrief, Article
 from render import CSS, brief_html
 
@@ -58,6 +58,10 @@ def loop_running() -> bool:
             return True
         fcntl.flock(f, fcntl.LOCK_UN)
         return False
+
+def running_now() -> dict | None:
+    """The agent working this moment, or None. The record only counts while the loop is alive."""
+    return activity.current() if loop_running() else None
 
 def start_loop(every: float) -> None:
     """Start `run.py loop` in the background, detached from the UI, logging to data/loop.log."""
@@ -119,6 +123,14 @@ def _article(slug: str) -> Article | None:
     data = store.load_artifact(slug, "article")
     return Article(**data) if data else None
 
+def working_on(m: Mission, now: dict | None) -> str:
+    """A line saying which agent is on this mission right now, or "" if none is."""
+    return f'{activity.AGENTS[now["agent"]]} is working on this now.' if now and now["slug"] == m.slug else ""
+
+def elapsed(since: float) -> str:
+    seconds = max(0, int(time.time() - since))
+    return f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
+
 def slugify(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())
     return "-".join(words[:5])[:60].strip("-")
@@ -128,7 +140,9 @@ def signature() -> str:
     with store.conn() as c:
         rows = c.execute("SELECT data FROM missions ORDER BY rowid").fetchall()
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
-    raw = "".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}"
+    now = running_now()
+    working = f'{now["slug"]}:{now["agent"]}' if now else ""
+    raw = "".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 # ---------- page shell ----------
@@ -146,11 +160,22 @@ nav.top .links a { margin-left:1rem; color:var(--muted); text-decoration:none; }
 .dot { width:.6rem; height:.6rem; border-radius:50%; background:var(--muted); display:inline-block; }
 .dot.on { background:#2f9e44; } .dot.stopping { background:#e8a33d; }
 .loop .grow { flex:1; }
+.agents { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.3rem; }
+.agent { font-size:.78rem; font-weight:600; padding:.22rem .55rem; border-radius:999px;
+         background:var(--quote); color:var(--muted); }
+.agent.on { background:#237a35; color:#fff; animation:working 2s ease-out infinite; }
+.agents .arrow { color:var(--muted); }
+.now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
+.now strong, .now a { color:var(--fg); }
+@keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
+@media (prefers-reduced-motion: reduce) { .agent.on { animation:none; } }
 h1 { font-family: Georgia, serif; }
 h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .5rem; }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
         text-decoration:none; color:var(--fg); }
 .card:hover { border-color:var(--muted); }
+.card.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
+.card.active .sub { color:var(--fg); }
 .card .row { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; }
 .card .topic { font-weight:600; }
 .card .sub { color:var(--muted); font-size:.9rem; margin-top:.25rem; }
@@ -185,6 +210,14 @@ details summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
 .muted { color:var(--muted); }
 """
 
+ELAPSED_JS = """<script>
+const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e => {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(e.dataset.since)));
+  e.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+});
+setInterval(showElapsed, 1000);
+</script>"""
+
 def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     # Refresh itself when the loop changes something, unless the human is typing.
     script = f"""<script>
@@ -195,7 +228,7 @@ setInterval(async () => {{
   if (busy || document.hidden) return;
   try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig) location.reload(); }} catch (e) {{}}
 }}, 5000);
-</script>""" if poll else ""
+</script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title><style>{CSS}{UI_CSS}</style></head><body><main>"
@@ -211,6 +244,23 @@ def flash(request: Request) -> str:
     if done in MESSAGES:
         return f'<div class="flash">{escape(MESSAGES[done])}</div>'
     return ""
+
+def agent_strip(now: dict | None) -> str:
+    """Every agent in pipeline order, with the one working this moment lit up."""
+    working = now["agent"] if now else None
+    chips = [f'<span class="agent on" aria-current="step">{name}</span>' if key == working
+             else f'<span class="agent">{name}</span>'
+             for key, name in activity.AGENTS.items()
+             if key != "contacts" or settings.OUTREACH or key == working]
+    strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
+    if now:
+        m = store.get_mission(now["slug"])
+        status = (f'<strong>{activity.AGENTS[working]}</strong> is working on '
+                  f'<a href="/m/{quote(now["slug"])}">{escape(m.topic if m else now["slug"])}</a>'
+                  f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
+    else:
+        status = "No agent is working right now."
+    return f'<div class="agents">{strip}</div><div class="now">{status}</div>'
 
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
@@ -228,15 +278,18 @@ def loop_panel(back: str) -> str:
         controls = (f'<form method="post" action="/loop/start"><input type="hidden" name="back" value="{back}">'
                     f'<span class="hint">every</span><input type="number" name="every" value="5" min="1" step="1">'
                     f'<span class="hint">min</span><button class="primary">Start loop</button></form>')
-    return f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}</div>'
+    strip = agent_strip(running_now()) if running else ""
+    return f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}{strip}</div>'
 
-def card(m: Mission) -> str:
+def card(m: Mission, now: dict | None = None) -> str:
     cls = "you" if needs_you(m) and m.state != State.PARKED else \
           "parked" if m.state == State.PARKED else "done" if m.state == State.DONE else ""
-    sub = next_step(m)
+    working = working_on(m, now)
+    sub = working or next_step(m)
     if m.state == State.DONE and m.published_at:
         sub = f"Published {m.published_at:%b %-d, %Y}"
-    return (f'<a class="card" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
+    active = " active" if working else ""
+    return (f'<a class="card{active}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {cls}">{escape(label(m))}</span></div>'
             f'<div class="sub">{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
 
@@ -247,12 +300,13 @@ async def home(request: Request) -> HTMLResponse:
     groups = [("Needs you", [m for m in missions if needs_you(m)]),
               ("In progress", [m for m in missions if not needs_you(m) and m.state != State.DONE]),
               ("Published", [m for m in missions if m.state == State.DONE])]
+    now = running_now()
     body = [flash(request), loop_panel("/")]
     if not missions:
         body.append('<p class="muted">No missions yet. Add one below.</p>')
     for title, ms in groups:
         if ms:
-            body.append(f'<h2 class="group">{title} ({len(ms)})</h2>' + "".join(card(m) for m in ms))
+            body.append(f'<h2 class="group">{title} ({len(ms)})</h2>' + "".join(card(m, now) for m in ms))
     body.append("""<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
   <label for="topic">Topic <span class="hint">what to research, in one line</span></label>
@@ -311,7 +365,7 @@ async def mission(request: Request) -> Response:
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
         body.append(f'<p class="muted">{escape(m.objective)}</p>')
-    step = next_step(m)
+    step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
     body.append(actions_for(m))
