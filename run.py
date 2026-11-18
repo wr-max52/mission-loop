@@ -121,15 +121,35 @@ def requeue(slug: str):
     print(f"{slug} requeued to {m.state.value}")
 
 @app.command()
+def push(slug: str):
+    """Move a parked mission to its next step using its last failed draft, overriding the check."""
+    m = store.get_mission(slug)
+    if not m:
+        raise typer.BadParameter(f"no mission {slug}")
+    try:
+        orchestrator.push_through(m, clock.now())
+    except ValueError as e:
+        print(e)
+        raise typer.Exit(1) from None
+    print(f"{slug} pushed through to {m.state.value}; it still needs your review")
+
+@app.command()
 def show(slug: str):
     m = store.get_mission(slug)
     folder = Path("missions") / slug
-    doc = folder / ("article.md" if m.state.value in ("ARTICLE_READY", "DONE") else "brief.md")
+    name = "article.md" if m.state.value in ("ARTICLE_READY", "DONE") else "brief.md"
+    if m.state.value == "PARKED":          # the draft `push` would move on
+        name = "article.rejected.md" if orchestrator.parked_while_writing(m) else "brief.rejected.md"
+    doc = folder / name
     print(doc.read_text() if doc.exists() else f"nothing to show yet ({m.state.value})")
     if m.state.value == "ARTICLE_READY":
         print(f"\nPreview in a browser: open {folder / 'preview.html'}")
     if m.validator_notes:
         print("\nLast validator / reviewer notes:\n" + m.validator_notes)
+    if m.unchecked_brief:
+        print("\nBrief pushed through despite these source check problems:\n" + m.unchecked_brief)
+    if m.unchecked_article:
+        print("\nArticle pushed through despite these check problems:\n" + m.unchecked_article)
 
 @app.command()
 def status():

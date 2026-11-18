@@ -4,6 +4,7 @@ from html import escape
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
+UNCHECKED_FACTS_HEADING = "Claimed facts (this brief failed the source check)"
 POSSIBILITIES_HEADING = "Possibilities (not verified)"
 POSSIBILITY_LABEL = "Possibility, not verified"
 
@@ -13,9 +14,10 @@ def _claims_of(b: ResearchBrief, kind: str) -> list:
 def _has_possibility(a: Article) -> bool:
     return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
 
-def brief_markdown(slug: str, b: ResearchBrief) -> str:
+def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
     claim_lines = lambda kind: [f"- {c.text} [{', '.join(c.source_ids)}]" for c in _claims_of(b, kind)]
-    lines = [f"# Brief: {slug}", "", f"**Thesis:** {b.thesis}", "", f"## {FACTS_HEADING}"]
+    heading = FACTS_HEADING if checked else UNCHECKED_FACTS_HEADING
+    lines = [f"# Brief: {slug}", "", f"**Thesis:** {b.thesis}", "", f"## {heading}"]
     lines += claim_lines("fact")
     if _claims_of(b, "possibility"):
         lines += ["", f"## {POSSIBILITIES_HEADING}"] + claim_lines("possibility")
@@ -85,13 +87,13 @@ ul.index a.title { font-size: 1.25rem; font-weight: 600; text-decoration: none; 
 ul.index p { margin: .3rem 0 0; color: var(--muted); }
 """
 
-def brief_html(b: ResearchBrief) -> str:
+def brief_html(b: ResearchBrief, checked: bool = True) -> str:
     """The brief as an HTML fragment (no page shell) for the review UI."""
     nums = {s.id: n for n, s in enumerate(b.sources, 1)}
     refs = lambda ids: "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
     items = lambda kind: [f"<li>{escape(c.text)}{refs(c.source_ids)}</li>" for c in _claims_of(b, kind)]
     out = [f'<p class="thesis"><span class="stance">Thesis</span><br>{escape(b.thesis)}</p>',
-           f"<h2>{FACTS_HEADING}</h2><ul>"]
+           f"<h2>{FACTS_HEADING if checked else UNCHECKED_FACTS_HEADING}</h2><ul>"]
     out += items("fact") + ["</ul>"]
     if _claims_of(b, "possibility"):
         out += [f"<h2>{POSSIBILITIES_HEADING}</h2><ul>"] + items("possibility") + ["</ul>"]
@@ -114,7 +116,10 @@ def _page(title: str, body: str, home: str) -> str:
             f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a></header>\n"
             f"{body}\n</main></body></html>\n")
 
-def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../") -> str:
+def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../",
+                 brief_checked: bool = True, article_checked: bool = True) -> str:
+    """brief_checked / article_checked are False when a human pushed that work past a failed check;
+    the page must then not claim the check passed."""
     nums = _source_numbers(b, a)
 
     def cite(match) -> str:
@@ -128,8 +133,9 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
         return POSSIBILITY.sub(label, CITATION.sub(cite, escape(text, quote=False)))
 
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
+    failed = "" if brief_checked and article_checked else " · Failed automated checks"
     body = [f"<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
-            f'<p class="meta">{when} · {len(b.sources)} sources</p>']
+            f'<p class="meta">{when} · {len(b.sources)} sources{failed}</p>']
     for sec in a.sections:
         body.append(f"<h2>{escape(sec.heading)}</h2>")
         body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
@@ -139,12 +145,19 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                     f'<a href="{escape(s.url)}">{escape(s.title)}</a>'
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
-    possibilities_note = ("Passages labeled as possibilities are informed inferences, not verified facts: "
-                          "their sources were checked, but the possibility itself was not confirmed. "
-                          if _has_possibility(a) else "")
-    body.append('<p class="note">Every source above was fetched and its quote matched against the page by code. '
-                "Direct quotes and citations in the article were checked against those sources. "
-                f"{possibilities_note}"
+    sources_note = ("Every source above was fetched and its quote matched against the page by code. "
+                    if brief_checked else
+                    "The research failed the automated source check, so sources or quotes above may be wrong. ")
+    article_note = ("Direct quotes and citations in the article were checked against those sources. "
+                    if article_checked else
+                    "The article failed the automated check of its quotes and citations. ")
+    possibilities_note = ""
+    if _has_possibility(a):
+        possibilities_note = ("Passages labeled as possibilities are informed inferences, not verified facts: "
+                              "their sources were checked, but the possibility itself was not confirmed. "
+                              if brief_checked else
+                              "Passages labeled as possibilities are informed inferences, not verified facts. ")
+    body.append(f'<p class="note">{sources_note}{article_note}{possibilities_note}'
                 "A human approved the research and reviewed this article before it was published.</p></article>")
     return _page(a.title, "\n".join(body), home)
 

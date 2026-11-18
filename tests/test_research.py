@@ -1,4 +1,4 @@
-import json
+import asyncio, json
 import pytest
 from ollama import Message
 import activity
@@ -159,3 +159,38 @@ async def test_unverified_contacts_stop_before_the_main_model(monkeypatch):
     with pytest.raises(research_mod.ResearchFailed, match="only 1 verified contact"):
         await research_mod.run_research(M, toolbox_factory=FakeToolbox)
     assert all(c["model"] == llm.SEARCH_MODEL for c in seen)          # the main model was never called
+
+def test_source_finder_limit_is_15_minutes():
+    assert research_mod.SOURCE_TIME_LIMIT == 15 * 60
+
+async def test_source_finder_stops_at_its_time_limit_and_keeps_what_it_found(monkeypatch):
+    monkeypatch.setattr(research_mod, "SOURCE_TIME_LIMIT", 0.05)
+    sent = []
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        if format is not None:
+            sent.append(list(messages))
+            return text(BRIEF_JSON)
+        if FakeToolbox.calls:
+            await asyncio.sleep(30)            # the small model hangs on its second turn
+        return tool_call("search", query="heat pumps")
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    brief = await asyncio.wait_for(research_mod.run_research(M, toolbox_factory=FakeToolbox), 5)
+    assert brief.thesis.startswith("Stub thesis")
+    assert any(isinstance(x, dict) and x.get("role") == "tool" for x in sent[0])   # the search result survived
+
+async def test_time_limit_does_not_cover_the_brief_writer(monkeypatch):
+    monkeypatch.setattr(research_mod, "SOURCE_TIME_LIMIT", 0.05)
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        if format is None:
+            return text("DONE")
+        await asyncio.sleep(0.1)               # longer than the source finder's limit
+        return text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    assert await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+
+async def test_a_timeout_from_inside_a_call_is_still_a_failure(monkeypatch):
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        raise TimeoutError("connection timed out")
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    with pytest.raises(TimeoutError):
+        await research_mod.run_research(M, toolbox_factory=FakeToolbox)

@@ -12,8 +12,8 @@ into `site/` on this machine; nothing is uploaded anywhere.
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue show status`
-- Tests: `pytest -q` (expects 96 passed; no Ollama or network needed)
+- CLI: `python run.py <command>` — `ui init add run loop stop approve reject review requeue push show status`
+- Tests: `pytest -q` (expects 111 passed; no Ollama or network needed)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -27,8 +27,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 ```
 
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`.
-  A small model (`MISSION_LOOP_SEARCH_MODEL`, default `bonsai-2:4b`) runs the search/fetch tool loop;
-  the main model (`MISSION_LOOP_MODEL`) writes the brief. With outreach on, a second small-model run
+  A small model (`MISSION_LOOP_SEARCH_MODEL`, default `bonsai-2:4b`) runs the search/fetch tool loop
+  for at most 15 minutes (`SOURCE_TIME_LIMIT`), then the main model (`MISSION_LOOP_MODEL`) writes the
+  brief from whatever was found. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
 - Publishing: `agents/publisher.py` writes `site/<slug>/index.html` and rebuilds `site/index.html`.
@@ -39,12 +40,15 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   what stays possible, and verifies facts separately. Code can't verify a possibility, so it enforces the
   label instead: possibilities must say "It is possible that", a brief needs at least one fact, and the
   article marks each one "Possibility, not verified".
+- A parked mission can be pushed through: its last failed brief or article moves to the human review
+  that follows, and stays marked as failing its check (`unchecked_brief` / `unchecked_article`), including
+  on the published page. This needs a failed draft; if every attempt crashed, only requeue works.
 - `agents/__init__.py` is still the only switchboard. Validators never call the LLM.
 
 ## Operating it
 
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
-article previews, and has buttons for approve / send back / publish / requeue / add mission and to start,
+article previews, and has buttons for approve / send back / publish / requeue / push through / add mission and to start,
 stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`). `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
@@ -62,6 +66,7 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Publish an article | `python run.py review <slug>`; it is published on the next pass |
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
+| Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
