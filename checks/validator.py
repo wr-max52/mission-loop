@@ -13,7 +13,7 @@ MIN_QUOTE_CHARS = 20
 MIN_POCS = 3
 MAX_TEXT_CHARS = 300_000
 BLOCKED_FILE = Path("blocked_domains.txt")  # one domain per line; subdomains are blocked too
-_cache: dict[str, tuple[str, str] | None] = {}
+_cache: dict[str, tuple[str, str]] = {}    # successful fetches only; failures may be transient
 
 def blocked_domains(path: Path | None = None) -> set[str]:
     path = path or BLOCKED_FILE
@@ -29,14 +29,14 @@ def fetch(url: str) -> tuple[str, str] | None:
     """Return (raw_html, readable_text) or None if the page can't be fetched."""
     if url in _cache:
         return _cache[url]
-    page = None
     try:
         r = httpx.get(url, follow_redirects=True, timeout=20,
                       headers={"User-Agent": "Mozilla/5.0 (MissionLoop source validator)"})
-        if r.status_code == 200:
-            page = (r.text, trafilatura.extract(r.text) or "")
     except httpx.HTTPError:
-        page = None
+        return None
+    if r.status_code != 200:
+        return None
+    page = (r.text, trafilatura.extract(r.text) or "")
     _cache[url] = page
     return page
 

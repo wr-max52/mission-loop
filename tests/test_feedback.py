@@ -36,6 +36,38 @@ def test_research_crash_counts_as_failed_attempt(monkeypatch):
     m = store.get_mission("c")
     assert m.state == State.PARKED and "ollama is not running" in m.validator_notes
 
+def test_failed_brief_is_kept_for_the_next_attempt():
+    store.save_mission(Mission(slug="k", topic="FAIL"))
+    orchestrator.run_until_idle(lambda: T0)
+    kept = store.get_mission("k").rejected_brief
+    assert kept.brief.thesis == "Stub thesis about FAIL" and kept.notes == "stub: forced failure"
+
+def test_passing_brief_clears_the_rejected_one(monkeypatch):
+    import agents
+    verdicts = iter([(False, "s1: quote not found"), (True, "")])
+    monkeypatch.setattr(agents, "validate", lambda m, brief: next(verdicts))
+    store.save_mission(Mission(slug="ok", topic="x"))
+    orchestrator.run_until_idle(lambda: T0)
+    m = store.get_mission("ok")
+    assert m.state == State.BRIEF_READY and m.attempts == 2 and m.rejected_brief is None
+
+def test_crash_keeps_the_rejected_brief_and_its_notes(monkeypatch):
+    import agents
+    from agents import stubs
+    results = iter([stubs.research, RuntimeError("ollama is not running")])
+    def flaky(m, now):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result(m, now)
+    monkeypatch.setattr(agents, "research", flaky)
+    monkeypatch.setattr(agents, "validate", lambda m, brief: (False, "s1: quote not found"))
+    store.save_mission(Mission(slug="cr", topic="x", max_attempts=2))
+    orchestrator.run_until_idle(lambda: T0)
+    m = store.get_mission("cr")
+    assert "ollama is not running" in m.validator_notes
+    assert m.rejected_brief.notes == "s1: quote not found"
+
 def test_brief_md_written_for_review():
     from pathlib import Path
     store.save_mission(Mission(slug="b", topic="x"))

@@ -28,6 +28,7 @@ class Mission(BaseModel):
     approved: bool = False
     reviewed: bool = False
     validator_notes: str = ""              # validator failures or human feedback
+    rejected_brief: "RejectedBrief | None" = None  # last brief the validator failed; retries revise it
     published_at: datetime | None = None
 
 class Claim(BaseModel):
@@ -55,6 +56,12 @@ class ResearchBrief(BaseModel):
     sources: list[Source]
     pocs: list[POC] = []                   # validator requires 3+ only when outreach is on
     question_for_pocs: str = ""
+
+class RejectedBrief(BaseModel):
+    brief: ResearchBrief
+    notes: str                             # the validator's verdict on this exact brief
+
+Mission.model_rebuild()
 
 class OutreachRecord(BaseModel):
     poc_email: str
