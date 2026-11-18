@@ -12,6 +12,7 @@ def fresh(tmp_path, monkeypatch):
 
 @pytest.fixture
 def stub_agents(monkeypatch):
-    """Route research and validate to stubs so loop tests never touch Ollama or the network."""
-    monkeypatch.setattr(agents, "research", stubs.research)
-    monkeypatch.setattr(agents, "validate", stubs.validate)
+    """Route every model-backed agent to stubs so loop tests never touch Ollama or the network.
+    publish stays real: it only writes files into the test's own folder."""
+    for name in ("research", "validate", "interview", "write", "check_article"):
+        monkeypatch.setattr(agents, name, getattr(stubs, name))

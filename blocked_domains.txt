@@ -1,0 +1,3 @@
+# Domains the source validator always rejects, one per line (subdomains included).
+# Use this for sites you don't trust as evidence. Empty by default.
+# example.com

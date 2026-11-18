@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs `python run.py loop` in the background, starts at login, restarts if it crashes.
+     Install:   cp ops/com.missionloop.loop.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.missionloop.loop.plist
+     Pause:     python run.py stop      (the loop exits cleanly; launchd will NOT restart a clean exit)
+     Resume:    launchctl kickstart gui/$(id -u)/com.missionloop.loop
+     Uninstall: launchctl unload ~/Library/LaunchAgents/com.missionloop.loop.plist && rm ~/Library/LaunchAgents/com.missionloop.loop.plist
+     Log:       tail -f data/loop.log -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.missionloop.loop</string>
+  <key>WorkingDirectory</key><string>/Users/will/projects/mission-loop</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/will/projects/mission-loop/.venv/bin/python</string>
+    <string>run.py</string>
+    <string>loop</string>
+    <string>--every</string>
+    <string>15</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- npx, uvx and ollama live here; launchd's default PATH doesn't include it -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>/Users/will/projects/mission-loop/data/loop.log</string>
+  <key>StandardErrorPath</key><string>/Users/will/projects/mission-loop/data/loop.log</string>
+</dict>
+</plist>

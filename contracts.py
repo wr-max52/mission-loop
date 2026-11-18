@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Literal
@@ -19,13 +20,15 @@ class Mission(BaseModel):
     objective: str = ""
     tools: list[str] = ["search", "fetch"]
     state: State = State.QUEUED
-    attempts: int = 0
+    attempts: int = 0                      # research attempts
+    write_attempts: int = 0                # writer attempts
     max_attempts: int = 3
     wait_hours: float = 48                 # fixed; comments never end it early
     wait_until: datetime | None = None
     approved: bool = False
     reviewed: bool = False
     validator_notes: str = ""              # validator failures or human feedback
+    published_at: datetime | None = None
 
 class Claim(BaseModel):
     text: str
@@ -50,11 +53,26 @@ class ResearchBrief(BaseModel):
     claims: list[Claim]
     counterpoint: str
     sources: list[Source]
-    pocs: list[POC] = Field(min_length=3)  # 3 or more POCs
-    question_for_pocs: str
+    pocs: list[POC] = []                   # validator requires 3+ only when outreach is on
+    question_for_pocs: str = ""
 
 class OutreachRecord(BaseModel):
     poc_email: str
     gmail_thread_id: str
     sent_at: datetime
     replies: list[dict] = []
+
+class Section(BaseModel):
+    heading: str
+    paragraphs: list[str]                  # cite sources inline by id, e.g. "... in 2023 [s1, s2]."
+
+class Article(BaseModel):
+    title: str
+    dek: str                               # one-sentence summary shown under the title
+    sections: list[Section] = Field(min_length=2)
+
+# Inline citation in article text: [s1] or [s1, s2]. Shared by the checker and the renderer.
+CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
+
+def cited_ids(text: str) -> list[str]:
+    return [i.strip() for group in CITATION.findall(text) for i in group.split(",")]

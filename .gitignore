@@ -3,3 +3,8 @@ data/
 missions/
 __pycache__/
 .env
+site/
+missions.yaml
+.DS_Store
+.claude/
+.pytest_cache/

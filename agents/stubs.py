@@ -1,7 +1,6 @@
-from pathlib import Path
-from contracts import Mission, ResearchBrief, Source, POC, Claim, OutreachRecord
+from contracts import Mission, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
 
-def research(m: Mission) -> ResearchBrief:
+def research(m: Mission, now=None) -> ResearchBrief:
     return ResearchBrief(
         thesis=f"Stub thesis about {m.topic}",
         claims=[Claim(text="Stub claim", source_ids=["s1", "s2"])],
@@ -27,14 +26,26 @@ def interview(m: Mission, brief: ResearchBrief, now) -> list[OutreachRecord]:
     return [OutreachRecord(poc_email=p.email, gmail_thread_id=f"stub-{m.slug}-{i}", sent_at=now)
             for i, p in enumerate(brief.pocs)]
 
+def no_interview(m: Mission, brief: ResearchBrief, now) -> list[OutreachRecord]:
+    """Outreach is off: nobody is emailed, so the orchestrator skips the comment wait."""
+    return []
+
 def check_inbox(m: Mission, records: list[OutreachRecord], now) -> list[OutreachRecord]:
     return records                         # milestone 4: poll Gmail threads here
 
-def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Path:
+def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Article:
     comments = [r for rec in records for r in rec.replies if r.get("is_comment")]
-    out = Path("missions") / m.slug / "article.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        f"---\ntitle: {brief.thesis}\nsources: {[s.id for s in brief.sources]}\n---\n\n"
-        f"# {brief.thesis}\n\n{brief.claims[0].text}\n\nComments received: {len(comments)}\n")
-    return out
+    return Article(
+        title=brief.thesis,
+        dek=f"Stub article about {m.topic}",
+        sections=[
+            Section(heading="Finding", paragraphs=[f"{brief.claims[0].text} [s1, s2]."]),
+            Section(heading="The other side", paragraphs=[f"{brief.counterpoint} [s4]. "
+                                                          f"Comments received: {len(comments)} [s1]."]),
+        ],
+    )
+
+def check_article(m: Mission, brief: ResearchBrief, article: Article, records=None) -> tuple[bool, str]:
+    if "BADARTICLE" in m.topic:
+        return False, "stub: forced article failure"
+    return True, ""

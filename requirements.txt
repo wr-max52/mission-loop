@@ -9,3 +9,6 @@ trafilatura
 rapidfuzz
 pytest
 pytest-asyncio
+starlette
+uvicorn
+python-multipart

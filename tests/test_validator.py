@@ -68,8 +68,41 @@ def test_unknown_source_id_fails():
     ok, notes = validator.validate(M, brief(claims=[Claim(text="x", source_ids=["s9"])]))
     assert not ok and "unknown source id 's9'" in notes
 
-def test_poc_email_not_on_page_fails():
+def test_poc_email_not_on_page_fails(monkeypatch):
+    monkeypatch.setattr(validator.settings, "OUTREACH", True)
     b = brief()
     b.pocs[2].email = "nobody@nowhere.com"
     ok, notes = validator.validate(M, b)
     assert not ok and "nobody@nowhere.com not found" in notes
+
+def test_blocked_domain_fails(monkeypatch, tmp_path):
+    blocked = tmp_path / "blocked.txt"
+    blocked.write_text("# comment\nwww.b.org\n")
+    monkeypatch.setattr(validator, "BLOCKED_FILE", blocked)
+    ok, notes = validator.validate(M, brief())
+    assert not ok and "s2: b.org is on the blocked list" in notes
+
+def test_contradiction_on_a_supporting_site_fails():
+    b = brief()
+    b.sources[3].url = "https://a.com/1"
+    b.sources[3].quote = Q
+    ok, notes = validator.validate(M, b)
+    assert not ok and "different website" in notes
+
+def test_failed_quote_note_shows_the_real_sentence():
+    b = brief()
+    b.sources[3].quote = "Critics say heat pump efficiency collapses below minus 30C in all homes."
+    ok, notes = validator.validate(M, b)
+    assert not ok and 'Closest sentence actually on the page: "Critics say efficiency collapses' in notes
+
+def test_pocs_not_checked_while_outreach_is_off(monkeypatch):
+    monkeypatch.setattr(validator.settings, "OUTREACH", False)
+    b = brief()
+    b.pocs[2].email = "nobody@nowhere.com"
+    assert validator.validate(M, b)[0]
+    assert validator.validate(M, brief(pocs=[], question_for_pocs=""))[0]
+
+def test_outreach_needs_three_pocs(monkeypatch):
+    monkeypatch.setattr(validator.settings, "OUTREACH", True)
+    ok, notes = validator.validate(M, brief(pocs=[]))
+    assert not ok and "need 3" in notes

@@ -71,3 +71,18 @@ async def test_validator_notes_reach_the_prompt(monkeypatch):
     m = M.model_copy(update={"validator_notes": "s1: quote not found"})
     await research_mod.run_research(m, toolbox_factory=FakeToolbox)
     assert "s1: quote not found" in captured["system"]
+
+async def test_contact_hunting_only_when_outreach_is_on(monkeypatch):
+    import settings
+    prompts = []
+    async def fake_chat(messages, tools=None, format=None):
+        if format is None:
+            prompts.append(messages[0]["content"])
+        return text("DONE") if format is None else text(BRIEF_JSON)
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    monkeypatch.setattr(settings, "OUTREACH", False)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    monkeypatch.setattr(settings, "OUTREACH", True)
+    await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert "Do not look for points of contact" in prompts[0]
+    assert "at least 3 points of contact" in prompts[1]

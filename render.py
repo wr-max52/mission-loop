@@ -1,13 +1,135 @@
-"""Human-readable brief, written next to the data so you can review before approving."""
-from contracts import ResearchBrief
+"""Human-readable output: brief.md and article.md for review, HTML for the static site."""
+from datetime import datetime
+from html import escape
+from contracts import ResearchBrief, Article, CITATION, cited_ids
 
 def brief_markdown(slug: str, b: ResearchBrief) -> str:
     lines = [f"# Brief: {slug}", "", f"**Thesis:** {b.thesis}", "", "## Claims"]
     lines += [f"- {c.text} [{', '.join(c.source_ids)}]" for c in b.claims]
     lines += ["", f"## Counterpoint", b.counterpoint, "", "## Sources"]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
-    lines += ["", "## Points of contact"]
-    lines += [f"- {p.name}, {p.role}: {p.email} ([where found]({p.contact_source_url})). {p.why_them}"
-              for p in b.pocs]
-    lines += ["", f"## Question for POCs", b.question_for_pocs, ""]
+    if b.pocs:
+        lines += ["", "## Points of contact"]
+        lines += [f"- {p.name}, {p.role}: {p.email} ([where found]({p.contact_source_url})). {p.why_them}"
+                  for p in b.pocs]
+        lines += ["", f"## Question for POCs", b.question_for_pocs]
+    lines += [""]
     return "\n".join(lines)
+
+def article_markdown(slug: str, b: ResearchBrief, a: Article) -> str:
+    lines = ["---", f"slug: {slug}", f"title: {a.title}", f"dek: {a.dek}", "---", "",
+             f"# {a.title}", "", f"*{a.dek}*", ""]
+    for sec in a.sections:
+        lines += [f"## {sec.heading}", ""]
+        for p in sec.paragraphs:
+            lines += [p, ""]
+    lines += ["## Sources", ""]
+    lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
+    return "\n".join(lines) + "\n"
+
+def _source_numbers(b: ResearchBrief, a: Article) -> dict[str, int]:
+    """Number sources in order of first citation; uncited sources go last."""
+    known = {s.id for s in b.sources}
+    order: list[str] = []
+    for sec in a.sections:
+        for p in sec.paragraphs:
+            for sid in cited_ids(p):
+                if sid in known and sid not in order:
+                    order.append(sid)
+    order += [s.id for s in b.sources if s.id not in order]
+    return {sid: n for n, sid in enumerate(order, 1)}
+
+CSS = """
+:root { --bg:#fbfaf7; --fg:#1d1d1f; --muted:#6b6b70; --rule:#e3e1dc; --accent:#8a2b2b; --quote:#f1efe9; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --rule:#2c2c30; --accent:#e08a8a; --quote:#1f1f23; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font: 18px/1.65 Georgia, "Iowan Old Style", "Times New Roman", serif; }
+main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+a { color: var(--accent); }
+header.site { font: 600 0.85rem/1 -apple-system, system-ui, sans-serif; letter-spacing: .08em;
+              text-transform: uppercase; margin-bottom: 2rem; }
+header.site a { color: var(--muted); text-decoration: none; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 .5rem; }
+h2 { font-size: 1.3rem; margin: 2.2rem 0 .6rem; }
+.dek { font-size: 1.2rem; color: var(--muted); margin: 0 0 .75rem; }
+.meta { font: 0.85rem/1.4 -apple-system, system-ui, sans-serif; color: var(--muted);
+        border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+sup a { text-decoration: none; font: 600 0.7rem -apple-system, system-ui, sans-serif; }
+ol.sources { padding-left: 1.4rem; font-size: 0.95rem; }
+ol.sources li { margin-bottom: 1rem; }
+ol.sources blockquote { margin: .35rem 0 0; padding: .5rem .75rem; background: var(--quote);
+                        border-left: 3px solid var(--rule); }
+.stance { font: 600 0.7rem -apple-system, system-ui, sans-serif; text-transform: uppercase;
+          letter-spacing: .06em; color: var(--muted); }
+.note { font: 0.85rem/1.5 -apple-system, system-ui, sans-serif; color: var(--muted);
+        border-top: 1px solid var(--rule); margin-top: 2.5rem; padding-top: 1rem; }
+ul.index { list-style: none; padding: 0; }
+ul.index li { border-bottom: 1px solid var(--rule); padding: 1.1rem 0; }
+ul.index a.title { font-size: 1.25rem; font-weight: 600; text-decoration: none; color: var(--fg); }
+ul.index p { margin: .3rem 0 0; color: var(--muted); }
+"""
+
+def brief_html(b: ResearchBrief) -> str:
+    """The brief as an HTML fragment (no page shell) for the review UI."""
+    nums = {s.id: n for n, s in enumerate(b.sources, 1)}
+    refs = lambda ids: "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
+    out = [f'<p class="thesis"><span class="stance">Thesis</span><br>{escape(b.thesis)}</p>',
+           "<h2>Claims</h2><ul>"]
+    out += [f"<li>{escape(c.text)}{refs(c.source_ids)}</li>" for c in b.claims]
+    out += ["</ul>", "<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}</p>",
+            '<h2>Sources</h2><ol class="sources">']
+    out += [f'<li id="src-{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
+            f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>'
+            f'<blockquote>{escape(s.quote)}</blockquote></li>' for s in b.sources]
+    out.append("</ol>")
+    if b.pocs:
+        out.append("<h2>Points of contact</h2><ul>")
+        out += [f"<li>{escape(p.name)}, {escape(p.role)}: {escape(p.email)}</li>" for p in b.pocs]
+        out.append("</ul>")
+    return "\n".join(out)
+
+def _page(title: str, body: str, home: str) -> str:
+    return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"<title>{escape(title)}</title><style>{CSS}</style></head>\n"
+            f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a></header>\n"
+            f"{body}\n</main></body></html>\n")
+
+def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../") -> str:
+    nums = _source_numbers(b, a)
+
+    def cite(match) -> str:
+        ids = [i.strip() for i in match.group(1).split(",")]
+        return "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
+
+    def para(text: str) -> str:
+        return CITATION.sub(cite, escape(text, quote=False))
+
+    when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
+    body = [f"<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
+            f'<p class="meta">{when} · {len(b.sources)} sources</p>']
+    for sec in a.sections:
+        body.append(f"<h2>{escape(sec.heading)}</h2>")
+        body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
+    body.append('<h2>Sources</h2><ol class="sources">')
+    for s in sorted(b.sources, key=lambda s: nums[s.id]):
+        body.append(f'<li id="src-{nums[s.id]}" value="{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
+                    f'<a href="{escape(s.url)}">{escape(s.title)}</a>'
+                    f"<blockquote>{escape(s.quote)}</blockquote></li>")
+    body.append("</ol>")
+    body.append('<p class="note">Every source above was fetched and its quote matched against the page by code. '
+                "Direct quotes and citations in the article were checked against those sources. "
+                "A human approved the research and reviewed this article before it was published.</p></article>")
+    return _page(a.title, "\n".join(body), home)
+
+def index_html(entries: list[dict]) -> str:
+    """entries: dicts with slug, title, dek, published_at (ISO string), newest first."""
+    items = [f'<li><a class="title" href="{escape(e["slug"])}/">{escape(e["title"])}</a>'
+             f'<p>{escape(e["dek"])}</p><p class="meta" style="border:0;padding:0;margin:.3rem 0 0">'
+             f'{datetime.fromisoformat(e["published_at"]):%B %-d, %Y}</p></li>' for e in entries]
+    body = "<h1>Published</h1>" + (f'<ul class="index">{"".join(items)}</ul>' if items
+                                   else "<p>Nothing published yet.</p>")
+    return _page("Mission Loop", body, "./")
