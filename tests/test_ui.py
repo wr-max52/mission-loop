@@ -79,6 +79,35 @@ def test_requeue_parked(client):
     client.post("/m/p/requeue")
     assert store.get_mission("p").state == State.QUEUED
 
+def test_push_through_parked_brief(client):
+    store.save_mission(Mission(slug="p", topic="FAIL"))
+    run_at(T0)
+    assert 'action="/m/p/push"' in client.get("/m/p").text
+    r = client.post("/m/p/push", follow_redirects=False)
+    assert r.headers["location"] == "/m/p?done=pushed"
+    html = client.get("/m/p").text
+    assert store.get_mission("p").state == State.BRIEF_READY
+    assert "failing the source check" in html and "stub: forced failure" in html
+    assert "failed the source check)" in html and 'action="/m/p/approve"' in html
+    assert "error=state" in client.post("/m/p/push", follow_redirects=False).headers["location"]
+
+def test_push_through_parked_article(client):
+    store.save_mission(Mission(slug="w", topic="BADARTICLE", approved=True))
+    run_at(T0); run_at(T0 + timedelta(hours=48)); run_at(T0 + timedelta(hours=48))
+    assert "Last article that failed its check" in client.get("/m/w").text
+    client.post("/m/w/push")
+    assert store.get_mission("w").state == State.ARTICLE_READY
+    assert 'action="/m/w/publish"' in client.get("/m/w").text
+
+def test_no_push_button_without_a_draft(client, monkeypatch):
+    def boom(*args): raise RuntimeError("model down")
+    monkeypatch.setattr(agents, "research", boom)
+    store.save_mission(Mission(slug="c", topic="x"))
+    run_at(T0)
+    html = client.get("/m/c").text
+    assert 'action="/m/c/push"' not in html and "no attempt left a finished brief" in html
+    assert "error=state" in client.post("/m/c/push", follow_redirects=False).headers["location"]
+
 def test_add_mission_makes_slug_from_topic(client):
     r = client.post("/missions", data={"topic": "Who funds the transit levy?", "objective": "o"}, follow_redirects=False)
     assert r.headers["location"] == "/m/who-funds-the-transit-levy?done=added"

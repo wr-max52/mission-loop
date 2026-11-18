@@ -3,7 +3,7 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
-from contracts import Mission, State, ResearchBrief, RejectedBrief, OutreachRecord, Article
+from contracts import Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -17,7 +17,7 @@ def _article(m): return Article(**store.load_artifact(m.slug, "article"))
 def _write_brief_md(m: Mission, brief: ResearchBrief) -> Path:
     path = Path("missions") / m.slug / "brief.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(brief_markdown(m.slug, brief))
+    path.write_text(brief_markdown(m.slug, brief, checked=not m.unchecked_brief))
     return path
 
 def _write_article_review(m: Mission, brief: ResearchBrief, article: Article) -> Path:
@@ -25,7 +25,9 @@ def _write_article_review(m: Mission, brief: ResearchBrief, article: Article) ->
     folder = Path("missions") / m.slug
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "article.md").write_text(article_markdown(m.slug, brief, article))
-    (folder / "preview.html").write_text(article_html(brief, article, published_at=None))
+    (folder / "preview.html").write_text(article_html(brief, article, published_at=None,
+                                                      brief_checked=not m.unchecked_brief,
+                                                      article_checked=not m.unchecked_article))
     return folder / "preview.html"
 
 def step(m: Mission, now) -> str | None:
@@ -45,6 +47,7 @@ def step(m: Mission, now) -> str | None:
             brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "brief", brief)
+            m.unchecked_brief = ""
             path = _write_brief_md(m, brief)
             m.validator_notes = ""
             m.rejected_brief = None
@@ -90,11 +93,18 @@ def step(m: Mission, now) -> str | None:
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
+            m.unchecked_article = ""
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
+            m.rejected_article = None
             m.state = State.ARTICLE_READY
             return f"article passed check on attempt {m.write_attempts}; review {path}"
         m.validator_notes = notes
+        if article is not None:            # keep the failed article for humans, who may push it through
+            m.rejected_article = RejectedArticle(article=article, notes=notes)
+            path = Path("missions") / m.slug / "article.rejected.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(article_markdown(m.slug, brief, article) + f"\n## Article check notes\n{notes}\n")
         if m.write_attempts >= m.max_attempts:
             m.state = State.PARKED
             return f"parked after {m.write_attempts} writing attempts"
@@ -125,18 +135,51 @@ def reject(m: Mission, notes: str, now) -> None:
     store.save_mission(m)
     store.log_event(m.slug, now, before.value, m.state.value, "rejected by human")
 
+def parked_while_writing(m: Mission) -> bool:
+    return store.load_artifact(m.slug, "outreach") is not None   # brief was approved already
+
 def requeue(m: Mission, now) -> None:
     """Revive a parked mission. Keeps the last notes so the agent can learn from them.
     A mission that parked while writing goes back to WRITING, not back to research."""
     if m.state != State.PARKED:
         raise ValueError(f"{m.slug} is {m.state.value}; only PARKED can be requeued")
     before = m.state
-    if store.load_artifact(m.slug, "outreach") is not None:   # brief was approved already
+    if parked_while_writing(m):
         m.state, m.write_attempts = State.WRITING, 0
     else:
         m.state, m.attempts = State.QUEUED, 0
     store.save_mission(m)
     store.log_event(m.slug, now, before.value, m.state.value, "requeued by human")
+
+def parked_draft(m: Mission) -> RejectedBrief | RejectedArticle | None:
+    """The failed work a human could push through. None if every attempt crashed before producing any."""
+    return m.rejected_article if parked_while_writing(m) else m.rejected_brief
+
+def push_through(m: Mission, now) -> None:
+    """Human overrides the check: the last failed draft moves on to the next step anyway.
+    That step is still the human review, and the draft stays marked as having failed its check."""
+    if m.state != State.PARKED:
+        raise ValueError(f"{m.slug} is {m.state.value}; only PARKED can be pushed through")
+    draft = parked_draft(m)
+    if draft is None:
+        what = "article" if parked_while_writing(m) else "brief"
+        raise ValueError(f"{m.slug} has no failed {what} to push through; requeue it instead")
+    before = m.state
+    if isinstance(draft, RejectedBrief):
+        store.save_artifact(m.slug, "brief", draft.brief)
+        m.unchecked_brief, m.rejected_brief, m.approved = draft.notes, None, False
+        _write_brief_md(m, draft.brief)
+        m.state = State.BRIEF_READY
+        note = "failed brief pushed through by human"
+    else:
+        store.save_artifact(m.slug, "article", draft.article)
+        m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
+        _write_article_review(m, _brief(m), draft.article)
+        m.state = State.ARTICLE_READY
+        note = "failed article pushed through by human"
+    m.validator_notes = ""                 # the writer reads these as problems in its own draft
+    store.save_mission(m)
+    store.log_event(m.slug, now, before.value, m.state.value, note)
 
 def tick(now) -> int:
     changed = 0

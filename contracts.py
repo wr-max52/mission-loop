@@ -29,6 +29,9 @@ class Mission(BaseModel):
     reviewed: bool = False
     validator_notes: str = ""              # validator failures or human feedback
     rejected_brief: "RejectedBrief | None" = None  # last brief the validator failed; retries revise it
+    rejected_article: "RejectedArticle | None" = None  # last article the check failed
+    unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
+    unchecked_article: str = ""            # same for a failed article
     published_at: datetime | None = None
 
 class Claim(BaseModel):
@@ -62,8 +65,6 @@ class RejectedBrief(BaseModel):
     brief: ResearchBrief
     notes: str                             # the validator's verdict on this exact brief
 
-Mission.model_rebuild()
-
 class OutreachRecord(BaseModel):
     poc_email: str
     gmail_thread_id: str
@@ -78,6 +79,12 @@ class Article(BaseModel):
     title: str
     dek: str                               # one-sentence summary shown under the title
     sections: list[Section] = Field(min_length=2)
+
+class RejectedArticle(BaseModel):
+    article: Article
+    notes: str                             # the article check's verdict on this exact article
+
+Mission.model_rebuild()
 
 # Inline citation in article text: [s1] or [s1, s2]. Shared by the checker and the renderer.
 CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")

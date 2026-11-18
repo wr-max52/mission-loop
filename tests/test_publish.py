@@ -124,3 +124,51 @@ def test_briefs_saved_before_kinds_existed_still_load_as_facts():
     for claim in data["claims"]:
         del claim["kind"]
     assert ResearchBrief(**data).claims[0].kind == "fact"
+
+def parked_at_writing(slug="w"):
+    store.save_mission(Mission(slug=slug, topic="BADARTICLE", approved=True))
+    run_at(T0); run_at(T0 + timedelta(hours=48)); run_at(T0 + timedelta(hours=48))
+    m = store.get_mission(slug)
+    assert m.state == State.PARKED and orchestrator.parked_while_writing(m)
+    return m
+
+def test_failed_article_is_kept_for_humans():
+    m = parked_at_writing()
+    assert m.rejected_article.notes == "stub: forced article failure"
+    text = Path("missions/w/article.rejected.md").read_text()
+    assert "Stub thesis" in text and "stub: forced article failure" in text
+
+def test_push_through_article_reaches_review_then_publishes_marked_as_failed():
+    orchestrator.push_through(parked_at_writing(), T0)
+    m = store.get_mission("w")
+    assert m.state == State.ARTICLE_READY and not m.reviewed and m.rejected_article is None
+    assert m.unchecked_article == "stub: forced article failure"
+    assert "Failed automated checks" in Path("missions/w/preview.html").read_text()
+    run_at(T0)
+    assert store.get_mission("w").state == State.ARTICLE_READY     # still waits for the human
+    m.reviewed = True
+    store.save_mission(m)
+    run_at(T0)
+    assert store.get_mission("w").state == State.DONE
+    html = Path("site/w/index.html").read_text()
+    assert "Failed automated checks" in html and "failed the automated check of its quotes" in html
+    assert "Direct quotes and citations in the article were checked" not in html
+
+def test_pushed_brief_is_not_described_as_verified_on_the_site():
+    from render import article_html
+    m = Mission(slug="x", topic="t")
+    brief = stubs.research(m)
+    article = stubs.write(m, brief, [])
+    html = article_html(brief, article, published_at=None, brief_checked=False)
+    assert "failed the automated source check" in html
+    assert "Every source above was fetched" not in html
+    clean = article_html(brief, article, published_at=None)
+    assert "Every source above was fetched" in clean and "Failed automated checks" not in clean
+
+def test_writer_does_not_get_a_pushed_briefs_notes_as_its_own():
+    from agents.writer import prompt
+    store.save_mission(Mission(slug="p", topic="FAIL"))
+    run_at(T0)
+    orchestrator.push_through(store.get_mission("p"), T0)
+    m = store.get_mission("p")
+    assert "stub: forced failure" not in prompt(m, stubs.research(m), [])

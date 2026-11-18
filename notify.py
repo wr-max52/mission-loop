@@ -5,7 +5,7 @@ from contracts import Mission, State
 MESSAGES = {
     State.BRIEF_READY: "Brief ready. Read it: python run.py show {slug}, then approve or reject",
     State.ARTICLE_READY: "Article ready. Open missions/{slug}/preview.html, then review or reject",
-    State.PARKED: "Parked. See why: python run.py show {slug}, then requeue",
+    State.PARKED: "Parked. See why: python run.py show {slug}, then requeue or push",
     State.DONE: "Published to site/{slug}/index.html",
 }
 

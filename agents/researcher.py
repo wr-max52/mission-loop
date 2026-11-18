@@ -9,6 +9,7 @@ from agents.toolbox import Toolbox
 
 MAX_TOOL_CALLS = 40                        # sources run
 MAX_CONTACT_CALLS = 20                     # contacts run (outreach only)
+SOURCE_TIME_LIMIT = 15 * 60                # seconds the source finder may run before it must stop
 
 SYSTEM = """You are a nonpartisan political research analyst.
 Topic: {topic}
@@ -125,21 +126,28 @@ def _tool_servers(m: Mission) -> list[str]:
     """Saved missions list only search and fetch, so anything that can fetch also gets the page tools."""
     return m.tools + ["pages"] if "fetch" in m.tools and "pages" not in m.tools else m.tools
 
-async def tool_loop(system: str, tb, budget: int) -> list:
-    """One run of the small model: search and fetch until it stops or the budget runs out."""
+async def tool_loop(system: str, tb, budget: int, time_limit: float | None = None) -> list:
+    """One run of the small model: search and fetch until it stops or the budget or time runs out.
+    Running out of time works like running out of budget: the run keeps what it found so far."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
     calls = 0
-    while calls < budget:
-        msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
-        messages.append(msg)
-        if not msg.tool_calls:
-            break
-        for tc in msg.tool_calls:
-            if calls >= budget:
-                break
-            calls += 1
-            result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
-            messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
+    try:
+        async with asyncio.timeout(time_limit) as limit:
+            while calls < budget:
+                msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
+                messages.append(msg)
+                if not msg.tool_calls:
+                    break
+                for tc in msg.tool_calls:
+                    if calls >= budget:
+                        break
+                    calls += 1
+                    result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
+                    messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
+    except TimeoutError:
+        if not limit.expired():            # some other timeout inside the call: a real failure
+            raise
+        print(f"search stopped at its {time_limit / 60:g}-minute limit; continuing with what it found", flush=True)
     return messages
 
 async def find_contacts(m: Mission, tb) -> list[POC]:
@@ -165,7 +173,7 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
                            pocs=POCS_LATER if settings.OUTREACH else NO_POC_RULE)
     pocs = None
     async with toolbox_factory(_tool_servers(m)) as tb:
-        messages = await tool_loop(system, tb, MAX_TOOL_CALLS)
+        messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT)
         if settings.OUTREACH:                  # separate run; a failed check stops here, before the main model
             activity.begin(m.slug, "contacts")
             pocs = await find_contacts(m, tb)
