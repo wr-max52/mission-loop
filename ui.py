@@ -15,7 +15,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, Pl
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 import activity, clock, orchestrator, settings, store
-from contracts import Mission, State, ResearchBrief, Article
+from contracts import Mission, State, ResearchBrief, Article, slugify
 from render import CSS, brief_html, THEME_INIT, THEME_TOGGLE
 
 LOG = Path("data/loop.log")
@@ -33,6 +33,8 @@ MESSAGES = {
     "requeued": "Requeued. It starts again on the next pass.",
     "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
     "added": "Mission added. The loop starts researching it on its next pass.",
+    "inspired": "Inspiration saved. The mission finder works from it on every pass.",
+    "uninspired": "Inspiration cleared. The mission finder is off.",
     "started": "Loop started.",
     "stopping": "Stop requested. The loop finishes its current task, then exits.",
     "woken": "The loop runs a pass now.",
@@ -140,10 +142,6 @@ def working_on(m: Mission, now: dict | None) -> str:
 def elapsed(since: float) -> str:
     seconds = max(0, int(time.time() - since))
     return f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
-
-def slugify(text: str) -> str:
-    words = re.findall(r"[a-z0-9]+", text.lower())
-    return "-".join(words[:5])[:60].strip("-")
 
 def signature() -> str:
     """Changes whenever anything the dashboard shows changes; the page polls it to refresh itself."""
@@ -262,8 +260,8 @@ def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     script = f"""<script>
 let sig = "{signature()}";
 setInterval(async () => {{
-  const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim())
-            || ["TEXTAREA", "INPUT"].includes(document.activeElement.tagName);
+  const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
+            ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName);
   if (busy || document.hidden) return;
   try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig) location.reload(); }} catch (e) {{}}
 }}, 5000);
@@ -293,7 +291,10 @@ def agent_strip(now: dict | None) -> str:
              for key, name in activity.AGENTS.items()
              if key != "contacts" or settings.OUTREACH or key == working]
     strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
-    if now:
+    if now and not now["slug"]:            # the mission finder works for the desk, not one mission
+        status = (f'<strong>{activity.AGENTS[working]}</strong> is looking for new missions'
+                  f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
+    elif now:
         m = store.get_mission(now["slug"])
         status = (f'<strong>{activity.AGENTS[working]}</strong> is working on '
                   f'<a href="/m/{quote(now["slug"])}">{escape(m.topic if m else now["slug"])}</a>'
@@ -321,6 +322,16 @@ def loop_panel(back: str) -> str:
     strip = agent_strip(running_now()) if running else ""
     return f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}{strip}</div>'
 
+def finder_panel() -> str:
+    line = store.get_inspiration()
+    state = "On every pass it searches around this line and adds 1 to 3 missions." if line \
+        else "Off until you set a line."
+    return f"""<form method="post" action="/inspiration" class="actions">
+  <label for="inspiration" style="margin-top:0">Mission finder inspiration <span class="hint">{state} Clear it to turn the finder off.</span></label>
+  <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="e.g. Who really decides what the Federal Reserve does?">
+  <p><button>Save inspiration</button></p>
+</form>"""
+
 def card(m: Mission, now: dict | None = None) -> str:
     color = tone(m)
     working = working_on(m, now)
@@ -340,7 +351,7 @@ async def home(request: Request) -> HTMLResponse:
               ("In progress", [m for m in missions if not needs_you(m) and m.state != State.DONE]),
               ("Published", [m for m in missions if m.state == State.DONE])]
     now = running_now()
-    body = [flash(request), loop_panel("/")]
+    body = [flash(request), loop_panel("/"), finder_panel()]
     if not missions:
         body.append('<p class="muted">No missions yet. Add one below.</p>')
     for title, ms in groups:
@@ -549,6 +560,15 @@ async def add_mission(request: Request) -> Response:
         wake()
     return go(f"/m/{quote(slug)}", done="added")
 
+async def save_inspiration(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    line = store.set_inspiration(str(form.get("inspiration") or "")[:500])
+    if line and loop_running():
+        wake()
+    return go("/", done="inspired" if line else "uninspired")
+
 async def loop_action(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -575,6 +595,7 @@ async def loop_action(request: Request) -> Response:
 app = Starlette(routes=[
     Route("/", home),
     Route("/missions", add_mission, methods=["POST"]),
+    Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),

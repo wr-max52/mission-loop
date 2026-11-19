@@ -10,6 +10,7 @@ from pathlib import Path
 FILE = Path("data/activity.json")
 
 AGENTS = {                                 # in pipeline order
+    "finder": "Mission finder",            # works for the whole desk, so its slug is ""
     "sources": "Source finder",
     "contacts": "Contact finder",
     "brief": "Brief writer",
