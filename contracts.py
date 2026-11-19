@@ -34,6 +34,11 @@ class Mission(BaseModel):
     unchecked_article: str = ""            # same for a failed article
     published_at: datetime | None = None
 
+class MissionIdea(BaseModel):
+    topic: str
+    objective: str
+    source_url: str                        # a search result showing the claim is really being made
+
 class Claim(BaseModel):
     text: str
     source_ids: list[str]
@@ -91,6 +96,10 @@ CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
 
 # The required wording of a possibility. Shared by the checkers and the renderer.
 POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
+
+def slugify(text: str) -> str:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return "-".join(words[:5])[:60].strip("-")
 
 def cited_ids(text: str) -> list[str]:
     return [i.strip() for group in CITATION.findall(text) for i in group.split(",")]

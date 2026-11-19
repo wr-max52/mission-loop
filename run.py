@@ -50,6 +50,13 @@ def add(slug: str, topic: str, objective: str = "",
     store.save_mission(Mission(slug=slug, topic=topic, objective=objective, wait_hours=wait_hours))
 
 @app.command()
+def inspire(line: str = typer.Argument(None, help='The new line; "" clears it and turns the finder off')):
+    """Show or set the inspiration line the mission finder works from on every pass."""
+    if line is not None:
+        store.set_inspiration(line)
+    print(store.get_inspiration() or "no inspiration line set; the mission finder is off")
+
+@app.command()
 def run():
     """One pass: run every mission until each is blocked or finished, then exit."""
     held = _lock()

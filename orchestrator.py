@@ -3,7 +3,8 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
-from contracts import Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article
+from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
+                       slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -197,7 +198,38 @@ def tick(now) -> int:
             changed += 1
     return changed
 
-def run_until_idle(now_fn, max_ticks: int = 100) -> int:
+def _new_slug(topic: str, taken: set[str]) -> str:
+    base = slugify(topic)[:54].strip("-") or "mission"
+    slug, n = base, 2
+    while slug in taken:
+        slug, n = f"{base}-{n}", n + 1
+    return slug
+
+def find_new_missions(now) -> int:
+    """The mission finder's turn. It needs an inspiration line, and its failures never hold up a pass."""
+    inspiration = store.get_inspiration()
+    if not inspiration or STOP_FLAG.exists():
+        return 0
+    missions = store.all_missions()
+    try:
+        activity.begin("", "finder")
+        ideas = agents.find_missions(inspiration, [m.topic for m in missions], now)
+    except Exception as e:
+        print(f"mission finder failed: {type(e).__name__}: {e}", flush=True)
+        return 0
+    finally:
+        activity.clear()
+    taken = {m.slug for m in missions}
+    for idea in ideas:
+        slug = _new_slug(idea.topic, taken)
+        taken.add(slug)
+        store.save_mission(Mission(slug=slug, topic=idea.topic.strip(),
+                                   objective=f"{idea.objective.strip()}\n\nStarting lead: {idea.source_url.strip()}"))
+        store.log_event(slug, now, "", State.QUEUED.value, f"found by the mission finder from: {inspiration}")
+    print(f"mission finder added {len(ideas)} mission(s)", flush=True)
+    return len(ideas)
+
+def _run_missions(now_fn, max_ticks: int) -> int:
     total = 0
     for _ in range(max_ticks):
         if STOP_FLAG.exists():
@@ -206,4 +238,13 @@ def run_until_idle(now_fn, max_ticks: int = 100) -> int:
         total += n
         if n == 0:
             break
+    return total
+
+def run_until_idle(now_fn, max_ticks: int = 100) -> int:
+    """One pass. Existing missions go first so the finder never delays work a human just approved;
+    whatever it finds is then researched in the same pass."""
+    total = _run_missions(now_fn, max_ticks)
+    found = find_new_missions(now_fn())
+    if found:
+        total += found + _run_missions(now_fn, max_ticks)
     return total

@@ -4,6 +4,20 @@ from pathlib import Path
 from contracts import Mission
 
 DB = Path("data/loop.db")
+INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder
+
+def get_inspiration() -> str:
+    return INSPIRATION.read_text().strip() if INSPIRATION.exists() else ""
+
+def set_inspiration(text: str) -> str:
+    """Save the line, collapsed to one line. Blank removes it, which turns the finder off."""
+    line = " ".join(text.split())
+    INSPIRATION.parent.mkdir(parents=True, exist_ok=True)
+    if line:
+        INSPIRATION.write_text(line + "\n")
+    else:
+        INSPIRATION.unlink(missing_ok=True)
+    return line
 
 def conn():
     DB.parent.mkdir(parents=True, exist_ok=True)
