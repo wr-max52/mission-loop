@@ -1,5 +1,5 @@
 import httpx, pytest
-import agents, orchestrator, store
+import agents, orchestrator, store, wayback
 from agents import bluesky, f916, stubs
 
 def _no_network(request):
@@ -13,6 +13,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "STOP_FLAG", tmp_path / "data" / "STOP")
     monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(bluesky, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(wayback, "TRANSPORT", httpx.MockTransport(_no_network))
     for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):
         monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
     store.init()

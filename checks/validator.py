@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import httpx, trafilatura
 from rapidfuzz import fuzz
-import settings
+import settings, wayback
 from contracts import Mission, ResearchBrief, POSSIBILITY
 
 MIN_SUPPORT_DOMAINS = 3
@@ -33,8 +33,8 @@ def fetch(url: str) -> tuple[str, str] | None:
     """Return (raw_html, readable_text) or None if the page can't be fetched."""
     if url in _cache:
         return _cache[url]
-    try:
-        r = httpx.get(url, follow_redirects=True, timeout=20, headers=HEADERS)
+    try:                                   # a Wayback snapshot is read as its raw copy, without the toolbar
+        r = httpx.get(wayback.raw(url), follow_redirects=True, timeout=20, headers=HEADERS)
     except httpx.HTTPError:
         return None
     if r.status_code != 200:
@@ -62,7 +62,19 @@ def closest_sentence(quote: str, page_text: str, max_chars: int = 300) -> str:
     return best[:max_chars] if fuzz.ratio(q, _norm(best)) >= 50 else ""
 
 def _domain(url: str) -> str:
-    return (urlparse(url).hostname or "").removeprefix("www.")
+    """The website a source is on. A Wayback snapshot counts as the site it is a copy of."""
+    return (urlparse(wayback.original(url) or url).hostname or "").removeprefix("www.")
+
+def archived_copy_hint(url: str) -> str:
+    """For a page that can't be fetched: where the Wayback Machine's latest copy is, if it has one."""
+    if wayback.original(url):
+        return ""
+    try:
+        found = wayback.snapshot(url)
+    except wayback.Unavailable:
+        return ""
+    return (f". The Wayback Machine has a copy from {wayback.day(found[0])}: cite {found[1]} instead, "
+            "with a quote from that copy") if found else ""
 
 def poc_problems(pocs) -> list[str]:
     """Each contact's email and surname must appear on their contact page."""
@@ -107,7 +119,7 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
             continue
         page = fetch(s.url)
         if page is None:
-            problems.append(f"{s.id}: could not fetch {s.url}")
+            problems.append(f"{s.id}: could not fetch {s.url}{archived_copy_hint(s.url)}")
             continue
         text = _norm(page[1])[:MAX_TEXT_CHARS]
         quote = _norm(s.quote)

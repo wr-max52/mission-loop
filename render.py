@@ -4,6 +4,7 @@ from datetime import datetime
 from email.utils import format_datetime
 from html import escape
 from xml.etree import ElementTree as ET
+import wayback
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
@@ -13,6 +14,11 @@ POSSIBILITY_LABEL = "Possibility, not verified"
 
 def _claims_of(b: ResearchBrief, kind: str) -> list:
     return [c for c in b.claims if c.kind == kind]
+
+def _archived(url: str) -> str:
+    """Readers should know when a source is the Wayback Machine's copy, and from when."""
+    day = wayback.day_of(url)
+    return f' <span class="stance">(archived copy, {day})</span>' if day else ""
 
 def _has_possibility(a: Article) -> bool:
     return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
@@ -144,7 +150,7 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
     out += ["<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}</p>",
             '<h2>Sources</h2><ol class="sources">']
     out += [f'<li id="src-{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
-            f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>'
+            f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>{_archived(s.url)}'
             f'<blockquote>{escape(s.quote)}</blockquote></li>' for s in b.sources]
     out.append("</ol>")
     if b.pocs:
@@ -192,7 +198,7 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
     body.append('<h2>Sources</h2><ol class="sources">')
     for s in sorted(b.sources, key=lambda s: nums[s.id]):
         body.append(f'<li id="src-{nums[s.id]}" value="{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
-                    f'<a href="{escape(s.url)}">{escape(s.title)}</a>'
+                    f'<a href="{escape(s.url)}">{escape(s.title)}</a>{_archived(s.url)}'
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
     body.append(f'<p class="note">{check_note(a, brief_checked, article_checked)}</p></article>')
