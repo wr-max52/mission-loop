@@ -4,7 +4,7 @@ The loop writes; nothing else does. Each mission has one small file of recent st
 calls, tool results), cut short and capped, so reading it never touches the running agent. Like activity.py,
 it is display-only: a failure here never stops a mission.
 """
-import json, re, time
+import json, re, threading, time
 from pathlib import Path
 
 DIR = Path("data/trail")
@@ -12,41 +12,50 @@ KEEP = 40                                  # steps kept per mission
 MAX_TEXT = 400                             # characters kept per step
 FINDER = "_finder"                         # the mission finder works for the whole desk, not one mission
 
-_current: dict = {}                        # set by activity.begin in the loop process: {"slug", "agent"}
+_here = threading.local()                  # each worker thread has its own current agent
+_write_lock = threading.Lock()             # two workers may write (and trim) at once
+
+def _now() -> dict:
+    """{"slug", "agent"} set by activity.begin on this thread, or {} outside the loop."""
+    if not hasattr(_here, "current"):
+        _here.current = {}
+    return _here.current
 
 def _file(slug: str) -> Path:
     name = re.sub(r"[^a-z0-9-]", "", slug.lower())[:60] or FINDER
     return DIR / f"{name}.jsonl"
 
 def start(slug: str, agent: str) -> None:
-    _current.clear()
-    _current.update(slug=slug, agent=agent)
+    _now().clear()
+    _now().update(slug=slug, agent=agent)
     record("start", f"{agent} started")
 
 def stop() -> None:
-    _current.clear()
+    _now().clear()
 
 def record(kind: str, text: str) -> None:
     """Add one step for the agent working now. Outside the loop (no agent started) it does nothing."""
-    if not _current:
+    current = _now()
+    if not current:
         return
     text = " ".join(str(text).split())
-    step = {"at": time.time(), "agent": _current["agent"], "kind": kind,
+    step = {"at": time.time(), "agent": current["agent"], "kind": kind,
             "text": text[:MAX_TEXT] + ("…" if len(text) > MAX_TEXT else "")}
-    path = _file(_current["slug"])
+    path = _file(current["slug"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            f.write(json.dumps(step) + "\n")
-        lines = path.read_text().splitlines()
-        if len(lines) > 2 * KEEP:          # trim now and then, not on every write
-            path.write_text("\n".join(lines[-KEEP:]) + "\n")
+        with _write_lock:
+            with path.open("a") as f:
+                f.write(json.dumps(step) + "\n")
+            lines = path.read_text().splitlines()
+            if len(lines) > 2 * KEEP:      # trim now and then, not on every write
+                path.write_text("\n".join(lines[-KEEP:]) + "\n")
     except OSError:
         pass
 
 def model_reply(msg) -> None:
     """A model message: its thinking, what it said, and the tools it asked for."""
-    if not _current:
+    if not _now():
         return
     thinking = getattr(msg, "thinking", None)
     if thinking:

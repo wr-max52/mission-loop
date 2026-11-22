@@ -1,8 +1,10 @@
-"""Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
+"""Research agent, in two steps that can run in different passes and side by side with other missions:
+gather (the Research Assistant's model finds sources, and contacts) and write_brief (the Principal
+Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio
 from pydantic import BaseModel, ValidationError
 import activity, related, settings, stopping, trail
-from contracts import Mission, ResearchBrief, POC
+from contracts import Evidence, Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
 from agents.toolbox import Toolbox
@@ -162,7 +164,7 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
         async with asyncio.timeout(time_limit) as limit:
             while calls < budget and not stopping.requested():
                 try:
-                    msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
+                    msg = await llm.chat(messages, tools=tb.tools, model=llm.model_for("assistant"))
                 except llm.Cut:
                     break
                 if msg.tool_calls and stopping.requested():
@@ -189,7 +191,7 @@ async def find_contacts(m: Mission, tb) -> list[POC]:
     messages = await tool_loop(CONTACTS.format(topic=m.topic, objective=m.objective or m.topic,
                                                notes=_contact_notes(m)), tb, MAX_CONTACT_CALLS)
     messages.append({"role": "user", "content": LIST_CONTACTS})
-    msg = await llm.chat(messages, format=Contacts.model_json_schema(), model=llm.SEARCH_MODEL)
+    msg = await llm.chat(messages, format=Contacts.model_json_schema(), model=llm.model_for("assistant"))
     try:
         found = Contacts.model_validate_json(msg.content).contacts
     except ValidationError as e:
@@ -201,7 +203,12 @@ async def find_contacts(m: Mission, tb) -> list[POC]:
         raise ResearchFailed(f"only {len(good)} verified contact(s); need {validator.MIN_POCS}\n{notes}")
     return good
 
-async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:
+def _plain(msg) -> dict:
+    """A transcript message as plain JSON, so it can be saved between the two steps."""
+    return msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
+
+async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox) -> Evidence:
+    """The Research Assistant's step: search and read until done, out of budget or time, or stopped."""
     today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
                            past=related.reference_block(m),
@@ -212,10 +219,15 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
         if settings.OUTREACH and not stopping.requested():   # separate run; a failed check stops here, before the main model
             activity.begin(m.slug, "contacts")
             pocs = await find_contacts(m, tb)
-            messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
-                             + Contacts(contacts=pocs).model_dump_json()})
+    return Evidence(messages=[_plain(x) for x in messages], pocs=pocs)
 
+async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
+    """The Principal Investigator's step: write the brief from the gathered transcript."""
     activity.begin(m.slug, "brief")
+    messages = list(evidence.messages)
+    if evidence.pocs is not None:
+        messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
+                         + Contacts(contacts=evidence.pocs).model_dump_json()})
     messages.append({"role": "user", "content": REVISE_FINAL if m.rejected_brief else FINAL})
     schema = ResearchBrief.model_json_schema()
     error = None
@@ -226,8 +238,8 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
             raise stopping.Interrupted(stopping.salvage(cut.text, ResearchBrief))
         try:
             brief = ResearchBrief.model_validate_json(msg.content)
-            if pocs is not None:
-                brief.pocs = pocs              # code-checked contacts; the model can't swap them
+            if evidence.pocs is not None:
+                brief.pocs = evidence.pocs     # code-checked contacts; the model can't swap them
             return brief
         except ValidationError as e:
             if stopping.requested():       # no time for a repair round
@@ -237,6 +249,17 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
             messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})
     raise ResearchFailed(f"model could not produce a valid brief: {error}")
 
+async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:
+    """Both steps back to back."""
+    return await run_write_brief(m, await run_gather(m, now, toolbox_factory))
+
+def gather(m: Mission, now=None) -> Evidence:
+    """Sync entry point the orchestrator calls on the Research Assistant's worker."""
+    return asyncio.run(run_gather(m, now))
+
+def write_brief(m: Mission, evidence: Evidence, now=None) -> ResearchBrief:
+    """Sync entry point the orchestrator calls on the Principal Investigator's worker."""
+    return asyncio.run(run_write_brief(m, evidence))
+
 def research(m: Mission, now=None) -> ResearchBrief:
-    """Sync entry point the orchestrator calls."""
     return asyncio.run(run_research(m, now))

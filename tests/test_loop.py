@@ -55,4 +55,4 @@ def test_every_transition_is_logged():
     store.save_mission(Mission(slug="m3", topic="Anything"))
     run_at(T0)
     moves = [(e["from_state"], e["to_state"]) for e in store.events("m3")]
-    assert moves == [("QUEUED", "RESEARCHING"), ("RESEARCHING", "BRIEF_READY")]
+    assert moves == [("QUEUED", "RESEARCHING"), ("RESEARCHING", "RESEARCHING"), ("RESEARCHING", "BRIEF_READY")]

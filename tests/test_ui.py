@@ -101,7 +101,7 @@ def test_push_through_parked_article(client):
 
 def test_no_push_button_without_a_draft(client, monkeypatch):
     def boom(*args): raise RuntimeError("model down")
-    monkeypatch.setattr(agents, "research", boom)
+    monkeypatch.setattr(agents, "gather", boom)
     store.save_mission(Mission(slug="c", topic="x"))
     run_at(T0)
     html = client.get("/m/c").text
@@ -146,22 +146,23 @@ def test_loop_running_detects_the_lock(client):
     assert not ui.loop_running()
 
 def test_loop_records_the_working_agent_then_clears_it(monkeypatch):
-    seen, research, validate = [], agents.research, agents.validate
+    seen, gather, write_brief, validate = [], agents.gather, agents.write_brief, agents.validate
     def spy(fn):
         def wrapped(*args):
             seen.append(activity.current()["agent"])
             return fn(*args)
         return wrapped
-    monkeypatch.setattr(agents, "research", spy(research))
+    monkeypatch.setattr(agents, "gather", spy(gather))
+    monkeypatch.setattr(agents, "write_brief", spy(write_brief))
     monkeypatch.setattr(agents, "validate", spy(validate))
     store.save_mission(Mission(slug="b", topic="Outages"))
     run_at(T0)
-    assert seen == ["sources", "source_check"]
+    assert seen == ["sources", "brief", "source_check"]
     assert activity.current() is None
 
 def test_crashed_agent_is_not_left_showing(monkeypatch):
     def boom(*args): raise RuntimeError("model down")
-    monkeypatch.setattr(agents, "research", boom)
+    monkeypatch.setattr(agents, "gather", boom)
     store.save_mission(Mission(slug="b", topic="Outages"))
     run_at(T0)
     assert activity.current() is None
@@ -234,14 +235,14 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     store.save_mission(Mission(slug="r", topic="Ready", state=State.BRIEF_READY))
     html = client.get("/").text
     assert '<script src="/assets/researchers.js" defer></script>' in html
-    assert '<a class="card" href="/m/b" data-lab="idle">' in html          # loop off: they nap
+    assert '<a class="card" href="/m/b" data-lab="idle" data-worker="assistant">' in html   # loop off: they nap
     assert 'href="/m/r" data-lab' not in html                             # only in-progress cards get one
     assert "data-lab>" not in html                                        # no agent working, no pill stage
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     activity.begin("b", "sources")
     html = client.get("/").text
-    assert '<a class="card active" href="/m/b" data-lab="busy">' in html
-    assert '<a class="card" href="/m/q" data-lab="waiting">' in html
+    assert '<a class="card active" href="/m/b" data-lab="busy" data-worker="assistant">' in html
+    assert '<a class="card" href="/m/q" data-lab="waiting" data-worker="pi">' in html   # writing: tenured visitors
     assert '<div class="agents" data-lab>' in html
     js = client.get("/assets/researchers.js")
     assert js.status_code == 200 and "class Researcher" in js.text

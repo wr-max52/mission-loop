@@ -1,6 +1,12 @@
 import httpx, pytest
 import agents, orchestrator, store, wayback
-from agents import bluesky, f916, stubs
+from agents import bluesky, f916, llm, stubs
+
+FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
+                   "models": [{"name": "small-test:1b", "size": 1_600_000_000},
+                              {"name": "big-test:30b", "size": 18_000_000_000},
+                              {"name": "other-test:8b", "size": 5_200_000_000}],
+                   "loaded": {"big-test:30b": 21_000_000_000}}
 
 def _no_network(request):
     raise AssertionError(f"a test tried to reach the network: {request.method} {request.url}")
@@ -16,11 +22,16 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(wayback, "TRANSPORT", httpx.MockTransport(_no_network))
     for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):
         monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
+    monkeypatch.setattr(llm, "connection", lambda timeout=2: FAKE_CONNECTION)   # never asks a real Ollama
+    for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL"):
+        monkeypatch.delenv(var, raising=False)           # nor may a real .env point tests at another server
+    monkeypatch.setenv("MISSION_LOOP_SEARCH_MODEL", "small-test:1b")   # this test machine's config: the code has
+    monkeypatch.setenv("MISSION_LOOP_MODEL", "big-test:30b")           # no models of its own
     store.init()
 
 @pytest.fixture
 def stub_agents(monkeypatch):
     """Route every model-backed agent to stubs so loop tests never touch Ollama or the network.
     publish stays real: it only writes files into the test's own folder."""
-    for name in ("find_missions", "research", "validate", "interview", "write", "check_article"):
+    for name in ("find_missions", "gather", "write_brief", "validate", "interview", "write", "check_article"):
         monkeypatch.setattr(agents, name, getattr(stubs, name))

@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, orchestrator, store, trail
+import activity, orchestrator, settings, store, trail
 from contracts import State, words
 
 LOG = Path("data/loop.log")
@@ -43,9 +43,16 @@ def _since(at: str) -> str:
         when = when.replace(tzinfo=timezone.utc)
     return _ago((datetime.now(timezone.utc) - when).total_seconds()) + " ago"
 
-def _working() -> dict | None:
-    """The agent working this moment. The record only counts while the loop holds its lock."""
-    return activity.current() if orchestrator.loop_running() else None
+def _working() -> list[dict]:
+    """The agents working this moment, at most one per worker. The record only counts while the loop holds its lock."""
+    return activity.working() if orchestrator.loop_running() else []
+
+def _on(slug: str, now: list[dict]) -> dict | None:
+    return next((e for e in now if e["slug"] == slug), None)
+
+def _worker(e: dict) -> str:
+    name = settings.WORKERS.get(e.get("worker", ""))
+    return f" ({name}, {settings.worker_model(e['worker'])})" if name else ""
 
 def _label(m) -> str:
     if m.state == State.BRIEF_READY and m.approved:
@@ -73,15 +80,15 @@ def loop_status() -> str:
     lines = ["Loop: " + ("stopping after its current task" if running and orchestrator.STOP_FLAG.exists()
                          else "running" if running else "off (no agent is working)")]
     now = _working()
-    if now:
-        who = activity.AGENTS[now["agent"]]
-        if now["slug"]:
-            m = store.get_mission(now["slug"])
-            lines.append(f"Working now: {who} on {now['slug']} ({m.topic if m else '?'}), "
-                         f"for {_ago(time.time() - now['since'])}")
+    for e in now:                          # the two workers can each be busy at once
+        who = activity.AGENTS[e["agent"]] + _worker(e)
+        if e["slug"]:
+            m = store.get_mission(e["slug"])
+            lines.append(f"Working now: {who} on {e['slug']} ({m.topic if m else '?'}), "
+                         f"for {_ago(time.time() - e['since'])}")
         else:
-            lines.append(f"Working now: {who}, looking for new missions, for {_ago(time.time() - now['since'])}")
-    elif running:
+            lines.append(f"Working now: {who}, looking for new missions, for {_ago(time.time() - e['since'])}")
+    if not now and running:
         lines.append("Working now: nothing; the loop is waiting for its next pass or for a human")
     counts: dict[str, int] = {}
     missions = store.all_missions()
@@ -117,7 +124,8 @@ def list_missions(stage: str = "active") -> str:
     for m in missions[-MAX_LIST:]:
         events = store.events(m.slug)
         changed = _since(events[-1]["at"]) if events else "?"
-        busy = f" [{activity.AGENTS[now['agent']]} working on it now]" if now and now["slug"] == m.slug else ""
+        e = _on(m.slug, now)
+        busy = f" [{activity.AGENTS[e['agent']]} working on it now]" if e else ""
         lines.append(f"- {m.slug} | {_label(m)} | {m.topic[:90]} | changed {changed}{busy}")
     more = f"\n({len(missions) - MAX_LIST} older not shown)" if len(missions) > MAX_LIST else ""
     return "\n".join(lines) + more
@@ -134,9 +142,9 @@ def mission_status(slug: str) -> str:
         lines.append(f"Research attempts: {m.attempts} of {m.max_attempts}")
     if m.state == State.WRITING or m.write_attempts:
         lines.append(f"Writing attempts: {m.write_attempts} of {m.max_attempts}")
-    now = _working()
-    if now and now["slug"] == m.slug:
-        lines.append(f"Working on it now: {activity.AGENTS[now['agent']]}, for {_ago(time.time() - now['since'])}")
+    e = _on(m.slug, _working())
+    if e:
+        lines.append(f"Working on it now: {activity.AGENTS[e['agent']]}{_worker(e)}, for {_ago(time.time() - e['since'])}")
     if m.validator_notes:
         notes = " ".join(m.validator_notes.split())
         lines.append(f"Last problems: {notes[:MAX_NOTES]}{'…' if len(notes) > MAX_NOTES else ''}")

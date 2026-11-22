@@ -18,16 +18,18 @@ def test_salvage_keeps_what_a_cut_off_brief_got_out():
 
 def test_stopped_research_keeps_its_draft_and_the_next_pass_checks_it(monkeypatch):
     store.save_mission(Mission(slug="m", topic="Anything", state=State.RESEARCHING))
-    def stopped(m, now=None):
+    def stopped(m, evidence, now=None):
         stopping.press(orchestrator.STOP_FLAG)
         raise stopping.Interrupted(stubs.research(m, now))
-    monkeypatch.setattr(agents, "research", stopped)
+    monkeypatch.setattr(agents, "write_brief", stopped)
     orchestrator.run_until_idle(lambda: T0)
     m = store.get_mission("m")
-    assert m.state == State.RESEARCHING and m.attempts == 0 and m.interrupted_brief is not None
+    assert m.state == State.RESEARCHING and m.attempts == 1 and m.interrupted_brief is not None
+    assert not m.gathered and store.load_artifact("m", "evidence") is None   # the draft replaces the sources
 
     orchestrator.STOP_FLAG.unlink()
-    monkeypatch.setattr(agents, "research", lambda m, now=None: pytest.fail("research should not rerun"))
+    monkeypatch.setattr(agents, "gather", lambda m, now=None: pytest.fail("search should not rerun"))
+    monkeypatch.setattr(agents, "write_brief", lambda *a: pytest.fail("the brief should not be rewritten"))
     orchestrator.run_until_idle(lambda: T0)
     m = store.get_mission("m")
     assert m.state == State.BRIEF_READY and m.attempts == 1 and m.interrupted_brief is None

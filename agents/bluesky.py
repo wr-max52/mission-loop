@@ -3,7 +3,8 @@
 Credentials stay on this machine: the UI's Settings page saves them to data/bluesky.json (mode 600), or .env sets
 BLUESKY_HANDLE (e.g. missionloop.bsky.social) and BLUESKY_APP_PASSWORD; the saved file wins. Use an app password
 from Bluesky's Settings > Privacy and security > App passwords, never the account password. Without a handle and
-password, the channel is off. BLUESKY_SERVICE overrides the server (default bsky.social).
+password, the channel is off. The server is config too: a login saved on the Settings page keeps the server it
+was checked against; a login in .env uses BLUESKY_SERVICE (default https://bsky.social, settings.bluesky_service).
 
 A post is at most 300 characters, so it carries only the title and the dek; the full article, with its sources and
 its "Possibility, not verified" labels, is behind the link. The link goes to the article on the published site when
@@ -25,7 +26,7 @@ TEXT_MAX = 300                             # Bluesky counts graphemes; code poin
 POST_GAP = timedelta(minutes=10)           # with a 15-minute loop, one post a pass
 UNCHECKED = "[Failed automated checks]"
 UNCHECKED_MARK = "[Failed automated checks:"  # what render.article_text puts near the top of an unchecked article
-CRED_FILE = Path("data/bluesky.json")      # {"handle", "app_password"}: saved from the Settings page
+CRED_FILE = Path("data/bluesky.json")      # {"handle", "app_password", "service"}: saved from the Settings page
 STATE_FILE = Path("data/bluesky_state.json")  # {"next_at", "note"}: pacing, and why the last try failed
 TRANSPORT = None                           # tests put an httpx.MockTransport here so nothing leaves the machine
 
@@ -38,19 +39,24 @@ def _clean(handle: str, password: str) -> tuple[str, str] | None:
     handle, password = handle.strip().lstrip("@"), password.strip()
     return (handle, password) if handle and password else None
 
-def saved_credentials() -> tuple[str, str] | None:
+def _saved() -> dict:
     try:
         data = json.loads(CRED_FILE.read_text())
     except (OSError, ValueError):
-        return None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def saved_credentials() -> tuple[str, str] | None:
+    data = _saved()
     return _clean(str(data.get("handle", "")), str(data.get("app_password", "")))
 
 def credentials() -> tuple[str, str] | None:
     return saved_credentials() or _clean(os.environ.get("BLUESKY_HANDLE", ""),
                                          os.environ.get("BLUESKY_APP_PASSWORD", ""))
 
-def save_credentials(handle: str, password: str) -> None:
-    """Write data/bluesky.json readable only by this user. Check them with check_login first."""
+def save_credentials(handle: str, password: str, service: str = "") -> None:
+    """Write data/bluesky.json readable only by this user, with the server they were checked against.
+    Check them with check_login first."""
     found = _clean(handle, password)
     if not found:
         raise ValueError("a handle and an app password are both needed")
@@ -58,7 +64,8 @@ def save_credentials(handle: str, password: str) -> None:
     CRED_FILE.unlink(missing_ok=True)
     fd = os.open(CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(json.dumps({"handle": found[0], "app_password": found[1]}, indent=2) + "\n")
+        f.write(json.dumps({"handle": found[0], "app_password": found[1],
+                            "service": service.rstrip("/") or _service()}, indent=2) + "\n")
 
 def forget_credentials() -> None:
     CRED_FILE.unlink(missing_ok=True)
@@ -71,7 +78,9 @@ def handle() -> str:
     return found[0] if found else ""
 
 def _service() -> str:
-    return os.environ.get("BLUESKY_SERVICE", "").strip().rstrip("/") or "https://bsky.social"
+    """A saved login's own server, else the configured one."""
+    data = _saved()
+    return (str(data.get("service") or "").rstrip("/") if saved_credentials() else "") or settings.bluesky_service()
 
 def load_state() -> dict:
     try:
@@ -115,8 +124,8 @@ def article_link(entry: dict) -> str:
     f916 = m.channels.get("1f916") if m else None   # 1F916 posts first in a pass, so a fresh one counts
     return f916.where if f916 and f916.where.startswith("https://") else ""
 
-def _client() -> httpx.Client:
-    return httpx.Client(base_url=_service(), timeout=30, transport=TRANSPORT, headers={"User-Agent": "mission-loop"})
+def _client(service: str = "") -> httpx.Client:
+    return httpx.Client(base_url=service or _service(), timeout=30, transport=TRANSPORT, headers={"User-Agent": "mission-loop"})
 
 def _error(r: httpx.Response) -> str:
     try:
@@ -176,8 +185,8 @@ def _send(entry: dict, now: datetime) -> str:
                       "the post")
     return web_url(made["uri"], session.get("handle") or session["did"])
 
-def check_login(handle: str = "", password: str = "") -> str:
-    """Log in without posting (with the given handle and password, else the configured ones); returns the
-    handle Bluesky knows us by."""
-    with _client() as c:
+def check_login(handle: str = "", password: str = "", service: str = "") -> str:
+    """Log in without posting (with the given handle, password and server, else the configured ones); returns
+    the handle Bluesky knows us by."""
+    with _client(service.rstrip("/")) as c:
         return login(c, _clean(handle, password)).get("handle", "")

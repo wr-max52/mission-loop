@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from ollama import Message
 from starlette.testclient import TestClient
-import activity, orchestrator, status_tools, store, trail, ui
+import activity, orchestrator, settings, status_tools, store, trail, ui
 from agents import assistant, llm, stubs
 from agents.toolbox import Toolbox
 from contracts import Mission, State
@@ -143,7 +143,7 @@ async def test_assistant_looks_then_answers(monkeypatch):
     answer = await assistant.run_chat("what's going on?", toolbox_factory=lambda n: boxes.append(FakeToolbox(n)) or boxes[-1])
     assert answer == "The loop is running."
     assert boxes[0].names == ["loop"] and boxes[0].calls == [("loop_status", {})]
-    assert seen[0][2] == assistant.MODEL == llm.SEARCH_MODEL            # the copy the loop already loaded
+    assert seen[0][2] == assistant.default_model() == llm.model_for("assistant")   # the copy the loop already loaded
     tool_msg = seen[1][0][-1]
     assert tool_msg["role"] == "tool" and len(tool_msg["content"]) == assistant.MAX_TOOL_CHARS
     assert len(seen[0][0][0]["content"]) < 700                      # the system prompt stays tiny
@@ -174,23 +174,35 @@ async def test_web_search_joins_only_with_a_key(monkeypatch):
 
 async def test_assistant_uses_the_chosen_model(monkeypatch):
     seen = scripted(monkeypatch, say("ok"))
-    await assistant.run_chat("hi?", model="qwen3.8:27b", toolbox_factory=FakeToolbox)
-    assert seen[0][2] == "qwen3.8:27b"
+    await assistant.run_chat("hi?", model="big-test:30b", toolbox_factory=FakeToolbox)
+    assert seen[0][2] == "big-test:30b"
 
 def test_model_list_and_pick(monkeypatch):
     import ollama
     from types import SimpleNamespace as NS
-    installed = ["qwen3.8:27b", "nomic-embed-text:latest", assistant.MODEL, "llama3:8b"]
-    monkeypatch.setattr(ollama, "list", lambda: NS(models=[NS(model=n) for n in installed]))
-    caps = {"qwen3.8:27b": ["completion", "tools"], "llama3:8b": ["tools"], "nomic-embed-text:latest": ["embedding"]}
-    monkeypatch.setattr(ollama, "show", lambda n: NS(capabilities=caps.get(n)))
-    assert assistant.models() == [assistant.MODEL, "llama3:8b", "qwen3.8:27b"]   # default first, tool users only
+    default = assistant.default_model()
+    installed = ["big-test:30b", "nomic-embed-text:latest", default, "llama3:8b"]
+    caps = {"big-test:30b": ["completion", "tools"], "llama3:8b": ["tools"], "nomic-embed-text:latest": ["embedding"]}
+    hosts = []
+    class Fake:                                                     # stands in for ollama.Client
+        def __init__(self, host=None, timeout=None): hosts.append(host)
+        def list(self): return NS(models=[NS(model=n) for n in installed])
+        def show(self, n): return NS(capabilities=caps.get(n))
+    monkeypatch.setattr(ollama, "Client", Fake)
+    assert assistant.models() == [default, "big-test:30b", "llama3:8b"]   # default first, tool users only
+    assert set(hosts) == {settings.ollama_host()}                  # the configured LLM connection
     assert assistant.pick("llama3:8b") == "llama3:8b"
-    assert assistant.pick("not-installed:1b") == assistant.MODEL
-    assert assistant.pick(None) == assistant.MODEL
-    def down(): raise ConnectionError("no ollama")
-    monkeypatch.setattr(ollama, "list", down)
-    assert assistant.pick("llama3:8b") == assistant.MODEL
+    assert assistant.pick("not-installed:1b") == default
+    assert assistant.pick(None) == default
+    class Down(Fake):
+        def list(self): raise ConnectionError("no ollama")
+    monkeypatch.setattr(ollama, "Client", Down)
+    assert assistant.pick("llama3:8b") == default
+
+def test_chat_model_is_config():
+    assert assistant.default_model() == "small-test:1b"            # the Research Assistant's, from config
+    settings.save(chat_model="other-test:8b")
+    assert assistant.default_model() == "other-test:8b"
 
 # ---------- the UI: a bubble on every page, a panel over the left third ----------
 
@@ -221,12 +233,13 @@ def test_ask_passes_the_model_on(monkeypatch):
 
 def test_model_picker_lists_models_and_reports_ollama_down(monkeypatch):
     client = TestClient(ui.app)
-    monkeypatch.setattr(ui.agents, "chat_models", lambda: [assistant.MODEL, "llama3:8b"])
-    assert client.get("/chat/models").json() == {"models": [assistant.MODEL, "llama3:8b"], "default": assistant.MODEL}
+    default = assistant.default_model()
+    monkeypatch.setattr(ui.agents, "chat_models", lambda: [default, "llama3:8b"])
+    assert client.get("/chat/models").json() == {"models": [default, "llama3:8b"], "default": default}
     def down(): raise ConnectionError("no ollama")
     monkeypatch.setattr(ui.agents, "chat_models", down)
     data = client.get("/chat/models").json()
-    assert data["models"] == [assistant.MODEL] and "Ollama isn't reachable" in data["error"]
+    assert data["models"] == [default] and "Ollama isn't reachable" in data["error"]
 
 def test_chat_ask_refuses_other_sites_and_reports_failures(monkeypatch):
     client = TestClient(ui.app)
@@ -242,6 +255,8 @@ async def test_a_stale_stop_flag_never_cuts_the_assistant_off(monkeypatch):
     old = time.time() - 10 * stopping.GRACE
     os.utime(stopping.FLAG, (old, old))
     class FakeClient:
+        def __init__(self, host=None):     # llm passes the configured Ollama address
+            self.host = host
         async def chat(self, **kw):
             return type("R", (), {"message": Message(role="assistant", content="still here")})()
     monkeypatch.setattr(llm.ollama, "AsyncClient", FakeClient)
