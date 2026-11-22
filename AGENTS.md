@@ -292,7 +292,8 @@ step's kind of work, runs after its mission when the mission moves on (sources, 
 ends, moves to another mission or passes to the other worker it says a closing line about where the work went
 (your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
-repeats soon. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
+repeats soon. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
+most bits pass without a word. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
