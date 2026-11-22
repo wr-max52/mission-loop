@@ -53,7 +53,9 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 7. **Keep it small and readable.** About 1 CSS pixel per sprite pixel: two to four colors per added part, no
    single stray pixels (every colored pixel gets an outline in the deep shade of its own color, the way
    handheld-era sprites are edged, so a lone pixel becomes a 3x3 blob; draw thin lines with `k`, which is never
-   outlined again and takes the deep shade of the color beside it).
+   outlined again and takes the deep shade of the color beside it). Use mid tones for added parts, never
+   near-black: a near-black part has no deeper shade to be edged in, so a black horn or hat just reads as a blob.
+   Give a shape two tones (a light and a shade) to read.
 8. **Check, then fix.** `validateSprite(spec)` returns `{ ok, errors }`; each error says what to change.
 
 ## The spec
@@ -169,6 +171,23 @@ window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec }, off: ["pip"] }; 
   `setSpriteEnabled(key, on)`; `renderSprite(canvas, keyOrSpec, { scale, action, t, seed, face })` draws one still,
   feet at the bottom middle, for previews and pickers (default 44 x 60 sprite pixels).
 - Nobody is on a page twice at once, custom sprites included.
+
+## The avatar studio
+
+The UI's avatar studio (`/avatars`, from Settings or the Customize link on a crew) is this rulebook with buttons:
+
+- **Pieces.** Tabs of parts (body, hair, face, clothes, hat, prop, vibe), each option drawn as your avatar wearing
+  it, with color swatches below. A big live preview plays the avatar through a few bits. Undo, redo, surprise me.
+- **Ask a model.** `agents/avatar.py` sends the spec, how it looks now, the request (and a picture, to a local model
+  Ollama says can see; otherwise a yellow note says it may go by words alone) to the chosen model. Its answer is held
+  to a JSON schema built from the parts that exist (the catalog the page sends from `PARTS`), so it can only pick
+  real pieces; it answers with just the fields it changes, with thinking off, so a small local model replies in a
+  second or two. The page checks the result with `validateSprite`, sends the problems back for up to two repair
+  rounds, and drops any field that still breaks a rule. Nudity is refused before any model is asked.
+- **Saving.** Avatars go to `data/sprites.json` (`avatars.py`; this machine only, never committed) under
+  `custom-sprite-N` or a name you pick, and every UI page hands them to the sprites as `window.RESEARCHER_SPRITES`.
+- **Who visits.** Tiny renders of every built-in and custom researcher, each with an on/off switch; built-ins can be
+  remixed into a new avatar, customs edited or deleted.
 
 ## For a model drawing a sprite
 

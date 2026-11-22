@@ -3356,7 +3356,8 @@ function setSpriteEnabled(key, on) { if (on) OFF.delete(key); else OFF.add(key);
 
 // Draws one still of a sprite (a key, or a spec to preview without registering it) into a canvas, feet at the
 // bottom middle. opts: scale (whole number, default 1), action (default "rest"), t (seconds into it), seed, face
-// (1 right, -1 left), width/height (sprite pixels, default 44 x 60). Returns { ok, errors }.
+// (1 right, -1 left), width/height (sprite pixels, default 44 x 60), effects (also run and draw the bit's sparkles,
+// steam and icons, for a live preview). Returns { ok, errors }.
 function renderSprite(canvas, sprite, opts = {}) {
   let kind = sprite, temp = false;
   if (typeof sprite !== "string") {
@@ -3376,10 +3377,16 @@ function renderSprite(canvas, sprite, opts = {}) {
     r.say = r.quip = r.line = () => {};
     r.begin(action);
     if (action === "rest") { r.act.tx = null; r.act.turn = -1; }
-    for (let t = 0; t < (opts.t ?? 0.5) && r.act.name === action; t += 1 / 60) { r.update(1 / 60); r.x = W / 2; }
+    if (!opts.effects) r.icon = () => {};
+    for (let t = 0; t < (opts.t ?? 0.5) && r.act.name === action; t += 1 / 60) {
+      r.update(1 / 60); r.x = W / 2;
+      if (opts.effects) st.tick(1 / 60);   // the researcher times its own icon; the stage moves the sparkles
+    }
     if (!r.pose) r.update(0);
     const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
-    st.drawResearcher(tmp.getContext("2d"), r);
+    const tctx = tmp.getContext("2d");
+    st.drawResearcher(tctx, r);
+    if (opts.effects) { for (const p of st.fx) st.drawFx(tctx, p); if (r.badge) st.drawOverlay(tctx, r); }
     canvas.width = W * k; canvas.height = H * k;
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
@@ -3401,6 +3408,6 @@ function boot() {
   rescan();
 }
 window.Researchers = { stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS,
-  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
+  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
