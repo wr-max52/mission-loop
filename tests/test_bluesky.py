@@ -1,4 +1,4 @@
-"""The Bluesky channel, against a fake server: login, threads, pacing, newest first, links, labels and failures."""
+"""The Bluesky channel, against a fake server: login, the post, pacing, newest first, links, labels and failures."""
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -18,7 +18,7 @@ class FakeBluesky:
 
     @property
     def roots(self) -> list[dict]:
-        """The first post of each thread: one per article."""
+        """Top-level posts: one per article (the channel never replies)."""
         return [p for p in self.posts if "reply" not in p]
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -79,16 +79,13 @@ def test_off_without_credentials(monkeypatch):
     monkeypatch.setenv("BLUESKY_APP_PASSWORD", "p")
     assert bluesky.enabled() and bluesky in agents.CHANNELS
 
-def test_article_is_announced_in_the_same_pass_as_a_three_post_thread(sky):
+def test_article_is_announced_in_the_same_pass_as_one_post(sky):
     published("a", T0)
     assert on_bluesky("a") == "https://bsky.app/profile/loopdesk.bsky.social/post/rk1"
-    e, (first, second, third) = entry("a"), sky.posts
-    assert first["text"] == e["title"]                                       # no site URL, no 1F916: no links
-    assert [second["text"], third["text"]] == ["Stub claim.", "Stub article about a."]
-    assert first["createdAt"] == "2026-11-22T09:00:00Z" and "embed" not in first and "facets" not in first
-    root = {"uri": "at://did:plc:desk/app.bsky.feed.post/rk1", "cid": "c"}
-    assert second["reply"] == {"root": root, "parent": root}
-    assert third["reply"] == {"root": root, "parent": {"uri": "at://did:plc:desk/app.bsky.feed.post/rk2", "cid": "c"}}
+    (only,) = sky.posts                                                      # one post, never a thread of replies
+    assert only["text"] == entry("a")["title"]                               # no site URL, no 1F916: no links
+    assert only["createdAt"] == "2026-11-22T09:00:00Z" and "embed" not in only and "facets" not in only
+    assert "reply" not in only
     assert any("posted to Bluesky" in (ev["note"] or "") for ev in store.events("a"))
 
 def test_link_card_points_at_the_site_when_its_url_is_set(sky, monkeypatch):
@@ -96,21 +93,20 @@ def test_link_card_points_at_the_site_when_its_url_is_set(sky, monkeypatch):
     published("a", T0)
     card = sky.posts[0]["embed"]
     assert card["$type"] == "app.bsky.embed.external" and card["external"]["uri"] == "https://example.com/news/a/"
-    assert all("embed" not in p for p in sky.posts[1:])                       # one card, on the first post
+    assert card["external"]["title"] == entry("a")["title"] and card["external"]["description"] == entry("a")["dek"]
 
-def test_every_post_links_to_the_site_and_the_1f916_post(sky, monkeypatch):
+def test_the_post_links_to_the_site_and_the_1f916_post(sky, monkeypatch):
     monkeypatch.setattr(settings, "SITE_URL", "https://wr.github.io/loop")
     monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(FakeSite()))
     Path("data").mkdir(exist_ok=True)
     f916.KEY_FILE.write_text(json.dumps({"handle": "loop-desk", "secret": "1f916_sk_test"}))
     published("a", T0)
-    assert len(sky.posts) == 3
-    for p in sky.posts:
-        assert p["text"].endswith("\n\nFull article: site · 1F916") and len(p["text"]) <= 300
-        raw = p["text"].encode()
-        shown = {raw[f["index"]["byteStart"]:f["index"]["byteEnd"]].decode(): f["features"][0]["uri"]
-                 for f in p["facets"]}
-        assert shown == {"site": "https://wr.github.io/loop/a/", "1F916": "https://1f916.ai/api/post/101"}
+    (p,) = sky.posts
+    assert p["text"] == entry("a")["title"] + "\n\nFull article: site · 1F916"
+    raw = p["text"].encode()
+    shown = {raw[f["index"]["byteStart"]:f["index"]["byteEnd"]].decode(): f["features"][0]["uri"]
+             for f in p["facets"]}
+    assert shown == {"site": "https://wr.github.io/loop/a/", "1F916": "https://1f916.ai/api/post/101"}
 
 def test_without_a_site_url_the_link_is_the_fresh_1f916_post(sky, monkeypatch):
     monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(FakeSite()))
@@ -134,47 +130,20 @@ def test_one_post_per_gap_newest_first(sky):
     assert order == ["newest", "fresh", "middle", "oldest"]
     assert orchestrator.queue(bluesky) == [] and len(sky.roots) == 4
 
-def port_brief(slug="port"):
-    src = Source(id="s1", url="https://a.example.com", title="A", quote="q", stance="supports")
-    store.save_artifact(slug, "brief", ResearchBrief(thesis="The port authority answers to nobody.", counterpoint="c",
-        sources=[src], claims=[
-            Claim(text="The authority met 12 times in 2025.", source_ids=["s1"]),
-            Claim(text="However, its minutes quote the chair saying \"we work for the shippers\" and list $4 million "
-                       "in fees waived for 3 carriers [s1].", source_ids=["s1"]),
-            Claim(kind="possibility", source_ids=["s1"], text="It is possible that the authority answers to the "
-                  "shippers, based on the waived fees and the chair's words (portwatch.org, 2025).")]))
-
-def test_the_thread_is_the_hook_the_boldest_possibility_and_the_hardest_fact():
-    port_brief()
-    posts = bluesky.thread({"slug": "port", "title": "Who runs the port?", "dek": "d", "text": "d"})
-    assert [p["text"] for p in posts] == [
-        "Who runs the port?",
-        "[Possibility, not verified] It is possible that the authority answers to the shippers.",
-        'Its minutes quote the chair saying "we work for the shippers" and list $4 million in fees waived for 3 carriers.']
-
-def test_labels_survive_the_cut():
-    port_brief()
-    long = {"slug": "port", "title": "It is possible that the port is run by the shippers. " * 10, "dek": "d",
-            "text": "dek\n\n[Failed automated checks: see the note at the end.]\n\n..."}
-    posts = bluesky.thread(long)
-    assert all(len(p["text"]) <= 300 and p["text"].startswith("[Failed automated checks] ") for p in posts)
-    assert posts[0]["text"].startswith("[Failed automated checks] [Possibility, not verified] It is possible that")
-    assert posts[0]["text"].endswith("shippers.")                                      # cut on a whole sentence
-    bare = bluesky.thread({"slug": "none", "title": "T", "dek": "A plain dek", "text": "A plain dek"})
-    assert [p["text"] for p in bare] == ["T", "A plain dek."]                          # no brief: title and dek
+def test_the_post_is_the_title_alone_with_no_labels(sky, monkeypatch):
+    monkeypatch.setattr(settings, "SITE_URL", "https://example.com")
+    pushed = {"slug": "port", "title": "It is possible that the port is run by the shippers.", "dek": "d",
+              "text": "dek\n\n[Failed automated checks: see the note at the end.]\n\n..."}
+    assert bluesky.announcement(pushed)["text"] == pushed["title"] + "\n\nFull article: site"
+    long = pushed | {"title": "It is possible that the port is run by the shippers. " * 10}
+    text = bluesky.announcement(long)["text"]
+    assert len(text) <= 300 and text.endswith("shippers.\n\nFull article: site")   # cut on a whole sentence
+    assert "[" not in text
 
 def test_cuts_never_end_inside_a_citation_or_a_bracket():
     s = "Indoor cats live longer, but the claim is overstated: the largest study (Kent et al. 2022, n=3,108) found " + "x " * 200
     cut = bluesky._cut(s, 150)
     assert "et al.…" not in cut and cut.count("(") == cut.count(")") and len(cut) <= 150
-
-def test_a_failed_reply_is_noted_and_never_reposts_the_thread(sky):
-    sky.refuse.add("Stub article about a")
-    published("a", T0)
-    assert on_bluesky("a") and len(sky.posts) == 2                           # the title and the claim went out
-    assert "post 3 of 3" in bluesky.load_state()["note"]
-    run_at(T0 + timedelta(minutes=45))
-    assert len([p for p in sky.roots if p["text"].startswith(entry("a")["title"])]) == 1
 
 def test_refused_article_goes_to_the_back_and_the_next_one_posts(sky):
     backlog("older", "newer")
