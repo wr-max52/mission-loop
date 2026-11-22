@@ -155,11 +155,12 @@ as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
 the agent working at that moment, read from `data/activity.json` (written by `activity.py`). Small pixel
-researchers (`assets/researchers.js`, decorative only) walk in from the side onto in-progress cards and the
-working agents' pills, never more than two on the page at once. Each character is in one worker's crew
-(`worker` in `ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and a
-card only gets visitors from the crew of the worker doing its next step (`data-worker`). On the Settings page
-each worker card has its whole crew standing about. each stage has its own random first wait, a
+researchers (`assets/researchers.js`, decorative only) walk in from the side onto the cards of missions a model
+is working on right now and the working agents' pills (none while no model runs), never more than two on the
+page at once. Each character is in one worker's crew (`worker` in `ROSTER`: young ones the Research Assistant's,
+tenured ones the Principal Investigator's), and 80% of a card's visitors (`FAVOR`) come from the crew of the
+worker running it (`data-worker`), the rest from the other crew. On the Settings page each worker card has its
+whole crew standing about. Each stage has its own random first wait, a
 visitor stays 15-30 s, walks off, and the stage waits 10-20 s; the longest-waiting stage goes next. Visitors
 come from a shuffled cast and their lines from a shuffled deck of ~200 academic quips, so nothing repeats soon.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.

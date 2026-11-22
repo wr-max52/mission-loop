@@ -235,14 +235,18 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     store.save_mission(Mission(slug="r", topic="Ready", state=State.BRIEF_READY))
     html = client.get("/").text
     assert '<script src="/assets/researchers.js" defer></script>' in html
-    assert '<a class="card" href="/m/b" data-lab="idle" data-worker="assistant">' in html   # loop off: they nap
-    assert 'href="/m/r" data-lab' not in html                             # only in-progress cards get one
+    assert 'data-lab' not in html.split("</style>")[1]                    # loop off: no model running, no researchers
     assert "data-lab>" not in html                                        # no agent working, no pill stage
     monkeypatch.setattr(ui, "loop_running", lambda: True)
+    monkeypatch.setattr(activity._here, "worker", "assistant", raising=False)   # undone after the test
     activity.begin("b", "sources")
     html = client.get("/").text
     assert '<a class="card active" href="/m/b" data-lab="busy" data-worker="assistant">' in html
-    assert '<a class="card" href="/m/q" data-lab="waiting" data-worker="pi">' in html   # writing: tenured visitors
+    assert '<a class="card" href="/m/q">' in html                         # in progress, no model on it: no visitors
+    assert 'href="/m/r" data-lab' not in html
+    activity._here.worker = "pi"
+    activity.begin("q", "writer")                                         # the big model writes: mostly tenured visitors
+    assert '<a class="card active" href="/m/q" data-lab="busy" data-worker="pi">' in client.get("/").text
     assert '<div class="agents" data-lab>' in html
     js = client.get("/assets/researchers.js")
     assert js.status_code == 200 and "class Researcher" in js.text
