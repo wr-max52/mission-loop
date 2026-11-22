@@ -1069,7 +1069,8 @@ Its secret key is saved to <code>data/1f916.json</code> on this machine only; th
                    f'{github_row()}</details>')
     if not agents.bluesky_enabled():
         body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Announces each article with a
-short post (title and dek) linking to the full text, at most one every 10 minutes. Use an app password from Bluesky's
+3-post thread (its title, boldest possibility and hardest fact), every post linking to the full text, at most
+one article every 10 minutes. Use an app password from Bluesky's
 Settings &gt; Privacy and security &gt; App passwords, never your account password. It is checked with Bluesky, then
 saved to <code>data/bluesky.json</code> on this machine only.</p>
 <form method="post" action="/settings/bluesky">

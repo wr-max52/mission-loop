@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 357 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 361 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -156,15 +156,22 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     Bluesky holds an entry until GitHub has it. The sign-in uses mission-loop's OAuth app
     (`settings.GITHUB_CLIENT_ID`; a client ID is public, there is no secret); a copy without one asks for one on
     the Settings page (`MISSION_LOOP_GITHUB_CLIENT_ID` in `.env` also works).
-  - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky with a short post (title and dek, at most
-    300 characters; a possibility in the dek keeps its "Possibility, not verified" label, and a pushed-through
-    article starts with "[Failed automated checks]"). Its link card goes to the article on the site when
-    a site address is set (Settings page or `MISSION_LOOP_SITE_URL`), else to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one
-    counts), else there is no link. On only with a handle and app password (never the account password): the
+  - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky as a thread of 3 posts (`THREAD`), each at
+    most 300 characters, taken word for word from what the loop already has (no model): the title, the approved
+    brief's first possibility (its "based on ..." left to the article) and its most concrete fact (most numbers and
+    quoted words); missing ones fall back to the thesis, then the dek. Cuts end on a sentence, else a clause. A
+    possibility keeps "It is possible that" and gets the "Possibility, not verified" label, and every post of a
+    pushed-through article starts with "[Failed automated checks]". Every post ends with "Full article: site · 1F916",
+    whose words link (facets) to the article on the site when a site address is set (Settings page or
+    `MISSION_LOOP_SITE_URL`, else the linked GitHub Pages address) and to its 1F916 post (1F916 comes
+    first in `CHANNELS`, so a fresh one counts), whichever exist. The first post also gets a link card (the site, else
+    1F916). Once the first post is up the article counts as posted: a failed reply is noted in the state file, never
+    retried, so a thread is never posted twice. With GitHub Pages on, an entry waits until it is on the site.
+    On only with a handle and app password (never the account password): the
     Settings page checks them with Bluesky and saves them to `data/bluesky.json` (mode 600, wins over `.env`'s
     `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
     the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
-    post it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
+    article it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
     holds that wait and the last failure, which the UI and `status` show.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is

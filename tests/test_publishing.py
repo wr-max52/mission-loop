@@ -83,17 +83,17 @@ def test_nav_goes_to_the_published_page_which_leads_back(client, sky):
 def test_publishing_again_skips_bluesky_gap_and_goes_ahead_of_the_queue(client, sky):
     backlog("old", "newer")
     run_at(T0)                                         # newest first; the gap holds the other back
-    assert on_bluesky("newer") and not on_bluesky("old") and len(sky.posts) == 1
+    assert on_bluesky("newer") and not on_bluesky("old") and len(sky.roots) == 1
     r = client.post("/m/old/republish", data={"to": ["bluesky"], "back": "/published"}, follow_redirects=False)
     assert r.headers["location"] == "/published?done=republish_off"
     m = store.get_mission("old")
     assert set(m.publish_requests) == {"bluesky"}
     assert ui.label(m) == "Publishing again" and 'href="/m/old"' in client.get("/").text   # back on the Missions page
     run_at(T0 + timedelta(minutes=1))                  # inside the 10-minute gap, but a human asked
-    assert on_bluesky("old") and len(sky.posts) == 2 and not store.get_mission("old").publish_requests
+    assert on_bluesky("old") and len(sky.roots) == 2 and not store.get_mission("old").publish_requests
     client.post("/m/newer/republish", data={"to": "bluesky"})
     run_at(T0 + timedelta(minutes=2))                  # posted already, but asked again: it goes again
-    assert len(sky.posts) == 3 and not store.get_mission("newer").publish_requests
+    assert len(sky.roots) == 3 and not store.get_mission("newer").publish_requests
 
 def test_a_failed_request_waits_for_the_next_publishing_pass(client, sky):
     backlog("a")
@@ -104,7 +104,7 @@ def test_a_failed_request_waits_for_the_next_publishing_pass(client, sky):
     assert "bluesky" in store.get_mission("a").publish_requests   # kept, not lost
     sky.limited = False
     run_at(T0 + timedelta(minutes=60))
-    assert not store.get_mission("a").publish_requests and len(sky.posts) == 2
+    assert not store.get_mission("a").publish_requests and len(sky.roots) == 2
 
 def test_a_new_request_gets_a_pass_while_the_loop_is_busy(monkeypatch, sky):
     """A request made mid-task is done on the next sweep, not after the model work."""
@@ -201,9 +201,9 @@ def test_an_uncapped_channel_gets_the_whole_backlog_in_one_pass(tmp_path, sky):
     settings.add_custom_channel("Site repo", "folder", str(tmp_path / "repo"), "json")
     run_at(T0)
     assert len(list((tmp_path / "repo").glob("*.json"))) == 7
-    assert len(sky.posts) == 1                         # Bluesky: one, then its 10-minute gap
+    assert len(sky.roots) == 1                         # Bluesky: one, then its 10-minute gap
     run_at(T0 + timedelta(minutes=11))
-    assert len(sky.posts) == 2
+    assert len(sky.roots) == 2
 
 def test_1f916_takes_the_backlog_one_a_day(monkeypatch):
     from test_channels import FakeSite
