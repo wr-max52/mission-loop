@@ -1,3 +1,4 @@
+import fcntl
 from datetime import timedelta
 from pathlib import Path
 import activity
@@ -12,6 +13,17 @@ from render import brief_markdown, article_markdown, article_html
 STOP_FLAG = Path("data/STOP")
 WAKE_FLAG = Path("data/WAKE")             # the UI touches this so a sleeping loop runs a pass now
 LOCK_FILE = Path("data/loop.lock")         # held by whichever run/loop is working
+
+def loop_running() -> bool:
+    """True while a run/loop holds the lock. We only test the lock, never keep it."""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_FILE.open("a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
 
 def _brief(m): return ResearchBrief(**store.load_artifact(m.slug, "brief"))
 def _outreach(m): return [OutreachRecord(**r) for r in store.load_artifact(m.slug, "outreach") or []]

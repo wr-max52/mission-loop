@@ -6,6 +6,7 @@ A killed loop leaves the file behind, so only trust it while the loop holds its 
 """
 import json, os, time
 from pathlib import Path
+import trail
 
 FILE = Path("data/activity.json")
 
@@ -23,6 +24,7 @@ AGENTS = {                                 # in pipeline order
 }
 
 def begin(slug: str, agent: str) -> None:
+    trail.start(slug, agent)               # the chat assistant reads what each agent did from here
     tmp = FILE.with_suffix(".tmp")
     try:
         FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +34,7 @@ def begin(slug: str, agent: str) -> None:
         pass
 
 def clear() -> None:
+    trail.stop()
     try:
         FILE.unlink(missing_ok=True)
     except OSError:
