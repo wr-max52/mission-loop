@@ -356,7 +356,7 @@ def channel_names(m: Mission) -> str:
     """Where a published mission went, e.g. "Local site, 1F916" or "Local site · 1F916 queued #2"."""
     names = ", ".join(orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m))
     if agents.f916_enabled() and "1f916" not in m.channels:
-        slugs = [q.slug for q in orchestrator.f916_queue()]
+        slugs = [e["slug"] for e in orchestrator.queue(f916)]
         names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
     return names
 
@@ -365,7 +365,7 @@ def f916_status() -> str:
     if not agents.f916_enabled():
         return ("1F916 is off: no key in data/1f916.json. "
                 "Join once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
-    queued, until, state = len(orchestrator.f916_queue()), f916.spent_until(), f916.load_state()
+    queued, until, state = len(orchestrator.queue(f916)), f916.spent_until(), f916.load_state()
     if until and until > clock.now():
         when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
     else:
@@ -528,7 +528,7 @@ def channels_html(m: Mission) -> str:
                 else f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>')
         rows.append(f"<li>{name}: {link} · {post.at:%b %-d, %Y %H:%M} UTC</li>")
     if agents.f916_enabled() and "1f916" not in m.channels:
-        slugs = [q.slug for q in orchestrator.f916_queue()]
+        slugs = [e["slug"] for e in orchestrator.queue(f916)]
         place = f"#{slugs.index(m.slug) + 1} of {len(slugs)}" if m.slug in slugs else "queued"
         rows.append(f"<li>1F916: waiting, {place} in the queue (one post a day, newest first)</li>")
     if m.channel_errors.get("1f916"):

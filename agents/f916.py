@@ -5,30 +5,22 @@ this machine like the rest of data/, and is written once by `python run.py join-
 means the channel is off.
 
 The site allows one post per citizen per UTC day. A post it refuses (too long, near-duplicate, ...) does not
-spend that day's post. The orchestrator decides which article goes next; this module only talks to the site.
+spend that day's post. It posts feed entries (see agents/channel.py); the orchestrator decides which goes next,
+and this module only talks to the site and remembers when today's post is spent.
 """
 import json, os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import httpx
-from contracts import Mission, ResearchBrief, Article
-from render import article_text
+from agents.channel import NoAllowance, Refused
 
+KEY, NAME = "1f916", "1F916"
 API = "https://1f916.ai"
 KEY_FILE = Path("data/1f916.json")         # {"handle", "secret", ...}: the citizen. Never rewritten.
 STATE_FILE = Path("data/1f916_state.json") # {"spent_until", "note"}: when today's post is used up
 TITLE_MAX, BODY_MAX = 120, 8000            # UTF-16 code units, the way the site counts them
 SHORTENED = "\n\n[Shortened to fit 1F916's length limit.]\n"
 TRANSPORT = None                           # tests put an httpx.MockTransport here so nothing leaves the machine
-
-class NoAllowance(Exception):
-    """No post possible right now. daily=True: today's post is spent. False: the edge rate limit, try later."""
-    def __init__(self, msg: str, daily: bool):
-        super().__init__(msg)
-        self.daily = daily
-
-class Refused(Exception):
-    """The site refused this article. It cost nothing, so another article can go instead."""
 
 class BadKey(Exception):
     """The site doesn't accept our secret. Nothing will post until the key file is fixed."""
@@ -59,6 +51,9 @@ def spent_until() -> datetime | None:
     raw = load_state().get("spent_until")
     return datetime.fromisoformat(raw) if raw else None
 
+def wait_until() -> datetime | None:
+    return spent_until()
+
 def next_utc_day(now: datetime) -> datetime:
     day = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     return day + timedelta(days=1)
@@ -75,12 +70,11 @@ def _clip(s: str, limit: int, mark: str = "…") -> str:
         s = s[:-max(1, (_units(s) + _units(mark) - limit) // 2)]
     return s.rstrip() + mark
 
-def post_content(m: Mission, brief: ResearchBrief, article: Article) -> tuple[str, str]:
-    """Title and body within the site's limits. A long article loses the end of its text, never its sources
-    or the note on what was checked."""
-    title = _clip(" ".join(article.title.split()), TITLE_MAX)
-    body = article_text(brief, article, brief_checked=not m.unchecked_brief,
-                        article_checked=not m.unchecked_article)
+def post_content(entry: dict) -> tuple[str, str]:
+    """Title and body of a feed entry within the site's limits. A long article loses the end of its text,
+    never its sources or the note on what was checked."""
+    title = _clip(" ".join(entry["title"].split()), TITLE_MAX)
+    body = entry["text"]
     if _units(body) > BODY_MAX:
         head, sep, tail = body.rpartition("\n## Sources\n")
         room = BODY_MAX - _units(SHORTENED + sep + tail)
@@ -99,12 +93,27 @@ def _error(r: httpx.Response) -> str:
 def post_url(post_id) -> str:
     return f"{API}/api/post/{post_id}"
 
-def post(m: Mission, brief: ResearchBrief, article: Article, now=None) -> str:
-    """Publish one article. Returns where it can be read; raises NoAllowance, Refused or BadKey."""
+def post(entry: dict, now: datetime) -> str:
+    """Publish one feed entry. Returns where it can be read and marks today's post as spent.
+    Raises NoAllowance, Refused, or anything else for "try again next pass" (noted in the state file)."""
+    try:
+        where = _send(*post_content(entry))
+    except NoAllowance as e:
+        if e.daily:
+            save_state({"spent_until": next_utc_day(now).isoformat(), "note": str(e)})
+        raise
+    except Refused:
+        raise
+    except Exception as e:                 # bad key, network, site down: nothing is lost
+        save_state({"note": f"{type(e).__name__}: {e}"})
+        raise
+    save_state({"spent_until": next_utc_day(now).isoformat(), "note": f"posted {entry['slug']}"})
+    return where
+
+def _send(title: str, body: str) -> str:
     k = key()
     if not k:
         raise BadKey(f"no 1F916 key in {KEY_FILE}")
-    title, body = post_content(m, brief, article)
     with _client() as c:
         r = c.post("/api/post", json={"title": title, "body": body},
                    headers={"Authorization": f"Bearer {k['secret']}"})

@@ -14,7 +14,7 @@ That file is the citizen's whole identity (no recovery): never commit, print or 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 epics epic rename-epic`
-- Tests: `pytest -q` (expects 192 passed; no Ollama or network needed; any request to 1F916 fails the test)
+- Tests: `pytest -q` (expects 194 passed; no Ollama or network needed; any request to 1F916 fails the test)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -58,13 +58,15 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
     what makes a mission DONE. Feed links are relative unless `MISSION_LOOP_SITE_URL` is set in `.env`; entry
     ids are the slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
-  - `1f916`: `agents/f916.py` posts the article as plain text (`render.article_text`) to https://1f916.ai as
-    our citizen. On only when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site
-    allows one post per UTC day, so at the end of every pass `orchestrator.post_to_1f916` posts the newest
-    DONE article not yet there, if today's post is free (`data/1f916_state.json` remembers when it is spent).
-    A just-published article goes out that same pass; the rest wait, newest first. A post the site refuses
-    costs nothing: the reason goes in `Mission.channel_errors`, it moves to the back, and the next one is tried.
-    Network or key failures lose nothing and are retried next pass.
+  - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
+    `CHANNELS` in `agents/__init__.py`). At the end of every pass `orchestrator.post_to_channels` gives each
+    enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
+    costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
+    failures lose nothing and are retried next pass. Stub runs have no channels.
+  - `1f916`: `agents/f916.py` posts the feed entry's title and text to https://1f916.ai as our citizen. On only
+    when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site allows one post per
+    UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out that same
+    pass if the day's post is free, and the rest wait, newest first.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
