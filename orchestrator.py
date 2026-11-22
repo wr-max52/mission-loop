@@ -1,4 +1,4 @@
-import fcntl
+import fcntl, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timedelta
 from pathlib import Path
@@ -323,13 +323,17 @@ def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> M
         fresh = mine
     return fresh[0] if fresh else None
 
+PASS_EVERY = 300                           # seconds: during long model work, a publishing pass this often, so a
+                                           # backlog goes out as each channel's allowance frees up (Bluesky's gap)
 MAX_TASKS = 500                            # per run: a safety net against a mission that never settles
 
 def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     """Run every mission until each is blocked, with the two workers side by side. Missions are read fresh
     every few seconds, and the order is the same each time:
     1. Every step that needs no model, farthest along first (publish a reviewed article, move an approved brief
-       on, ...). Right after the first sweep, and whenever one publishes something, the channels post.
+       on, ...). Right after the first sweep, whenever one publishes something, whenever a human asks to
+       publish an article again and every PASS_EVERY seconds, there is a publishing pass (post_to_channels):
+       each channel works through its backlog as far as its allowance goes.
     2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round, so
        writing goes before research, and a brief a human approves mid-task is next in line.
     A worker that is off hands its role to the other, which then does everything one task at a time. The
@@ -338,6 +342,8 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     changed = tasks = 0
     finder_done, first = False, True
     failed: set[str] = set()               # steps that raised: skipped until the loop starts again
+    seen: set = set()                      # publish requests the last publishing pass already tried
+    last_pass = time.monotonic()
     turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
     running: dict = {}                     # future -> (worker, mission or None for the finder, its state before)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
@@ -349,9 +355,11 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                                           if m.slug not in busy and m.slug not in failed])
                 for m in missions:
                     changed += _quick_steps(m, now_fn, failed)
-                if first or any(m.state == State.DONE for m in missions):
+                asked, due = requests(), time.monotonic() - last_pass >= PASS_EVERY
+                if first or due or any(m.state == State.DONE for m in missions) or asked - seen:
                     changed += post_to_channels(now_fn())
-                    first = False
+                    first, seen = False, requests()   # a request that failed now waits for the next pass
+                    last_pass = time.monotonic()
                 waiting = [m for m in missions if m.slug not in failed and role(m)]
                 taken = {w for w, _, _ in running.values()}
                 for worker in settings.WORKERS:
@@ -440,9 +448,15 @@ def find_new_missions(now) -> int:
     print(f"mission finder added {len(ideas)} mission(s)", flush=True)
     return len(ideas)
 
-# ---------- publishing channels beyond the local site ----------
+# ---------- publishing: the local site, then every channel ----------
 
 CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME, github.KEY: github.NAME, bluesky.KEY: bluesky.NAME}
+
+def channel_name(key: str) -> str:
+    """What the UI calls a channel key, custom channels included (a removed one shows its key)."""
+    if key in CHANNEL_NAMES:
+        return CHANNEL_NAMES[key]
+    return next((c.NAME for c in agents.channels() if c.KEY == key), key)
 
 def channels(m: Mission) -> dict[str, ChannelPost]:
     """Everywhere this mission was published. Missions published before channels were recorded
@@ -452,45 +466,110 @@ def channels(m: Mission) -> dict[str, ChannelPost]:
         found["site"] = ChannelPost(at=m.published_at, where=f"site/{m.slug}/index.html")
     return found
 
+def request_publish(m: Mission, keys: list[str], now) -> None:
+    """A human asks to publish a published article again: "site" rewrites its page on the local site, a channel
+    key posts it there (again, if it already went), ahead of everything else waiting. The loop does it on its
+    next sweep, within seconds while it runs; a try that fails stays requested for the next publishing pass."""
+    if m.state != State.DONE:
+        raise ValueError("only a published article can be published again")
+    known = {"site"} | {c.KEY for c in agents.channels() if c.enabled()}
+    keys = [k for k in dict.fromkeys(keys) if k in known]
+    if not keys:
+        raise ValueError("nowhere to publish it")
+    m.publish_requests |= {k: now for k in keys}
+    store.save_mission(m)
+    store.log_event(m.slug, now, m.state.value, m.state.value,
+                    "publishing requested by human: " + ", ".join(channel_name(k) for k in keys))
+
+def requests() -> set[tuple[str, str, str]]:
+    """Every publish request waiting, as (slug, key, when): the loop runs a pass as soon as a new one shows up."""
+    return {(m.slug, k, str(t)) for m in store.all_missions() for k, t in m.publish_requests.items()}
+
 def queue(channel) -> list[dict]:
-    """Feed entries this channel hasn't posted yet: newest first, and any it refused after the rest.
+    """Feed entries this channel hasn't posted yet, newest first, and any it refused after the rest; entries a
+    human asked to publish there go ahead of all of them, even ones it already posted.
     An entry still waiting for its text (published before the feed) waits for the next refresh_feed."""
     missions = {m.slug: m for m in store.all_missions()}
-    waiting = [e for e in publisher.entries() if e.get("text") and e["slug"] in missions
-               and channel.KEY not in missions[e["slug"]].channels]
-    return sorted(waiting, key=lambda e: channel.KEY in missions[e["slug"]].channel_errors)
+    def wanted(e):
+        m = missions.get(e["slug"])
+        return m and (channel.KEY not in m.channels or channel.KEY in m.publish_requests)
+    waiting = [e for e in publisher.entries() if e.get("text") and wanted(e)]
+    return sorted(waiting, key=lambda e: (channel.KEY not in missions[e["slug"]].publish_requests,
+                                          channel.KEY in missions[e["slug"]].channel_errors))
 
-def post_to_channels(now, max_tries: int = 3) -> int:
-    """Every channel that is set up posts from the feed, as far as its allowance goes."""
+def republish_site(now) -> int:
+    """Rewrite the local page of every article a human asked to publish again, then the index and feeds."""
+    done = 0
+    for m in store.all_missions():
+        if "site" not in m.publish_requests:
+            continue
+        if m.state == State.DONE and m.published_at and store.load_artifact(m.slug, "article"):
+            try:
+                activity.begin(m.slug, "publisher")
+                location = publisher.write_page(m, _brief(m), _article(m), m.published_at)
+            finally:
+                activity.clear()
+            m.channels["site"] = ChannelPost(at=now, where=str(location))
+            store.log_event(m.slug, now, m.state.value, m.state.value, f"page rewritten at {location}")
+            done += 1
+        m.publish_requests.pop("site")
+        store.save_mission(m)
+    if done:
+        publisher.rebuild_index()
+    return done
+
+def _drop_stale_requests() -> None:
+    """Requests for a channel that has since been switched off or removed can never be done."""
+    known = {"site"} | {c.KEY for c in agents.channels() if c.enabled()}
+    for m in store.all_missions():
+        stale = [k for k in m.publish_requests if k not in known]
+        if stale:
+            for k in stale:
+                m.publish_requests.pop(k)
+            store.save_mission(m)
+
+MAX_REFUSALS = 3                           # per channel per pass: a channel refusing everything stops trying
+
+def post_to_channels(now, max_refusals: int = MAX_REFUSALS) -> int:
+    """One publishing pass: pages a human asked to rewrite, then every channel that is set up works through its
+    backlog, the articles a human asked for first, as far as its allowance goes: a channel with no cap (a folder,
+    a webhook) posts everything waiting, 1F916 its one a day, Bluesky one per 10-minute gap."""
     if STOP_FLAG.exists():
         return 0
-    return sum(post_to(c, now, max_tries) for c in agents.CHANNELS if c.enabled())
+    _drop_stale_requests()
+    return republish_site(now) + sum(post_to(c, now, max_refusals) for c in agents.channels() if c.enabled())
 
-def post_to(channel, now, max_tries: int = 3) -> int:
-    """Post waiting entries until the channel has no allowance left. A refused entry costs nothing, so the
-    next one is tried; any other failure stops this channel until its next turn. Returns how many posted."""
-    posted = 0
+def post_to(channel, now, max_refusals: int = MAX_REFUSALS) -> int:
+    """Post the channel's whole backlog until it has no allowance left (its wait_until, or NoAllowance). A
+    refused entry costs nothing, so the next one is tried, up to max_refusals in a pass; any other failure stops
+    this channel until its next pass (an entry a human asked for stays asked for). Returns how many posted."""
+    posted = refusals = 0
     if hasattr(channel, "sync"):
         try:
             channel.sync(now)
         except Exception as e:             # nothing is lost, try next turn
             print(f"{channel.NAME} update failed: {type(e).__name__}: {e}", flush=True)
             return 0
-    for entry in queue(channel)[:max_tries]:
-        until = channel.wait_until()
-        if until and now < until:
+    for entry in queue(channel):
+        if refusals >= max_refusals:
             break
         m = store.get_mission(entry["slug"])
+        asked = channel.KEY in m.publish_requests
+        until = channel.wait_until()
+        if until and now < until and not (asked and getattr(channel, "MANUAL_SKIPS_WAIT", False)):
+            break
         try:
-            activity.begin(m.slug, channel.KEY)
+            activity.begin(m.slug, channel.KEY if channel.KEY in activity.AGENTS else "publisher")
             where = channel.post(entry, now)
         except NoAllowance as e:
             print(f"{channel.NAME}: no post allowance now ({e})", flush=True)
             break
         except Refused as e:
             m.channel_errors[channel.KEY] = str(e)
+            m.publish_requests.pop(channel.KEY, None)
             store.save_mission(m)
             store.log_event(m.slug, now, m.state.value, m.state.value, f"{channel.NAME} refused the post: {e}")
+            refusals += 1
             continue
         except Exception as e:             # bad key, network, site down: nothing is lost, try next turn
             print(f"{channel.NAME} posting failed: {type(e).__name__}: {e}", flush=True)
@@ -499,6 +578,7 @@ def post_to(channel, now, max_tries: int = 3) -> int:
             activity.clear()
         m.channels[channel.KEY] = ChannelPost(at=now, where=where)
         m.channel_errors.pop(channel.KEY, None)
+        m.publish_requests.pop(channel.KEY, None)
         store.save_mission(m)
         store.log_event(m.slug, now, m.state.value, m.state.value, f"posted to {channel.NAME}: {where}")
         posted += 1

@@ -1,6 +1,6 @@
 import httpx, pytest
 import agents, orchestrator, settings, store, wayback
-from agents import bluesky, f916, github, llm, stubs
+from agents import bluesky, custom, f916, github, llm, stubs
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
                    "models": [{"name": "small-test:1b", "size": 1_600_000_000},
@@ -19,6 +19,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "STOP_FLAG", tmp_path / "data" / "STOP")
     monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(bluesky, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(custom, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(wayback, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(github, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(settings, "SITE_URL", "")                 # read from .env when settings is imported

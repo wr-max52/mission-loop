@@ -43,6 +43,7 @@ class Mission(BaseModel):
     published_at: datetime | None = None
     channels: dict[str, ChannelPost] = {}  # channel key ("site", "1f916") -> where it was published
     channel_errors: dict[str, str] = {}    # channel key -> why its last try refused this article
+    publish_requests: dict[str, datetime] = {}   # "site" or a channel key -> when a human asked to (re)publish there
     epic: str = ""                         # slug of the epic this mission belongs to ("" = none yet)
     epic_fallback: str = ""                # finder's best existing epic, used if its proposed new epic is rejected
 

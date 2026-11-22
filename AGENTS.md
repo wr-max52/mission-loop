@@ -18,9 +18,9 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 341 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky or
-  the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are cleared so a real
-  `.env` never switches a channel on)
+- Tests: `pytest -q` (expects 357 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+  custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
+  cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers, the GitHub server and OAuth app, and the site address are looked up in `data/settings.json` (the
   Settings page writes it), then `.env` (see `.env.example`), and only a service address falls back to that
@@ -106,7 +106,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   A reply that hits either limit raises `llm.Overrun`: a stuck search turn ends the search, and a stuck
   brief, article or finder reply keeps whatever valid JSON it wrote before (checked as usual), else the
   attempt fails. A writing retry after a failed article check sees its failed draft and revises it.
-- Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
+- Publishing has two parts: the local site, the foundation every article is written to first, and channels,
+  everywhere else it goes, each posting from the local site's feed. Where each article went is recorded per
+  mission in `Mission.channels` (key -> when and where):
   - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
     text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)
     and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
@@ -114,10 +116,26 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     saves it in `data/settings.json`, which wins over `MISSION_LOOP_SITE_URL` in `.env`); entry ids are the
     slugs either way. Each time the loop starts working it gives older `meta.json` files their text and rebuilds.
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
-    `CHANNELS` in `agents/__init__.py`). When the loop starts and whenever it publishes, `orchestrator.post_to_channels` gives each
-    enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
-    costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
+    `CHANNELS` in `agents/__init__.py`; `agents.channels()` is those plus the custom ones). When the loop starts,
+    whenever it publishes and whenever a human asks to publish an article again, `orchestrator.post_to_channels`
+    runs a publishing pass, and during long model work at least every `PASS_EVERY` (5 minutes): pages asked to be
+    rewritten, then each enabled channel works through its whole backlog: entries a human asked for first (even ones
+    it already posted), then feed entries it hasn't posted yet, newest first, refused ones last, until its allowance
+    runs out. So a new channel with no cap (GitHub Pages, a folder, a webhook) gets every past article on its first pass, while
+    1F916 takes one a day and Bluesky one per 10 minutes until they catch up. A pass gives up on a channel after
+    `MAX_REFUSALS` (3) refusals.
+    A refusal costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
+  - Publishing again: the Published page (or a published mission's page) ticks the local site and any channels
+    and records them in `Mission.publish_requests` (`orchestrator.request_publish`). The loop's next sweep sees
+    the new request and runs a pass, within seconds even mid-task; "site" rewrites the page and feeds (the
+    article keeps its first `published_at`). A channel's own politeness gap is skipped for a request
+    (`MANUAL_SKIPS_WAIT`, Bluesky) but a real cap is not (1F916's daily post); a request that fails stays and
+    goes first on the next pass. Requests for a channel since switched off are dropped.
+  - custom: `agents/custom.py`, any number, added on the Settings page and saved in `data/settings.json`
+    (`settings.custom_channels`): a name, a webhook (POST) or a folder (one file per article), and a format
+    (a JSON Feed 1.1 item, Markdown or plain text). Keys are `custom-<id>`; no cap. A webhook's address is never
+    recorded as where an article went (it often holds a token): a JSON reply's `url`, else its host.
   - `1f916`: `agents/f916.py` posts the feed entry's title and text to 1F916 as our citizen. The server to join is
     config (`settings.f916_url`: Settings page, `MISSION_LOOP_1F916_URL`, else https://1f916.ai); the key file records
     the server that issued it (`api`) and posting always goes there (`f916.api`). On only
@@ -194,11 +212,16 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
-Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
-as the CLI); a fresh clone needs no settings. `ui.py`
+The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
+progress closest to published first (publishing, writing, briefs, searches) and new missions last; published
+articles are not listed there, only a link to the Published page. The Published site button in the top bar
+opens that page (`/published`, with a link back): the local site, every channel, and each article with where it
+went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection and
+Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
+channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always drawn,
-unlit while the loop is off: agents on a track in runtime order, each code check a vertical block right after the
+unlit while the loop is off: agents on a track in runtime order (publishing is one step, whatever the channels), each code check a vertical block right after the
 agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
 check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
 busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
@@ -241,8 +264,10 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
-| View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
-| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the site address on the Settings page once it is hosted |
+| View the site | Published site in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
+| Publish an article again | tick where on the UI's Published page and press Publish (the loop does it within seconds) |
+| Add a custom channel | Settings → Publishing → Add a channel → Custom channel (a webhook or a folder, and a format) |
+| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the hosted address on the Settings page once it is hosted |
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |

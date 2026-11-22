@@ -201,7 +201,7 @@ def search_missions(query: str) -> str:
 
 @server.tool()
 def publication_status() -> str:
-    """What has been published and where: each channel (local site, 1F916, GitHub Pages, Bluesky) with whether it is on,
+    """What has been published and where: each channel (local site, 1F916, GitHub Pages, Bluesky, custom) with whether it is on,
     how many articles wait for it and when it may post next; articles approved to publish next pass; and the
     latest published articles with the channels each reached and any refusal."""
     missions = store.all_missions()
@@ -218,12 +218,20 @@ def publication_status() -> str:
         until = c.wait_until()
         nxt = f", next post allowed in {_ago((until - datetime.now(timezone.utc)).total_seconds())}" if until and until > datetime.now(timezone.utc) else ""
         lines.append(f"{c.NAME}: {'on' if on else 'set up but off in stub mode'}, {waiting} waiting{nxt}")
+    for c in agents.channels():
+        if c not in (f916, github, bluesky):   # custom channels, set up on the Settings page
+            lines.append(f"{c.NAME} (custom): on, {len(orchestrator.queue(c))} waiting")
+    asked = [m for m in done if m.publish_requests]
+    if asked:
+        lines.append("Asked to publish again, next pass: " + "; ".join(
+            f"{m.topic[:60]} [{m.slug}] to {', '.join(orchestrator.channel_name(k) for k in m.publish_requests)}"
+            for m in asked[:MAX_LIST]))
     soon = [m for m in missions if m.state == State.ARTICLE_READY and m.reviewed]
     if soon:
         lines.append("Approved, publishing next pass: " + "; ".join(f"{m.topic[:60]} [{m.slug}]" for m in soon[:MAX_LIST]))
     for m in done[:10]:
-        reached = ", ".join(orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)) or "nowhere"
-        refused = "".join(f"; {orchestrator.CHANNEL_NAMES.get(k, k)} refused: {v[:100]}" for k, v in m.channel_errors.items())
+        reached = ", ".join(orchestrator.channel_name(k) for k in orchestrator.channels(m)) or "nowhere"
+        refused = "".join(f"; {orchestrator.channel_name(k)} refused: {v[:100]}" for k, v in m.channel_errors.items())
         when = _since(m.published_at.isoformat()) if m.published_at else "?"
         lines.append(f"- {m.topic[:80]} [{m.slug}], published {when}, on: {reached}{refused}")
     return "\n".join(lines)

@@ -11,10 +11,14 @@ A channel is a module with:
   sync(now)            optional, for a channel that mirrors the whole site (GitHub Pages): called before the
                        queue on every turn, so a page redrawn after it was posted (an epic renamed) goes out too.
                        Its exceptions count like post's.
+  MANUAL_SKIPS_WAIT    optional, default False: True when wait_until is only our own politeness gap, so an
+                       article a human asks to publish now may go before it (Bluesky); False for a real cap
+                       the server enforces (1F916's one post a day).
 
 The orchestrator does the rest for every channel the same way: the queue is feed entries the channel has not
-posted yet, newest first, refused ones last; it records where each one went. Add the module to CHANNELS in
-agents/__init__.py.
+posted yet, newest first, refused ones last, with any a human asked to publish (Mission.publish_requests) ahead
+of all of them; it records where each one went. Add the module to CHANNELS in agents/__init__.py, or set up a
+custom channel (agents/custom.py) on the Settings page.
 """
 
 class NoAllowance(Exception):

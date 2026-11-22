@@ -176,3 +176,44 @@ def set_worker(worker: str, model: str, on: bool) -> None:
     if not on and not worker_on(other(worker)):
         raise ValueError("one worker has to stay on")
     save(**{f"{worker}_model": model, f"{worker}_worker": "" if on else "off"})   # "on" is not stored
+
+# ---------- custom publishing channels ----------
+# Anything beyond the built-in channels: each one sends every published article somewhere, in a format you pick
+# (agents/custom.py does the sending). Saved in data/settings.json as a list; nothing is built in.
+
+CUSTOM_KINDS = {"webhook": "POST to a web address", "folder": "Write a file into a folder"}
+CUSTOM_FORMATS = {"json": "JSON (a JSON Feed 1.1 item)", "markdown": "Markdown", "text": "Plain text"}
+
+def custom_channels() -> list[dict]:
+    """[{id, name, kind, target, format}], in the order they were added."""
+    found = saved().get("custom_channels")
+    return [c for c in found if isinstance(c, dict) and c.get("id")] if isinstance(found, list) else []
+
+def add_custom_channel(name: str, kind: str, target: str, fmt: str) -> dict:
+    """Add one. Raises ValueError for a missing name, an unknown kind or format, a webhook that isn't an http(s)
+    address or a folder that isn't a full path."""
+    name = " ".join(name.split())[:40]
+    if not name:
+        raise ValueError("a custom channel needs a name")
+    if kind not in CUSTOM_KINDS or fmt not in CUSTOM_FORMATS:
+        raise ValueError("pick a kind and a format")
+    target = target.strip()
+    if kind == "webhook":
+        target = _http_address(target) if target else ""
+    else:
+        target = str(Path(target).expanduser()) if target else ""
+        if not Path(target).is_absolute():
+            raise ValueError("a folder must be a full path")
+    if not target:
+        raise ValueError("say where to send it")
+    base = "".join(ch if ch.isalnum() else "-" for ch in name.lower()).strip("-")[:30] or "channel"
+    taken = {c["id"] for c in custom_channels()}
+    cid, n = base, 2
+    while cid in taken:
+        cid, n = f"{base}-{n}", n + 1
+    channel = {"id": cid, "name": name, "kind": kind, "target": target, "format": fmt}
+    save(custom_channels=custom_channels() + [channel])
+    return channel
+
+def remove_custom_channel(cid: str) -> None:
+    save(custom_channels=[c for c in custom_channels() if c["id"] != cid])
