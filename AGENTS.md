@@ -512,8 +512,10 @@ there is one card (`ui.queue_card`): how many articles are queued and for which 
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the model providers, the loop's rest between
-looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
+between looks for work, Model providers, Research (web search and the library), Display (appearance, chat colour, board,
+animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
+narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") (grey) that opens a three-step wizard in a dialog (topic, objective, then epic and short name; green), which posts to
