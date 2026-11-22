@@ -9,6 +9,7 @@
   const pop = root.querySelector(".board-pop"), crumb = root.querySelector(".board-crumb");
   const zoomLabel = root.querySelector(".board-zoom");
   const NS = "http://www.w3.org/2000/svg";
+  const tr = s => (window.I18N || {})[s] || s;     // the UI's language (ui.JS_STRINGS)
   const BASE = 160, MIN_Z = 0.12, MAX_Z = 2.6, GLIDE_MS = 520, CLICK_PX = 5;
   let data = JSON.parse(document.getElementById("board-data").textContent);
   const view = { x: 0, y: 0, z: 1 };             // screen = world * z + (x, y)
@@ -20,11 +21,15 @@
   const tilt = id => { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) | 0; return ((Math.abs(h) % 9) - 4) * 0.7; };
 
   // ---------- view ----------
+  const MOVING = new Set(["grid", "dark", "arcade"]);   // surfaces whose pattern pans and zooms with the notes
   function apply() {
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
-    root.style.setProperty("--gx", view.x + "px"); root.style.setProperty("--gy", view.y + "px");
-    root.style.setProperty("--gz", view.z);
-    if (zoomLabel) zoomLabel.textContent = Math.round(view.z * 100) + "%";
+    if (data.style && MOVING.has(data.style.surface)) {  // only these read --gx/--gy/--gz (never inherited, see BOARD_CSS)
+      root.style.setProperty("--gx", view.x + "px"); root.style.setProperty("--gy", view.y + "px");
+      root.style.setProperty("--gz", view.z);
+    }
+    const pct = Math.round(view.z * 100) + "%";
+    if (zoomLabel && zoomLabel.textContent !== pct) zoomLabel.textContent = pct;
     placePop();
   }
   const clampZ = z => Math.min(MAX_Z, Math.max(MIN_Z, z));
@@ -80,14 +85,14 @@
     if (n.kind === "epic")
       return `<div class="souvenir" style="--h:${hue(n.slug)}"><svg class="horseshoe" viewBox="0 0 40 30" aria-hidden="true">`
         + `<path d="M6 2v12a14 14 0 0 0 28 0V2h-8v12a6 6 0 0 1-12 0V2z"/><path class="tip" d="M6 2h8v5H6zM26 2h8v5h-8z"/></svg>`
-        + `<div class="k">${n.proposed ? "Proposed epic" : "Epic"}</div><div class="t">${esc(n.title)}</div>`
+        + `<div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div><div class="t">${esc(n.title)}</div>`
         + `<div class="n">${esc(n.count_text)}</div></div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
-    const live = n.live ? `<span class="now">working now</span>` : "", grip = `<span class="grip" title="Resize"></span>`;
+    const live = n.live ? `<span class="now">${tr("working now")}</span>` : "", grip = `<span class="grip" title="${tr("Resize")}"></span>`;
     if (n.paper === "done" || n.paper === "publish") {
-      const mark = n.paper === "done" ? "Published" : "Article ready";
-      return `<div class="postcard"><div class="photo" style="--h:${hue(n.epic || n.slug)}"><span class="greet">Greetings from</span>`
-        + `<span class="place">${esc(n.epic || "the desk")}</span></div><div class="back"><div class="t">${esc(n.short)}</div>`
+      const mark = n.paper === "done" ? tr("Published") : tr("Article ready");
+      return `<div class="postcard"><div class="photo" style="--h:${hue(n.epic || n.slug)}"><span class="greet">${tr("Greetings from")}</span>`
+        + `<span class="place">${esc(n.epic || tr("the desk"))}</span></div><div class="back"><div class="t">${esc(n.short)}</div>`
         + `<span class="stampbox"></span><span class="postmark">${mark}</span></div></div>${live}${grip}`;
     }
     if (n.paper === "queued" && !n.faded || n.paper === "research") {
@@ -97,19 +102,19 @@
     }
     const words = String(n.short).split(/\s+/).slice(0, 10);
     const tiles = words.map((w, i) => `<i style="--r:${((i * 53) % 7) - 3}deg">${esc(w)}</i>`).join("");
-    const tag = n.paper === "parked" ? "parked" : n.faded ? "combined" : n.stage;
+    const tag = n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;
     return `<div class="tiles">${tiles}<i class="tag">${esc(tag)}</i></div>${live}${grip}`;
   }
   function noteHtml(n) {
     if (data.style && data.style.cards === "magnets") return magnetHtml(n);
     if (n.kind === "epic")
-      return `<span class="pin"></span><div class="k">${n.proposed ? "Proposed epic" : "Epic"}</div>`
+      return `<span class="pin"></span><div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div>`
         + `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
-    const stamp = n.paper === "done" ? "Published" : n.paper === "parked" ? "Parked" : n.faded ? "Combined" : "";
+    const stamp = n.paper === "done" ? tr("Published") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : "";
     return `<span class="pin"></span><div class="t">${esc(n.short)}</div>`
       + (stamp ? `<span class="stamp">${stamp}</span>` : `<div class="stage">${esc(n.stage)}</div>`)
-      + (n.live ? `<span class="now">working now</span>` : "") + `<span class="grip" title="Resize"></span>`;
+      + (n.live ? `<span class="now">${tr("working now")}</span>` : "") + `<span class="grip" title="${tr("Resize")}"></span>`;
   }
   function render() {
     const seen = new Set();
@@ -132,43 +137,77 @@
         el.dataset.lab = "busy";
         if (n.worker) el.dataset.worker = n.worker; else delete el.dataset.worker;
       } else { delete el.dataset.lab; delete el.dataset.worker; }
-      el.className = ["note", n.kind, n.paper || "", n.live ? "live" : "", n.faded ? "combined" : "",
-                      n.proposed ? "proposed" : ""].filter(Boolean).join(" ");
+      const cls = ["note", n.kind, n.paper || "", n.live ? "live" : "", n.faded ? "combined" : "",
+                   n.proposed ? "proposed" : ""].filter(Boolean).join(" ");
+      if (el.className.replace(/ ?(faded|lifted)\b/g, "") !== cls)  // shade() and a drag own those two
+        el.className = cls + (el.classList.contains("faded") ? " faded" : "");
       if (el !== dragEl) {
-        el.style.left = n.x + "px"; el.style.top = n.y + "px";
-        el.style.setProperty("--s", n.size);
+        set(el, "left", n.x + "px"); set(el, "top", n.y + "px"); set(el, "--s", String(n.size));
       }
-      el.style.setProperty("--r", (n.kind === "unsorted" ? 0 : tilt(n.id)) + "deg");
+      set(el, "--r", (n.kind === "unsorted" ? 0 : tilt(n.id)) + "deg");
+      el.pinH = null;                                               // its height may have changed: measure again
     }
     for (const [id, el] of els) if (!seen.has(id)) { el.remove(); els.delete(id); }
     strings();
     shade();
     if (window.Researchers) window.Researchers.rescan();
   }
+  function set(el, prop, value) {                  // a write only when it changes anything, so nothing is restyled for nothing
+    if (el.style.getPropertyValue(prop) !== value) el.style.setProperty(prop, value);
+  }
   function pinOf(id) {
     const n = byId(id), el = els.get(id);
-    return el ? [n.x, n.y - el.offsetHeight / 2 + 12] : [n.x, n.y];
+    if (!el) return [n.x, n.y];
+    if (el.pinH == null) el.pinH = el.offsetHeight;   // measured once per render, not once per string
+    return [n.x, n.y - el.pinH / 2 + 12];
   }
-  function strings() {
-    svg.replaceChildren();
+  // Strings are kept, not rebuilt: each is one <g> keyed by its ends, and only a path whose ends moved is rewritten.
+  // The svg is sized to the strings it holds, so its layer and its shadow are no bigger than the strings themselves.
+  const strEls = new Map();
+  let strKind = null;
+  function strings(only) {                         // only: the note being dragged; strings not touching it stay as they are
+    const kind = data.style ? data.style.string : "string";
+    if (kind !== strKind) { svg.replaceChildren(); strEls.clear(); strKind = kind; }   // a new kind draws other paths
+    const seen = new Set(), pad = 30;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const s of data.strings) {
       if (!els.has(s.a) || !els.has(s.b)) continue;
-      const [x1, y1] = pinOf(s.a), [x2, y2] = pinOf(s.b), d = Math.hypot(x2 - x1, y2 - y1);
-      const kind = data.style ? data.style.string : "string";
-      const sag = kind === "laser" ? 0 : (s.kind === "epic" ? .12 : s.kind === "link" ? .08 : .05) * (kind === "wire" ? .5 : 1);
-      const my = Math.round((y1 + y2) / 2);
-      const path = kind === "pixel" ? `M${x1},${y1} V${my} H${x2} V${y2}`
-        : `M${x1},${y1} Q${(x1 + x2) / 2},${(y1 + y2) / 2 + d * sag} ${x2},${y2}`;
-      const g = document.createElementNS(NS, "g");
-      g.dataset.a = s.a; g.dataset.b = s.b;
-      g.setAttribute("class", "str " + s.kind);
-      for (const cls of kind === "string" || kind === "pixel" ? ["line", "hit"] : ["line", "core", "hit"]) {
-        const p = document.createElementNS(NS, "path");
-        p.setAttribute("d", path); p.setAttribute("class", cls);
-        g.appendChild(p);
+      const key = s.kind + "|" + s.a + "|" + s.b;
+      seen.add(key);
+      let g = strEls.get(key);
+      if (!g || !only || s.a === only || s.b === only) {
+        const [ax, ay] = pinOf(s.a), [bx, by] = pinOf(s.b), d = Math.hypot(bx - ax, by - ay);
+        const sag = kind === "laser" ? 0 : (s.kind === "epic" ? .12 : s.kind === "link" ? .08 : .05) * (kind === "wire" ? .5 : 1);
+        const my = Math.round((ay + by) / 2), cx = (ax + bx) / 2, cy = (ay + by) / 2 + d * sag;
+        const path = kind === "pixel" ? `M${ax},${ay} V${my} H${bx} V${by}` : `M${ax},${ay} Q${cx},${cy} ${bx},${by}`;
+        if (!g) {
+          g = document.createElementNS(NS, "g");
+          g.dataset.a = s.a; g.dataset.b = s.b;
+          g.setAttribute("class", "str " + s.kind);
+          for (const cls of kind === "string" || kind === "pixel" ? ["line", "hit"] : ["line", "core", "hit"]) {
+            const p = document.createElementNS(NS, "path");
+            p.setAttribute("class", cls);
+            g.appendChild(p);
+          }
+          g.appendChild(document.createElementNS(NS, "title"));
+          svg.appendChild(g);
+          strEls.set(key, g);
+        }
+        if (g.path !== path) { for (const p of g.querySelectorAll("path")) p.setAttribute("d", path); g.path = path; }
+        const why = s.why || "", t = g.querySelector("title");
+        if (t.textContent !== why) t.textContent = why;
+        g.box = [Math.min(ax, bx, cx), Math.min(ay, by, cy), Math.max(ax, bx, cx), Math.max(ay, by, cy)];  // the curve stays inside
       }
-      if (s.why) { const t = document.createElementNS(NS, "title"); t.textContent = s.why; g.appendChild(t); }
-      svg.appendChild(g);
+      x0 = Math.min(x0, g.box[0]); y0 = Math.min(y0, g.box[1]); x1 = Math.max(x1, g.box[2]); y1 = Math.max(y1, g.box[3]);
+    }
+    for (const [key, g] of strEls) if (!seen.has(key)) { g.remove(); strEls.delete(key); }
+    if (!isFinite(x0)) { x0 = y0 = 0; x1 = y1 = 1; }
+    x0 = Math.floor(x0 - pad); y0 = Math.floor(y0 - pad); x1 = Math.ceil(x1 + pad); y1 = Math.ceil(y1 + pad);
+    const vb = `${x0} ${y0} ${x1 - x0} ${y1 - y0}`;
+    if (svg.getAttribute("viewBox") !== vb) {
+      svg.setAttribute("viewBox", vb);
+      svg.style.left = x0 + "px"; svg.style.top = y0 + "px";
+      svg.style.width = (x1 - x0) + "px"; svg.style.height = (y1 - y0) + "px";
     }
   }
 
@@ -195,14 +234,15 @@
     if (!keep) { crumb.hidden = true; return keep; }
     const n = byId(picked);
     crumb.hidden = false;
-    crumb.innerHTML = `<span class="x">Board</span> › <b>${esc(n.title)}</b><span class="x">${esc(n.count_text)}</span>`
-      + `<span class="x">· show up to</span>${degrees()}`
-      + `<span class="x">${keep.size - 1} note${keep.size === 2 ? "" : "s"} shown</span>`
-      + `<button type="button" class="clear" title="Show the whole board" aria-label="Show the whole board">✕</button>`;
+    const shown = (keep.size === 2 ? tr("{n} note shown") : tr("{n} notes shown")).replace("{n}", keep.size - 1);
+    crumb.innerHTML = `<span class="x">${tr("Board")}</span> › <b>${esc(n.title)}</b><span class="x">${esc(n.count_text)}</span>`
+      + `<span class="x">· ${tr("Show up to")}</span>${degrees()}`
+      + `<span class="x">${shown}</span>`
+      + `<button type="button" class="clear" title="${tr("Show the whole board")}" aria-label="${tr("Show the whole board")}">✕</button>`;
     return keep;
   }
   const degrees = () => `<span class="deg">${[1, 2, 3, Infinity].map(d =>
-    `<button type="button" data-degree="${d}" class="${d === degree ? "on" : ""}">${d === Infinity ? "All" : d}</button>`).join("")}</span>`;
+    `<button type="button" data-degree="${d}" class="${d === degree ? "on" : ""}">${d === Infinity ? tr("All") : d}</button>`).join("")}</span>`;
   function pick(id, d = degree) {
     picked = id; degree = d;
     const keep = shade();
@@ -222,10 +262,10 @@
         + `<div class="pop-row"><span class="meta">${esc(n.meta)}</span>`
         + `<a class="open" href="${esc(n.url)}">${esc(n.open)} ↗</a></div>`;
     } else {
-      pop.innerHTML = `<div class="pop-row"><span class="tag">${n.kind === "epic" ? (n.proposed ? "Proposed epic" : "Epic") : "No epic"}</span></div>`
+      pop.innerHTML = `<div class="pop-row"><span class="tag">${n.kind === "epic" ? (n.proposed ? tr("Proposed epic") : tr("Epic")) : tr("No epic")}</span></div>`
         + `<h3>${esc(n.title)}</h3><p class="meta">${esc(n.count_text)}</p>`
-        + `<div class="lbl">Show missions up to</div>${degrees()}`
-        + `<p class="meta">1 is this epic's own missions; each step adds what is one more string away.</p>`;
+        + `<div class="lbl">${tr("Show missions up to")}</div>${degrees()}`
+        + `<p class="meta">${tr("1: this epic's missions. Each step adds one more string away.")}</p>`;
     }
     pop.hidden = false;
     placePop();
@@ -297,8 +337,9 @@
     } else {
       n.size = Math.round(Math.min(data.size_max, Math.max(data.size_min, gesture.size + dx / view.z / BASE)) * 100) / 100;
       el.style.setProperty("--s", n.size);
+      el.pinH = null;                               // a bigger note puts its pin higher
     }
-    strings(); shade(); placePop();
+    strings(n.id); placePop();                      // only its own strings move; what is faded stays faded
   });
   function end(e) {
     if (!pointers.has(e.pointerId)) return;
@@ -355,9 +396,13 @@
 
   // ---------- the board's look: the gear ----------
   const panel = root.querySelector(".board-style"), gear = root.querySelector('[data-tool="style"]');
-  function look(style) {
+  let shown = JSON.stringify(data.style);          // the look on screen; the page was drawn with it
+  function look(style) {                           // true when the look changed (and the board was drawn again)
     data.style = style;
-    root.classList.forEach(c => { if (/^(surface|cards|str)-/.test(c)) root.classList.remove(c); });
+    const key = JSON.stringify(style);
+    if (key === shown) return false;               // the save's echo and the next poll change nothing: no redraw
+    shown = key;
+    for (const c of [...root.classList]) if (/^(surface|cards|str)-/.test(c)) root.classList.remove(c);
     root.classList.add("surface-" + style.surface, "cards-" + style.cards, "str-" + style.string);
     root.style.setProperty("--string", style.color);
     if (panel) {
@@ -371,7 +416,8 @@
       if (own && document.activeElement !== own) own.value = style.color;
     }
     render();
-    placePop();
+    apply();                                        // a moving surface needs the view's offsets at once
+    return true;
   }
   async function restyle(change) {
     look({ ...data.style, ...change, ...(change.string && change.string !== data.style.string && !change.color
@@ -419,8 +465,8 @@
       const next = await res.json();
       if (next.same) return;
       data = next; sig = next.sig;
-      look(next.style);
       root.classList.toggle("animate", !!next.animations);   // the Settings switch takes effect without a reload
+      if (!look(next.style)) render();
       if (opened) byId(opened) ? showPop(opened) : closePop();
     } catch (_) { /* the server is restarting; try again next time */ }
   }
@@ -428,6 +474,11 @@
   function fill() {                               // the board reaches the bottom of the window, whatever is above it
     const top = root.getBoundingClientRect().top + window.scrollY;
     root.style.height = Math.max(420, window.innerHeight - top - 16) + "px";
+    // and spans the window less a 1rem gutter each side: clientWidth leaves out a scrollbar, which 100vw counts,
+    // so the tools and the gear's panel are never cut off at the right edge
+    const gutter = 16, margin = parseFloat(getComputedStyle(root).marginLeft) || 0;
+    root.style.width = (document.documentElement.clientWidth - 2 * gutter) + "px";
+    root.style.marginLeft = (margin + gutter - root.getBoundingClientRect().left) + "px";
   }
   fill();
   render();
@@ -439,5 +490,9 @@
   }
   window.addEventListener("resize", () => { fill(); placePop(); });
   window.addEventListener("load", () => { if (window.Researchers) window.Researchers.rescan(); });
+  if (document.fonts) document.fonts.ready.then(() => {   // a late font changes the notes' heights, so their pins
+    for (const el of els.values()) el.pinH = null;
+    strings();
+  });
   setInterval(poll, data.poll || 4000);
 })();

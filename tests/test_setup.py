@@ -80,7 +80,7 @@ def test_a_model_that_is_not_pulled_says_how_to_get_it(monkeypatch):
 def test_ollama_closed_is_a_blocking_problem(monkeypatch):
     closed = dict(llm.connection(), ok=False, models=[], error="ConnectError")
     found = {c.key: c for c in doctor.checks(conn=closed)}
-    assert not found["connection"].ok and found["connection"].blocks_loop and "Ollama isn't answering" in found["connection"].detail
+    assert not found["connection"].ok and found["connection"].blocks_loop and "Ollama not answering" in found["connection"].detail
 
 def test_missing_npx_and_uvx_say_what_to_install(monkeypatch):
     monkeypatch.setattr(toolbox, "WHICH", lambda command: None)
@@ -198,7 +198,7 @@ def test_a_running_loop_that_cant_work_shows_waiting(client, monkeypatch):
     html = client.get("/").text
     nav = html.split('<nav class="top">')[1].split("</nav>")[0]
     assert ">Waiting</span>" in nav and "Running" not in nav and "start the Ollama app" in nav
-    assert "Loop is waiting: Ollama is not reachable" in html
+    assert "Loop waiting: Ollama is not reachable" in html
     doctor.clear_waiting()
     assert ">Running</span>" in client.get("/").text
 

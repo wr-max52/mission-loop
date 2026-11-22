@@ -31,6 +31,7 @@ AGENTS = {                                 # in pipeline order
     "replies": "Reply checker",            # reads contacts' answers while a mission waits for them
     "writer": "Article writer",
     "article_check": "Article checker",
+    "article_rating": "Article rater",     # the Research Assistant rates a checked article; 20/30 or less goes back
     "publisher": "Publisher",
     "1f916": "1F916 poster",               # posts published articles, one a day, newest first
     "github": "Site pusher",               # pushes site/ to the linked GitHub Pages repo

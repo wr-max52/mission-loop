@@ -116,6 +116,12 @@ def _notes(m: Mission) -> str:
     if not m.validator_notes:
         return ""
     failed = m.rejected_article
+    if failed and failed.notes == m.validator_notes and failed.rating:   # it passed the check; a reader found it weak
+        return (f"\nYour previous draft passed the code checks, but an editor who read it rated it too weak to show "
+                f"the publisher. Revise it instead of starting over: keep what works, and fix what the editor found "
+                f"weak (a sharper, better-supported claim; a more gripping opening and stakes; leaning on the most "
+                f"credible sources), still using only the brief.\n{failed.article.model_dump_json()}\n"
+                f"The editor's rating:\n{m.validator_notes}\n")
     if failed and failed.notes == m.validator_notes:   # the check's notes point at paragraphs of this draft
         if m.article_draft:                # the sections that failed are revised one by one instead
             return ""

@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class State(str, Enum):
     QUEUED = "QUEUED"
@@ -42,6 +42,8 @@ class Mission(BaseModel):
     search_paused: bool = False            # a stop cut the search short; it carries on as the same attempt
     interrupted_brief: "ResearchBrief | None" = None   # written out when stop was pressed; checked when the loop starts again
     interrupted_article: "Article | None" = None       # same for the writer
+    checked_article: "Article | None" = None   # passed the article check; the Research Assistant rates it next
+    article_rating: "ArticleRating | None" = None   # the rating of the article now at review (or published)
     brief_pick: "SourcePick | None" = None      # the brief's first step as written, before its sources are checked
     brief_sources: "SourcePick | None" = None   # the brief's first step, checked: kept until the attempt ends
     article_draft: "ArticleDraft | None" = None # the article's plan and the sections written so far
@@ -99,7 +101,7 @@ class BoardNote(BaseModel):
     x: float
     y: float
     size: float | None = None              # 1.0 = a normal note; None = from its stage and strings
-    by: str = "code"                       # "code", "human" or "theorist"
+    by: str = "code"                       # "code", "human", "theorist" or "chat"
     at: str = ""
 
 class Mention(BaseModel):
@@ -248,9 +250,68 @@ class ArticleDraft(BaseModel):
     plan: ArticlePlan
     sections: list[Section] = []
 
+RATING_FACTORS = {                         # ArticleRating field -> what it rates, as shown to people
+    "logic": "Strength of the claim and its logic",
+    "intrigue": "Intrigue",
+    "sources": "Credibility of the sources",
+}
+RATING_SCALE = 10                          # each factor is 1 to this
+RATING_FAIL_AT = 20                        # a total of this or less sends the article back to the writer
+
+class RatingReply(BaseModel):
+    """What the rater writes: one score per factor (RATING_FACTORS), each after its reason, so the model reasons
+    before it scores. Scores are clamped to 1..RATING_SCALE."""
+    logic_why: str = ""
+    logic: int = 1
+    intrigue_why: str = ""
+    intrigue: int = 1
+    sources_why: str = ""
+    sources: int = 1
+
+    @field_validator("logic", "intrigue", "sources", mode="before")
+    @classmethod
+    def _clamp(cls, v):
+        try:
+            v = round(float(v))
+        except (TypeError, ValueError):
+            v = 1
+        return max(1, min(RATING_SCALE, v))
+
+class ArticleRating(RatingReply):
+    """The Research Assistant's rating of an article that passed the article check. Code decides with it: a total
+    of RATING_FAIL_AT or less goes back to the writer. error is set instead when the rater couldn't rate it; the
+    article then goes to review unrated (warn, don't block)."""
+    error: str = ""
+
+    @property
+    def total(self) -> int:
+        return self.logic + self.intrigue + self.sources
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.error) or self.total > RATING_FAIL_AT
+
+    def lines(self) -> list[str]:
+        """One line per factor: "Intrigue 6/10: why"."""
+        return [f"{name} {getattr(self, key)}/{RATING_SCALE}: {' '.join(getattr(self, key + '_why').split())}".rstrip(": ")
+                for key, name in RATING_FACTORS.items()]
+
+    def summary(self) -> str:
+        if self.error:
+            return f"Not rated: {self.error}"
+        return f"Rated {self.total}/{RATING_SCALE * len(RATING_FACTORS)}"
+
+    def notes(self) -> str:
+        """The rating as notes: the writer's, the mission page's and article.rejected.md's."""
+        if self.error:
+            return self.summary()
+        verdict = "passed" if self.passed else f"{RATING_FAIL_AT} or less is sent back to the writer"
+        return f"{self.summary()} ({verdict}):\n" + "\n".join(f"- {l}" for l in self.lines())
+
 class RejectedArticle(BaseModel):
     article: Article
     notes: str                             # the article check's verdict on this exact article
+    rating: ArticleRating | None = None    # set when it passed the check but its rating sent it back
 
 Mission.model_rebuild()
 

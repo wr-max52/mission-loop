@@ -253,7 +253,7 @@ def test_settings_page_shows_both_workers_and_the_connection(client):
     assert "other-test:8b · 5.2 GB" in html and "big-test:30b · 18.0 GB · loaded" in html     # every pulled model
     assert "<strong>Source finder</strong>" in html and "<strong>Article writer</strong>" in html   # where each is used
     assert 'data-crew="assistant"' in html and 'data-crew="pi"' in html and "researchers.js" in html
-    assert "Model providers" in html and "in memory, 21.0 GB" in html
+    assert "Model providers" in html and ">21.0 GB<" in html
     assert '<optgroup label="Ollama">' in html and "Add a provider" in html and 'value="anthropic"' in html
     assert 'name="ollama_host"' in html and 'name="f916_url"' in html and 'name="service"' in html
 
@@ -296,7 +296,7 @@ def test_settings_page_sets_how_many_of_each_worker(client, monkeypatch):
                     follow_redirects=False)
     assert "done=worker_count" in r.headers["location"] and settings.worker_count("assistant") == 3
     html = client.get("/settings").text
-    assert 'id="assistant_count" name="count" value="3"' in html and "3 Research Assistants search with" in html
+    assert 'id="assistant_count" name="count" value="3"' in html
     assert "each on its own mission" in html
     for bad in ("0", "99", "two"):
         r = client.post("/settings/worker", data={"worker": "assistant", "model": "small-test:1b", "on": "on",
@@ -355,7 +355,7 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     html = client.get("/").text
     assert '<div class="cards" data-lab-ok><a class="card" href="/m/w">' in html   # researchers may visit In progress
     assert html.index('href="/m/w"') < html.index('href="/m/r"')                   # writing above research: the flow
-    assert '<span class="doing" data-idle="Finding sources."> · Finding sources.</span>' in html
+    assert '<span class="doing" data-idle="Finding sources"> · Finding sources</span>' in html
     activity.work_as("assistant"); activity.begin("r", "sources")
     activity.work_as("pi"); activity.begin("w", "writer")
     activity.work_as(activity.DESK)
@@ -363,9 +363,9 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     assert {(e["slug"], e["worker"], e["name"]) for e in working} == {("r", "assistant", "Source finder"),
                                                                        ("w", "pi", "Article writer")}
     html = client.get("/").text            # the idle line stays on the card, for when the work ends
-    assert '<span class="doing" data-idle="Finding sources."> · Source finder is working on this now.</span>' in html
+    assert '<span class="doing" data-idle="Finding sources"> · Source finder working now</span>' in html
     js = client.get("/assets/flow.js").text
-    assert "relightCards(d.working)" in js and "is working on this now." in js
+    assert "relightCards(d.working)" in js and "working now" in js
     js = client.get("/assets/researchers.js").text
     assert "const MAX_ON_STAGE = 4;" in js and "PACE.entry || [12, 20]" in js   # two lit steps and two cards, staggered
 

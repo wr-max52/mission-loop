@@ -73,7 +73,7 @@ def test_strip_shows_work_in_progress_then_the_last_three_steps(client, monkeypa
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     activity.begin("b", "article_check")
     now = client.get("/api/flow").json()["now"]
-    assert now.index("<strong>Article checker</strong> is working on") < now.index("<strong>Article writer</strong> worked on")
+    assert now.index("<strong>Article checker</strong> · ") < now.index("<strong>Article writer</strong> · ")
     assert now.count('class="past"') == 3 and "Source finder" not in now   # only the last three
     assert "took " in now and 'href="/m/b">Outages</a>' in now and 'href="/log"' in now
     assert '<span class="ago"' in client.get("/").text
@@ -84,11 +84,11 @@ def test_log_page_lists_every_step_and_filters_by_mission(client, monkeypatch):
     activity.begin("b", "sources"); activity.begin("c", "brief"); activity.fail(ValueError("bad JSON")); activity.clear()
     activity.begin("", "theorist"); activity.clear()
     html = client.get("/log").text
-    assert "<h1>Step log</h1>" in html and "3 finished steps" in html and "data/steps.jsonl" in html
-    assert "Outages" in html and "Grid" in html and "looked across the desk for patterns" in html
+    assert "<h1>Step log</h1>" in html and "3 steps · " in html and "data/steps.jsonl" in html
+    assert "Outages" in html and "Grid" in html and "all missions" in html
     assert '<span class="out failed">failed</span> <span class="muted">ValueError: bad JSON</span>' in html
     one = client.get("/log?m=b").text
-    assert "1 finished step on" in one and "Grid" not in one.split("<h1>")[1] and "Back to the mission" in one
+    assert "1 step on" in one and "Grid" not in one.split("<h1>")[1] and "Back to the mission" in one
     store.log_event("c", T0, "QUEUED", "QUEUED", "added")
     assert 'href="/log?m=c"' in client.get("/m/c").text          # its History links to its steps
     monkeypatch.setattr(ui, "LOG_PAGE", 2)

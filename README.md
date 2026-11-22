@@ -62,6 +62,10 @@ New to the idea? The top bar's **About** shows how the desk works, and the chat 
   for their replies (48 hours by default) before the article is written.
 - **Personalize** the published site's name, tagline and About statement under **Settings → Publication**, and
   the app's appearance under **Settings → Display**.
+- **Use the desk from another app.** **Settings → MCP server** shares every tool Researcher Chat has (the loop,
+  the Theorist's moves, the library, web research) as one MCP server on your local network, with a token and a
+  ready-to-paste setup for Claude Code, Claude Desktop, Cursor, LM Studio and others. Only devices on your network
+  get in; nothing goes through the cloud.
 - **From the terminal:** `source .venv/bin/activate`, then `python run.py --help` lists every command.
 
 ## When something isn't working
@@ -89,7 +93,8 @@ first; the comments at its top say how to install, pause and remove it.
 ## What stays on your computer
 
 Everything you set up stays in this folder and is never committed: settings in `data/settings.json`, API keys in
-`data/providers.json` and `data/search.json` and the outreach email login in `data/email.json` (readable only by you), the missions in `data/loop.db`, the
+`data/providers.json` and `data/search.json`, the MCP server's token in `data/mcp_share.json` and the outreach email
+login in `data/email.json` (readable only by you), the missions in `data/loop.db`, the
 published site in `site/`. A `.env` file works too, if you prefer one (see `.env.example`); a value saved in the
 app wins over it.
 

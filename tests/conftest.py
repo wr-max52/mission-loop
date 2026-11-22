@@ -41,6 +41,8 @@ def fresh(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
     monkeypatch.setattr(llm, "connection", lambda timeout=2: FAKE_CONNECTION)   # never asks a real Ollama
     monkeypatch.setattr(agents, "ready", lambda: (True, "test models"))          # play's check: the fake models answer
+    monkeypatch.setattr(agents, "rate_article", stubs.rate_article)   # the rater never asks a real model (tests of
+                                                                    # agents/rater.py patch llm.ask instead)
     monkeypatch.setattr(toolbox, "WHICH", lambda command: f"/usr/bin/{command}")  # npx and uvx, whatever this machine has
     monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
@@ -58,7 +60,7 @@ def stub_agents(monkeypatch):
     an approved brief goes through the stub Outreach agent (three pretend contacts) and the reply wait; the
     no_outreach fixtures turn it off."""
     for name in ("theorize", "find_missions", "gather", "write_brief", "validate", "outreach", "check_replies",
-                 "write", "check_article"):
+                 "write", "check_article", "rate_article"):
         monkeypatch.setattr(agents, name, getattr(stubs, name))
     monkeypatch.setattr(agents, "outreach_channels", lambda: ["email"])
     monkeypatch.setattr(settings, "outreach_on", lambda: True)

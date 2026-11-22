@@ -40,7 +40,7 @@ def test_saving_the_site_address_rebuilds_the_feeds_now(client):
     assert r.headers["location"] == "/settings?done=site_url_saved"
     assert feed_url() == "https://example.com/news/a/"
     assert json.loads(settings.SETTINGS_FILE.read_text()) == {"site_url": "https://example.com/news"}
-    assert "https://example.com/news/feed.json" in client.get("/settings").text  # where it will be hosted
+    assert "Feed links use https://example.com/news/" in client.get("/settings").text  # where it will be hosted
     client.post("/settings/site-url", data={"site_url": ""})
     assert feed_url() == "a/" and settings.site_url() == ""
 
@@ -54,7 +54,7 @@ def test_env_address_works_and_the_saved_one_wins(client, monkeypatch):
     monkeypatch.setattr(settings, "SITE_URL", "https://env.example")
     published()
     assert feed_url() == "https://env.example/a/"
-    assert "from MISSION_LOOP_SITE_URL in .env" in client.get("/settings").text
+    assert "(from .env)" in client.get("/settings").text
     client.post("/settings/site-url", data={"site_url": "https://ui.example/"})
     assert feed_url() == "https://ui.example/a/"
 
@@ -64,7 +64,7 @@ def test_join_from_the_ui_saves_the_key_like_the_cli(client, site):
     assert f916.key()["secret"] == "1f916_sk_test"
     assert oct(f916.KEY_FILE.stat().st_mode & 0o777) == "0o600"
     html = client.get("/settings").text
-    assert "posting as <strong>loop-desk</strong>" in html and "join-1f916" not in html
+    assert "1F916: <strong>loop-desk</strong>" in html and "join-1f916" not in html
 
 def test_join_from_the_ui_on_another_server(client, site):
     r = client.post("/settings/join-1f916", data={"handle": "loop-desk", "f916_url": "https://staging.1f916.example/"},

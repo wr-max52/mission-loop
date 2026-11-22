@@ -1,4 +1,4 @@
-from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, Claim, OutreachRecord, Article, Section
+from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, Claim, OutreachRecord, Article, ArticleRating, Section
 
 def theorize(now=None):
     """Sees a pattern, changes nothing: the line stays, no epics, no mission."""
@@ -66,6 +66,11 @@ def check_article(m: Mission, brief: ResearchBrief, article: Article, records=No
     if "BADARTICLE" in m.topic:
         return False, "stub: forced article failure"
     return True, ""
+
+def rate_article(m: Mission, brief: ResearchBrief, article: Article) -> ArticleRating:
+    """8 on everything (24, passes), or 5 on everything (15, sent back) for a topic with DULLARTICLE."""
+    n = 5 if "DULLARTICLE" in m.topic else 8
+    return ArticleRating(logic=n, logic_why="stub", intrigue=n, intrigue_why="stub", sources=n, sources_why="stub")
 
 def chat_models() -> list[str]:
     return ["stub"]

@@ -440,7 +440,8 @@ def test_email_is_checked_before_it_is_saved(client, monkeypatch):
     assert settings.email_config()["password"] == "app-pw"
     assert stat.S_IMODE(os.stat(settings.EMAIL_FILE).st_mode) == 0o600
     page = client.get("/settings").text
-    assert "app-pw" not in page and "Sending as" in page and "replies are read from imap.example.com" in page
+    assert "app-pw" not in page
+    assert "Sending as" in page and "Replies are read from imap.example.com" in page
     client.post("/settings/email", data=form | {"password": "", "from_name": "Desk"})   # blank keeps the password
     assert settings.email_config()["password"] == "app-pw" and settings.email_config()["from_name"] == "Desk"
     client.post("/settings/email", data={"forget": "1"})
@@ -456,7 +457,7 @@ def test_the_mission_page_shows_who_was_asked_and_what_they_said(client):
     store.save_mission(m)
     page = client.get("/m/grid").text
     assert "Outreach: 1 of 1 answered" in page and "Yes &lt;b&gt;really&lt;/b&gt;." in page
-    assert "Waiting for replies until Nov 24, 09:00 UTC: 1 of 1 answered." in page
+    assert "Waiting for replies until Nov 24, 09:00 UTC · 1 of 1 answered" in page
 
 def test_the_setup_check_flags_outreach_with_no_channel():
     settings.set_outreach(True, 48, 3, ["email"])

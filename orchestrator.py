@@ -8,6 +8,7 @@ import settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
+                       ArticleRating,
                        ChannelPost, Combine, COMBINABLE, Epic, Link, SITE_FOLDERS, epic_title, is_open, slugify)
 from render import brief_markdown, article_markdown, article_html
 
@@ -50,11 +51,13 @@ def _write_article_review(m: Mission, brief: ResearchBrief, article: Article) ->
     return folder / "preview.html"
 
 def role(m: Mission) -> str | None:
-    """Which worker role the mission's next task needs: "assistant" (the small model's legwork), "pi" (the
-    big model's writing), or None when it needs no model (a quick step) or is blocked."""
+    """Which worker role the mission's next task needs: "assistant" (the small model's legwork, and its rating of
+    a checked article), "pi" (the big model's writing), or None when it needs no model (a quick step) or is blocked."""
     if m.state == State.RESEARCHING:
         return "pi" if m.gathered or m.interrupted_brief else "assistant"
-    if m.state in (State.WRITING, State.OUTREACH):
+    if m.state == State.WRITING:
+        return "assistant" if m.checked_article else "pi"
+    if m.state == State.OUTREACH:
         return "pi"
     return None
 
@@ -202,6 +205,8 @@ def step(m: Mission, now) -> str | None:
         return f"reply wait over ({answered} of {len(records)} answered)" if records else "wait over"
 
     if m.state == State.WRITING:
+        if m.checked_article:
+            return _rate(m)
         m.write_attempts += 1
         brief, records = _brief(m), _outreach(m)
         article, m.interrupted_article = m.interrupted_article, None
@@ -225,25 +230,9 @@ def step(m: Mission, now) -> str | None:
             activity.fail(e)
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
-            store.save_artifact(m.slug, "article", article)
-            _mentions(m.slug)
-            m.unchecked_article, m.article_draft = "", None
-            path = _write_article_review(m, brief, article)
-            m.validator_notes = ""
-            m.rejected_article = None
-            m.state = State.ARTICLE_READY
-            return f"article passed check on attempt {m.write_attempts}; review {path}"
-        activity.outcome("failed", notes)
-        m.validator_notes = notes
-        if article is not None:            # keep the failed article for humans, who may push it through
-            m.rejected_article = RejectedArticle(article=article, notes=notes)
-            path = Path("missions") / m.slug / "article.rejected.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(article_markdown(m.slug, brief, article) + f"\n## Article check notes\n{notes}\n")
-        if m.write_attempts >= m.max_attempts:
-            m.state = State.PARKED
-            return f"parked after {m.write_attempts} writing attempts"
-        return f"writing attempt {m.write_attempts} failed check"
+            m.checked_article = article    # the Research Assistant rates it next (_rate), then it goes to review
+            return f"article passed check on attempt {m.write_attempts}; the rating is next"
+        return _article_failed(m, brief, article, notes)
 
     if m.state == State.ARTICLE_READY:
         if not m.reviewed:
@@ -284,6 +273,53 @@ def _reach_out(m: Mission, now) -> str:
     who = ", ".join(f"{r.name} ({r.channel})" for r in records)
     return note + f"asked {who}; waiting for replies until {m.wait_until:%Y-%m-%d %H:%M} UTC"
 
+def _article_failed(m: Mission, brief: ResearchBrief, article: Article | None, notes: str,
+                    rating: ArticleRating | None = None) -> str:
+    """A writing attempt failed, by the article check or by its rating: the notes go back to the writer, and after
+    max_attempts the mission is parked."""
+    activity.outcome("failed", notes)
+    m.validator_notes = notes
+    if article is not None:            # keep the failed article for humans, who may push it through
+        m.rejected_article = RejectedArticle(article=article, notes=notes, rating=rating)
+        path = Path("missions") / m.slug / "article.rejected.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        title = "Rating" if rating else "Article check notes"
+        path.write_text(article_markdown(m.slug, brief, article) + f"\n## {title}\n{notes}\n")
+    if m.write_attempts >= m.max_attempts:
+        m.state = State.PARKED
+        return f"parked after {m.write_attempts} writing attempts"
+    if rating:
+        return f"writing attempt {m.write_attempts} {rating.summary().lower()}; sent back to the writer"
+    return f"writing attempt {m.write_attempts} failed check"
+
+def _rate(m: Mission) -> str:
+    """The Research Assistant rates an article that passed the article check (agents/rater.py). A total of
+    RATING_FAIL_AT or less fails the writing attempt like a failed check: the writer gets the rater's reasons and
+    writes it again, from a fresh plan. A rater that crashes sends the article to review unrated, marked so: the
+    code check passed, so the article isn't held back for want of an opinion."""
+    article, brief = m.checked_article, _brief(m)
+    try:
+        activity.begin(m.slug, "article_rating")
+        rating = agents.rate_article(m, brief, article)
+    except stopping.Interrupted as e:
+        activity.fail(e)
+        return "stopped mid-rating; the article is rated when the loop starts again"   # checked_article stays
+    except Exception as e:
+        activity.fail(e)
+        rating = ArticleRating(error=f"the rater crashed: {type(e).__name__}: {e}")
+    m.checked_article = None
+    if not rating.passed:
+        m.article_draft = None             # written again from a fresh plan: a weak claim or dull story is the plan's
+        return _article_failed(m, brief, article, rating.notes(), rating)
+    store.save_artifact(m.slug, "article", article)
+    _mentions(m.slug)
+    m.unchecked_article, m.article_draft, m.article_rating = "", None, rating
+    path = _write_article_review(m, brief, article)
+    m.validator_notes = ""
+    m.rejected_article = None
+    m.state = State.ARTICLE_READY
+    return f"article {rating.summary().lower()} on attempt {m.write_attempts}; review {path}"
+
 def reject(m: Mission, notes: str, now) -> None:
     """Human says no. A brief goes back to research; an article goes back to the writer.
     Either way the feedback is passed on and the attempt budget is fresh."""
@@ -292,7 +328,7 @@ def reject(m: Mission, notes: str, now) -> None:
         m.state, m.attempts, m.approved = State.RESEARCHING, 0, False
     elif m.state == State.ARTICLE_READY:
         m.state, m.write_attempts, m.reviewed = State.WRITING, 0, False
-        m.article_draft = None             # written again from the feedback, not patched
+        m.article_draft, m.article_rating = None, None   # written again from the feedback, not patched
     else:
         raise ValueError(f"{m.slug} is {m.state.value}; only BRIEF_READY or ARTICLE_READY can be rejected")
     m.validator_notes = f"Human reviewer feedback: {notes}"
@@ -366,7 +402,7 @@ def push_through(m: Mission, now) -> None:
         store.save_artifact(m.slug, "article", draft.article)
         _mentions(m.slug)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
-        m.article_draft = None
+        m.article_draft, m.article_rating = None, draft.rating
         _write_article_review(m, _brief(m), draft.article)
         m.state = State.ARTICLE_READY
         note = "failed article pushed through by human"

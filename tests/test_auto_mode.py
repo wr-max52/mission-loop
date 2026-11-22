@@ -119,16 +119,17 @@ def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypa
     assert steps(client.get("/").text) == [
         ("theorist", "agent"), ("theorist_check", "check"), ("finder", "agent"), ("finder_check", "check"),
         ("epic_review", "human"), ("sources", "agent"), ("brief", "agent"), ("source_check", "check"),
-        ("brief_review", "human"), ("writer", "agent"), ("article_check", "check"), ("article_review", "human"),
-        ("publisher", "agent")]
+        ("brief_review", "human"), ("writer", "agent"), ("article_check", "check"),
+        ("article_rating", "agent"), ("rating_check", "check"), ("article_review", "human"), ("publisher", "agent")]
     html = track(client.get("/").text)
     assert '<a class="human propose waiting" href="/#needs-you" data-step="epic_review"' in html
-    assert "Whatever fails is dropped; nothing is parked." in html               # the desk's checks park nothing
+    assert "Failures are dropped." in html               # the desk's checks park nothing
     assert client.get("/api/flow").json()["waiting"]["epic_review"] == 1
     monkeypatch.setattr(settings, "outreach_on", lambda: True)    # outreach, its check and the reply wait
     keys = [k for k, _ in steps(client.get("/").text)]
     assert keys[keys.index("brief_review"):keys.index("article_review")] == [
-        "brief_review", "outreach", "outreach_check", "replies", "writer", "article_check"]
+        "brief_review", "outreach", "outreach_check", "replies", "writer", "article_check", "article_rating",
+        "rating_check"]
 
 def test_the_flow_chart_snakes_with_a_review_at_every_turn(client, monkeypatch):
     """Lane 0 runs left to right from the top left to the first review, a square end on the right that spans the

@@ -1,7 +1,7 @@
 """Switchboard: the ONLY place that decides which implementation each agent uses.
 
 The orchestrator calls agents.theorize / tidy_board / find_missions / gather / write_brief / validate / outreach /
-check_replies / write / check_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
+check_replies / write / check_article / rate_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
 The UI and CLI call agents.chat, Researcher Chat, which reads the loop and the web through MCP, and the avatar
 studio calls agents.edit_avatar, which edits a sprite spec (SPRITES.md) from what a person asks.
 Set MISSION_LOOP_STUBS=1 to run the whole loop on stubs (no Ollama, no network).
@@ -22,7 +22,7 @@ from agents.publisher import publish       # local files only, so stubs and real
 from agents import bluesky, custom, f916, github
 
 if os.environ.get("MISSION_LOOP_STUBS") == "1":
-    from agents.stubs import theorize, tidy_board, find_missions, gather, write_brief, validate, outreach, check_replies, write, check_article, chat, chat_models, chat_catalog, chat_web, edit_avatar, avatar_models
+    from agents.stubs import theorize, tidy_board, find_missions, gather, write_brief, validate, outreach, check_replies, write, check_article, rate_article, chat, chat_models, chat_catalog, chat_web, edit_avatar, avatar_models
 
     def ready() -> tuple[bool, str]:
         return True, "stubs"
@@ -52,6 +52,7 @@ else:
     from contacts import check_replies, ready_channels as outreach_channels
     from agents.writer import write
     from checks.article_check import check_article
+    from agents.rater import rate as rate_article   # the Research Assistant's rating of a checked article
     from agents.llm import ready
     from agents.assistant import chat, models as chat_models, catalog as chat_catalog, web_search as chat_web  # Researcher Chat; reads the loop through MCP, never runs it
     from agents.avatar import edit as edit_avatar, models as avatar_models   # the avatar studio's designer; edits a spec, saves nothing
@@ -65,5 +66,5 @@ else:
         return list(CHANNELS) + custom.channels()
 
 __all__ = ["theorize", "tidy_board", "find_missions", "gather", "write_brief", "validate", "outreach", "check_replies", "outreach_channels", "write", "check_article",
-           "publish", "CHANNELS", "channels", "f916_enabled", "bluesky_enabled", "github_enabled", "ready", "chat",
+           "rate_article", "publish", "CHANNELS", "channels", "f916_enabled", "bluesky_enabled", "github_enabled", "ready", "chat",
            "chat_models", "chat_catalog", "chat_web", "edit_avatar", "avatar_models"]
