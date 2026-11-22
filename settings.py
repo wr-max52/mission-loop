@@ -162,6 +162,26 @@ def ink_on(color: str) -> str:
     r, g, b = (channel(color[i:i + 2]) for i in (1, 3, 5))
     lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
     return "#1d1d1f" if (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) else "#ffffff"
+LOOP_EVERY = 5                             # minutes a loop started from the UI rests when it has nothing to do
+
+def loop_every() -> float:
+    """How long a loop started from the UI's play button rests between looks for work, in minutes (Settings page)."""
+    try:
+        return max(1.0, float(saved().get("loop_every") or LOOP_EVERY))
+    except (TypeError, ValueError):
+        return float(LOOP_EVERY)
+
+def set_loop_every(minutes: float) -> None:
+    minutes = max(1.0, float(minutes))
+    save(loop_every="" if minutes == LOOP_EVERY else minutes)   # nothing stored at the default
+
+def auto_mode() -> bool:
+    """Auto mode: the loop approves every brief and every proposed epic itself. Publishing still waits for a
+    human. Off unless switched on in the UI's top bar (or `run.py auto on`)."""
+    return saved().get("auto_mode") == "on"
+
+def set_auto_mode(on: bool) -> None:
+    save(auto_mode="on" if on else "")     # nothing stored while off, so a fresh install asks for every approval
 
 # ---------- the two workers: which local model does which steps ----------
 # The Research Assistant runs the small model's legwork (searching and reading pages); the Principal

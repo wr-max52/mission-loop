@@ -1,5 +1,6 @@
 """macOS notifications when a mission needs a human (or just got published). Best effort only."""
 import subprocess
+import settings
 from contracts import Mission, State
 
 MESSAGES = {
@@ -10,8 +11,8 @@ MESSAGES = {
 }
 
 def needs_attention(m: Mission) -> str | None:
-    if m.state == State.BRIEF_READY and m.approved:
-        return None
+    if m.state == State.BRIEF_READY and (m.approved or settings.auto_mode()):
+        return None                        # auto mode approves it on the loop's next sweep
     if m.state == State.ARTICLE_READY and m.reviewed:
         return None
     msg = MESSAGES.get(m.state)

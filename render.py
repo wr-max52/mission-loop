@@ -426,7 +426,7 @@ def about_html() -> str:
                      for name, who, text in AGENT_NOTES)
     body = ("<h1>About</h1>"
             "<p>Mission Loop is a small research desk run by AI agents, with a human editor. Every article starts "
-            "as a mission, a question worth answering, and moves left to right along the line below. Code checks "
+            "as a mission, a question worth answering, and moves along the line below, turning at each review. Code checks "
             "the agents' work at each step, and nothing is published until a person has approved the research "
             "and read the article.</p>"
             f"{strip}"

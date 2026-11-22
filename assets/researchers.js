@@ -2028,7 +2028,7 @@ class Stage {
   // effects; x is in pixels from the left, y in pixels up from the floor
   add(p) {
     if (this.fx.length >= 140) return null;
-    const q = Object.assign({ vx: 0, vy: 0, size: 2, max: p.life }, p);
+    const q = Object.assign({ vx: 0, vy: 0, size: 2, max: p.life, ground: this.ground }, p);   // the adder's floor
     this.fx.push(q);
     return q;                                    // so a bit can steer its bird, cat or rocket
   }
@@ -2043,7 +2043,7 @@ class Stage {
   sparkle(x, y, n) { for (let i = 0; i < n; i++) this.add({ kind: "star", x: x + (Math.random() - 0.5) * 36, y: y + (Math.random() - 0.5) * 20, vy: 12, life: 0.5 + Math.random() * 0.5, fade: true }); }
   paper(x, y, vx, vy) { this.add({ kind: "paper", x, y, vx, vy, g: 60, life: 2.6, sway: 8, floor: true, fade: true }); }
   book(x, y, vx, vy, c) { this.add({ kind: "book", c, x, y, vx, vy, g: 140, life: 2.2, floor: true, fade: true }); }
-  hole(x, n) { this.marks.push({ kind: "hole", x, n, life: 0.05 }); }
+  hole(x, n) { this.marks.push({ kind: "hole", x, n, life: 0.05, ground: this.ground }); }
 
   // ---------- drawing ----------
   draw() {
@@ -2054,7 +2054,7 @@ class Stage {
     ctx.setTransform(k, 0, 0, k, 0, 0);
     const G = this.ground;
     for (const m of this.marks) {
-      if (m.kind === "hole") { ctx.fillStyle = "rgba(60,40,25,.55)"; ctx.fillRect(Math.round(m.x - m.n), G - 1, m.n * 2 + 1, 3); }
+      if (m.kind === "hole") { ctx.fillStyle = "rgba(60,40,25,.55)"; ctx.fillRect(Math.round(m.x - m.n), (m.ground ?? G) - 1, m.n * 2 + 1, 3); }
     }
     const cast = this.cast();
     for (const r of cast) if (r.pose) this.drawResearcher(ctx, r);
@@ -2086,7 +2086,7 @@ class Stage {
     comp.clearRect(0, 0, OFF_W, OFF_H);
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) comp.drawImage(ink.canvas, dx, dy);
     comp.drawImage(off.canvas, 0, 0);
-    const x = Math.round(r.x), y = this.ground - Math.round(r.y);
+    const x = Math.round(r.x), y = r.stage.ground - Math.round(r.y);   // a flow slot has its own row's floor
     ctx.save();
     ctx.globalAlpha = clamp(r.alpha, 0, 1);
     ctx.translate(x, y + 1);
@@ -2097,7 +2097,7 @@ class Stage {
     if (r.tilt > 0.9) { r.headTop = 16; r.topY = 18; }
   }
   drawFx(ctx, p) {
-    const x = Math.round(p.x), y = this.ground - Math.round(p.y);
+    const x = Math.round(p.x), y = (p.ground ?? this.ground) - Math.round(p.y);
     ctx.globalAlpha = (p.fade ? clamp(p.life / p.max * 1.5, 0, 1) : 1) * (p.fadeIn ? clamp((p.max - p.life) / 0.6, 0, 1) : 1);
     switch (p.kind) {
       case "map": {
@@ -2127,7 +2127,7 @@ class Stage {
     ctx.globalAlpha = 1;
   }
   drawOverlay(ctx, r) {
-    const top = this.ground - r.topY;
+    const top = r.stage.ground - r.topY;
     if (r.badge) {
       const map = ICONS[r.badge.kind], bounce = Math.round(Math.abs(Math.sin(r.badge.t * 6)) * 3);
       const blink = r.badge.kind === "bulb" && Math.floor(r.badge.t * 8) % 2 && r.badge.t < 0.5;
@@ -2174,17 +2174,25 @@ class FlowStage extends Stage {
     const f = this.host.closest("#flow");
     try { return JSON.parse((f && f.dataset.working) || "[]"); } catch (e) { return []; }
   }
+  // The strip is a snake of lanes, so the tiles stand in rows: each row is its own floor, and a researcher stands
+  // on the row of its own step (slot.ground, slot.platforms), walking and hopping along that row only.
+  row(el) {
+    const top = el.offsetTop;
+    return [...this.host.querySelectorAll(".step, .check")].filter(n => Math.abs(n.offsetTop - top) < 4)
+      .map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]).sort((a, b) => a[0] - b[0]);
+  }
   layout() {
     if (!this.host.isConnected || !this.host.clientWidth) return;
     const nodes = [...this.host.querySelectorAll(".step, .check")];
     if (!nodes.length) return;
-    this.platforms = nodes.map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]);
+    this.platforms = this.row(nodes[0]);
     this.size(this.host.clientWidth, this.host.clientHeight, nodes[0].offsetTop - 1);
     for (const c of Object.values(this.crew || {})) this.aim(c.slot, c.step);
   }
   aim(slot, step) {                              // point a slot at a step: where to stand, what kind of work
     const el = step && this.host.querySelector(`.step[data-step="${step}"], .check[data-step="${step}"]`);
     slot.home = el ? this.span(el) : null;
+    if (el) { slot.ground = el.offsetTop - 1; slot.platforms = this.row(el); }
     slot.mood = step || "busy";
   }
   span(el) {                                     // where a researcher can stand on a step; a check is just a post

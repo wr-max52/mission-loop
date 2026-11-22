@@ -177,6 +177,22 @@ def stop():
     print(f"stop requested; the current agent writes out what it has (at most {stopping.GRACE // 60} min), then the loop stops")
 
 @app.command()
+def auto(switch: str = typer.Argument("", help="on or off; leave out to see whether it is on")):
+    """Auto mode approves every brief and proposed epic without you. Publishing still waits for `review`."""
+    import settings
+    if switch not in ("", "on", "off"):
+        raise typer.BadParameter("say on or off")
+    if switch:
+        settings.set_auto_mode(switch == "on")
+        approved = orchestrator.auto_approve(clock.now())
+        orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        orchestrator.WAKE_FLAG.touch()
+        if approved:
+            print(f"approved {approved} waiting brief(s)")
+    print("auto mode is " + ("on: briefs and new epics are approved for you; articles still wait for review"
+                             if settings.auto_mode() else "off: every brief and new epic waits for you"))
+
+@app.command()
 def approve(slug: str):
     _set(slug, approved=True)
 

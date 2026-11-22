@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import pytest
 from starlette.testclient import TestClient
-import activity, agents, orchestrator, run as cli, store, ui
+import activity, agents, orchestrator, run as cli, settings, store, ui
 from contracts import Mission, State
 
 pytestmark = pytest.mark.usefixtures("stub_agents")
@@ -184,7 +184,8 @@ def test_dashboard_highlights_the_working_agent(client, monkeypatch):
     before = ui.signature()
     activity.begin("b", "brief")
     html = client.get("/").text
-    assert '<span class="step on" data-step="brief" title="Brief writer" aria-current="step" data-worker="desk">Brief</span>' in html
+    assert '<span class="step on" data-step="brief" title="Brief writer" aria-current="step" data-worker="desk">' in html
+    assert '<span class="name">Brief</span><span class="sub">writes the brief</span>' in html
     assert html.count(' on" data-step') == 1 and html.count('class="card active"') == 1
     assert 'data-working="[{&quot;worker&quot;: &quot;desk&quot;, &quot;step&quot;: &quot;brief&quot;, &quot;slug&quot;: &quot;b&quot;}]"' in html
     assert "Brief writer is working on this now." in html
@@ -222,10 +223,11 @@ def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeyp
     assert '<script src="/assets/flow.js" defer></script>' in html
     track = html.split('class="flow-track"')[1].split("</section>")[0]
     order = re.findall(r'data-step="([a-z0-9_]+)"', track)
-    assert order == ["theorist", "finder", "sources", "brief", "source_check", "brief_review",
-                     "writer", "article_check", "article_review", "publisher"]   # outreach and channels off
+    assert order == ["theorist", "theorist_check", "finder", "finder_check", "epic_review", "sources", "brief",
+                     "source_check", "brief_review", "writer", "article_check", "article_review",
+                     "publisher"]                                  # outreach and channels off
     assert '<span class="check" data-step="source_check"' in track
-    assert '<span class="detour"><a class="human review" href="/#needs-you" data-step="brief_review"' in track
+    assert '<a class="human review" href="/#needs-you" data-step="brief_review"' in track
     assert client.get("/assets/flow.js").status_code == 200
 
 def test_flow_strip_counts_what_waits_on_you_and_what_each_check_parked(client, monkeypatch):
@@ -241,7 +243,7 @@ def test_flow_strip_counts_what_waits_on_you_and_what_each_check_parked(client, 
     assert '<h2 class="group" id="needs-you">' in html and '<span>Needs you</span><span class="n" data-n="4">4</span>' in html
     d = client.get("/api/flow").json()
     assert d["running"] is False and d["working"] == []
-    assert d["waiting"] == {"brief_review": 2, "article_review": 1}
+    assert d["waiting"] == {"epic_review": 0, "brief_review": 2, "article_review": 1}
     assert d["parked"] == {"source_check": 1, "article_check": 0}
     assert d["states"]["r"] == "BRIEF_READY" and d["states"]["p"] == "PARKED"
     monkeypatch.setattr(ui, "loop_running", lambda: True)
@@ -330,3 +332,36 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     assert js.status_code == 200 and "class FlowStage" in js.text
     quiet = client.get("/m/b").text                                       # the mission page stays quiet:
     assert '<script src="/assets/researchers.js"' not in quiet and ' data-lab' not in quiet   # only the chat's guide, once opened
+
+def nav(html: str) -> str:
+    return html.split('<nav class="top">')[1].split("</nav>")[0]
+
+def test_play_pause_sits_beside_auto_on_every_page(client, monkeypatch):
+    store.save_mission(Mission(slug="b", topic="Outages"))
+    for route in ("/", "/published", "/settings", "/m/b"):
+        top = nav(client.get(route).text)
+        assert top.index('class="auto"') < top.index('class="loop-ctl"') < top.index("Missions")
+        assert 'action="/loop/start"' in top and 'class="play "' in top and "Loop off" in top
+    html = client.get("/").text
+    assert "Start loop" not in html and "Stop loop" not in html          # no longer in the Missions panel
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    top = nav(client.get("/settings").text)
+    assert 'action="/loop/stop"' in top and 'class="play on"' in top and "Running" in top and "disabled" not in top
+    assert "Check for work now" in client.get("/").text                  # waking stays with the panel
+    orchestrator.STOP_FLAG.parent.mkdir(parents=True, exist_ok=True); orchestrator.STOP_FLAG.touch()
+    top = nav(client.get("/").text)
+    assert "Stopping" in top and " disabled>" in top                     # nothing to press while it stops
+
+def test_play_starts_the_loop_with_the_saved_rest_and_goes_back(client, monkeypatch):
+    started = []
+    monkeypatch.setattr(ui, "start_loop", lambda every: started.append(every))
+    assert 'name="every" value="5"' in nav(client.get("/").text)
+    r = client.post("/settings/loop-every", data={"every": "12"}, follow_redirects=False)
+    assert r.headers["location"] == "/settings?done=every_saved" and settings.loop_every() == 12
+    assert 'name="every" value="12"' in nav(client.get("/published").text)
+    r = client.post("/loop/start", data={"back": "/published"}, follow_redirects=False)
+    assert started == [12.0] and r.headers["location"] == "/published?done=started"
+    assert "error=every" in client.post("/settings/loop-every", data={"every": "soon"}, follow_redirects=False).headers["location"]
+    client.post("/settings/loop-every", data={"every": "5"})
+    assert settings.saved() == {}                                        # the default is not stored
+    assert client.post("/settings/loop-every", data={"every": "9"}, headers={"origin": "https://evil.example"}).status_code == 403

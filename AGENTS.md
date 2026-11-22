@@ -17,8 +17,8 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 396 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
+- Tests: `pytest -q` (expects 413 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -138,7 +138,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     filters by tag (an approved epic is called a tag on the site; `?tag=` in the address, so an article's tag pill
     links to its list), and an article page has a link back and its newer and older article, read from
     `feed.json` so pages written once stay current. `site/about/` shows the pipeline strip (`flowchart.py`, the
-    same strip the UI draws) playing a made-up run, a few seconds per stage with both workers busy
+    same snake the UI draws, always with the human reviews: auto mode is the UI's own switch) playing a made-up run, a few seconds per stage with both workers busy
     (`assets/about.js` drives it through `assets/flow.js`; `data-demo` means nothing is polled), says what each
     agent does (`render.AGENT_NOTES`), and has a floor where a researcher or two drops by for a short visit and
     says something (`window.RESEARCHERS_PACE`). Rebuilding the index rewrites it and copies those three scripts to
@@ -205,6 +205,14 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
     article it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
     holds that wait and the last failure, which the UI and `status` show.
+- Auto mode: the switch at the top of every UI page (or `python run.py auto on|off`; `settings.auto_mode`, saved in
+  `data/settings.json` only while on) approves everything except publishing. `orchestrator.auto_approve` approves
+  every brief waiting for review and every proposed epic (the Theorist's and the finder's), logged "by auto mode";
+  the loop runs it at the top of every sweep, so a new brief moves on within seconds, and an epic with a mission a
+  worker is busy with waits for a later sweep. Turning it on approves what already waits right away, and a brief
+  pushed through while it is on is approved too. Articles are never touched: publishing always waits for
+  `review`. No "brief ready" notification is sent while it is on. The flow chart draws the two reviews it takes over
+  as green "Auto-approve epics" and "Auto-approve brief" steps; every code check and the article review stay as they are.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
@@ -259,21 +267,37 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
-the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
+the finder's inspiration line and to wake the loop. The top bar of every page has the Auto switch and, beside
+it, the loop's play/pause button with its state (`ui.loop_button`): play starts the loop, which runs in the
+background, logs to `data/loop.log` and rests `settings.loop_every` minutes when idle (the Loop field on the
+Settings page, default 5); pause asks it to stop after the agent at work saves (disabled while it stops). "Check for
+work now" stays in the Missions page's loop panel while the loop runs.
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
 progress closest to published first (publishing, writing, briefs, searches) and new missions last. Publishing
 there is one card (`ui.queue_card`): how many articles are queued and for which places, leading to the queue on
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection and
-Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection, the loop's rest between
+looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
-unlit while the loop is off: agents on a track in runtime order (publishing is one step, whatever the channels), each code check a vertical block right after the
-agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
-check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
+unlit while the loop is off, as a snake (`flowchart.track`, `flowchart.lanes`, which `ui.flow_strip` and the About page share): the steps in runtime order are cut into
+lanes at each human review. Lane 0 runs left to right from the top left (the Theorist) to the first review, a
+square end on the right; lane 1 comes back right to left one level lower to the next review on the left; and so on,
+each review spanning the two lanes it joins, so the snake turns through it; the last lane (Publish alone, one step
+whatever the channels) ends bottom left. Agents are tiles with an icon and a line saying what they do (`flowchart.TILES`),
+each code check a narrow shield tile right after the agent it checks (with a red count of missions parked there),
+and each review shows how many missions wait on you. Researchers on the strip stand on their own step's row
+(`FlowStage.row`). Every code check is on it (`flowchart.CHECKS`, whose
+titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
+the 2+ missions rule for an epic), which drop what fails and park nothing; the contact check, with Contacts, only
+while outreach is on; the source check and the article check. So is every human review: the epics both the Theorist
+and the finder propose (after the finder's check), the brief and the article. In auto mode exactly two of them,
+the epic and brief reviews (`flowchart.AUTO_STEPS`), are drawn as automatic instead ("Auto-approve epics", "Auto-approve
+brief": green, a bolt, no count); every check and the article review stay as they are. The strip's `data-shape`
+marks the automatic ones, so an open page redraws the strip when the switch flips. The steps working right now are lit, one per
 busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
 s and relights the strip in place, and the mission cards below with it (green outline, "working on this now",
 researcher visitors), one per busy worker, so they never wait on the page refresh, which holds off while you type or
@@ -318,6 +342,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Stop | `python run.py stop` (finishes the current task first) |
 | Read a brief / article | `python run.py show <slug>`; the article preview is `missions/<slug>/preview.html` |
 | Approve a brief | `python run.py approve <slug>` |
+| Approve every brief and new epic automatically (never publishing) | the Auto switch at the top of the UI, or `python run.py auto on` (`off` to stop) |
 | Publish an article | `python run.py review <slug>`; while the loop runs it is published within seconds, even mid-task |
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |

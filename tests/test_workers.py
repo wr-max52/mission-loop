@@ -259,8 +259,8 @@ def test_dashboard_shows_both_workers_at_once(client, monkeypatch):
     activity.work_as(activity.DESK)
     html = client.get("/").text
     assert html.count(' on" data-step') == 2 and html.count('class="card active"') == 2   # both steps lit on the strip
-    assert '<span class="step on" data-step="sources" title="Source finder" aria-current="step" data-worker="assistant">Sources</span>' in html
-    assert '<span class="step on" data-step="writer" title="Article writer" aria-current="step" data-worker="pi">Article</span>' in html
+    assert '<span class="step on" data-step="sources" title="Source finder" aria-current="step" data-worker="assistant">' in html
+    assert '<span class="step on" data-step="writer" title="Article writer" aria-current="step" data-worker="pi">' in html
     assert '<span class="who">Principal Investigator</span> <strong>Article writer</strong>' in html
     assert '<a class="card active" href="/m/w" data-lab="busy" data-worker="pi">' in html
     assert "Now: <strong>Source finder</strong>" in client.get("/settings").text
