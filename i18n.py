@@ -42,8 +42,3 @@ def english():
         yield
     finally:
         _forced.reset(token)
-
-def lines_script() -> str:
-    """The <script> that gives the pixel researchers their lines in the UI's language (none for English)."""
-    code = current()
-    return f'<script src="/assets/lines/{code}.js"></script>' if code != "en" and (LINES / f"{code}.js").exists() else ""

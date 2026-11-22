@@ -121,6 +121,8 @@ async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[
     system = SEARCH.format(inspiration=inspiration, today=today, angle_1=angle_1, angle_2=angle_2,
                            existing=listed, searches=MAX_SEARCHES)
     async with toolbox_factory(["search"]) as tb:
+        if getattr(tb, "skipped", {}).get("search"):
+            raise FinderFailed(f"web search is off on this machine: {tb.skipped['search']} (see Settings → Setup)")
         messages = await tool_loop(system, tb, MAX_SEARCHES, TIME_LIMIT)
     results = _search_results(messages)
     if not results:

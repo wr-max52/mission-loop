@@ -3,7 +3,7 @@ was made from, and the missions and articles linked to it), then the published a
 word overlap in code (no model). Research sees them as background and leads, never as sources: the site never
 leaves this machine, so they can't be fetched or cited. The pages they cited can be fetched again and cited
 fresh."""
-import store
+import board, store
 from contracts import Mission, State, ResearchBrief, Article, words
 
 MAX_RELATED = 3                            # articles shown; the small search model has a small context
@@ -89,6 +89,10 @@ def reference_block(m: Mission) -> str:
 def similar_block(m: Mission) -> str:
     """The closest published articles, or "" when nothing published is close."""
     found = similar_published(m)
+    try:                                   # the cork board strings the mission to what research was shown
+        board.record_background(m.slug, [other.slug for other, _, _ in found])
+    except Exception as e:
+        print(f"board background for {m.slug} failed: {type(e).__name__}: {e}", flush=True)
     if not found:
         return ""
     lines = ["\nThe desk's earlier published articles closest to this mission. They are background only: never",

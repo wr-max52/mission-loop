@@ -8,7 +8,8 @@ from contracts import ArticlePlan, Claim, Mission, PlannedSection, RejectedArtic
 
 M = Mission(slug="w", topic="Heat pumps")
 BRIEF = stub_brief(M)
-PLAN = ArticlePlan(title="Do heat pumps hold up?", dek="A look at the record.", sections=[
+PLAN = ArticlePlan(title="Do heat pumps hold up?", dek="A look at the record.",
+                   claim="**Heat pumps** hold up in the cold, the record shows [s1].", sections=[
     PlannedSection(heading="Finding", point="The thesis", claims=[1]),
     PlannedSection(heading="The record", point="What the sources show"),
     PlannedSection(heading="The other side", point="The counterpoint", counterpoint=True)])
@@ -153,3 +154,42 @@ async def test_a_section_citing_a_source_by_its_url_is_given_the_id(monkeypatch,
     a = await writer.run_writer(m, BRIEF, [])
     assert "[s1]" in a.sections[0].paragraphs[0] and "https://" not in a.sections[0].paragraphs[0]
     assert len(seen) == 4                  # fixed by code, so no round of feedback was needed
+
+# --- the claim at the top, the story first, the fine print last, bold key words -----------------------------
+
+async def test_the_article_carries_the_plans_claim_box(monkeypatch, m):
+    fake(monkeypatch)
+    a = await writer.run_writer(m, BRIEF, [])
+    assert a.claim == PLAN.claim
+
+async def test_a_plan_without_a_claim_box_is_asked_for_one(monkeypatch, m):
+    bare = PLAN.model_copy(update={"claim": ""})
+    seen = fake(monkeypatch, [bare, PLAN, section("Finding"), section("The record"), section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert "The claim at the top is empty" in seen[1]["last"] and a.claim == PLAN.claim
+
+async def test_a_claim_box_still_failing_after_its_fix_is_left_out(monkeypatch, m):
+    uncited = PLAN.model_copy(update={"claim": "Heat pumps hold up."})
+    seen = fake(monkeypatch, [uncited, uncited, section("Finding"), section("The record"),
+                              section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert "The claim at the top has no citation" in seen[1]["last"]
+    assert a.claim == "" and len(a.sections) == 3        # the article opens without a box instead of failing
+
+async def test_code_tidies_bold_where_it_cannot_show(monkeypatch, m):
+    loud = PLAN.model_copy(update={"title": "Do **heat pumps** hold up?", "dek": "**Why** it matters.",
+                                   "claim": "**Heat pumps hold up [s1]."})
+    stray = Section(heading="Finding", paragraphs=["**The county paid twice [s1]. " * 12])
+    fake(monkeypatch, [loud, stray, section("The record"), section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert a.title == "Do heat pumps hold up?" and a.dek == "Why it matters."
+    assert a.claim == "Heat pumps hold up [s1]." and "**" not in a.sections[0].paragraphs[0]
+
+async def test_the_opening_tells_a_story_and_the_last_section_is_the_fine_print(monkeypatch, m):
+    seen = fake(monkeypatch)
+    await writer.run_writer(m, BRIEF, [])
+    first, middle, last = (c["last"] for c in seen[1:])
+    assert "This is the opening. Start with a short scene" in first
+    assert "This section is evidence" in middle
+    assert "This is the last section: the fine print" in last
+    assert "**double asterisks**" in seen[0]["system"] and "plain language" in seen[0]["system"]

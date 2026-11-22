@@ -5,14 +5,15 @@ from email.utils import format_datetime
 from html import escape
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
-import flowchart, wayback
+import flowchart, settings, wayback
 from icons import icon
-from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
+from contracts import ResearchBrief, Article, BOLD, CITATION, POSSIBILITY, cited_ids, unbold
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
 UNCHECKED_FACTS_HEADING = "Claimed facts (this brief failed the source check)"
 POSSIBILITIES_HEADING = "Possibilities (not verified)"
 POSSIBILITY_LABEL = "Possibility, not verified"
+CLAIM_LABEL = "The claim"                  # the box above an article: its big idea in plain words
 
 def _claims_of(b: ResearchBrief, kind: str) -> list:
     return [c for c in b.claims if c.kind == kind]
@@ -23,7 +24,7 @@ def _archived(url: str) -> str:
     return f' <span class="stance">(archived copy, {day})</span>' if day else ""
 
 def _has_possibility(a: Article) -> bool:
-    return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
+    return bool(POSSIBILITY.search(a.claim)) or any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
 
 UNSOURCED = " (No source found makes this case.)"
 
@@ -51,10 +52,13 @@ def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
 def article_markdown(slug: str, b: ResearchBrief, a: Article) -> str:
     lines = ["---", f"slug: {slug}", f"title: {a.title}", f"dek: {a.dek}", "---", "",
              f"# {a.title}", "", f"*{a.dek}*", ""]
+    label = lambda text: POSSIBILITY.sub(lambda m: f"**[{POSSIBILITY_LABEL}]** {m.group(0)}", text)
+    if a.claim:
+        lines += [f"> **{CLAIM_LABEL}:** {label(a.claim)}", ""]
     for sec in a.sections:
         lines += [f"## {sec.heading}", ""]
         for p in sec.paragraphs:
-            lines += [POSSIBILITY.sub(lambda m: f"**[{POSSIBILITY_LABEL}]** {m.group(0)}", p), ""]
+            lines += [label(p), ""]
     lines += ["## Sources", ""]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
     return "\n".join(lines) + "\n"
@@ -63,11 +67,10 @@ def _source_numbers(b: ResearchBrief, a: Article) -> dict[str, int]:
     """Number sources in order of first citation; uncited sources go last."""
     known = {s.id for s in b.sources}
     order: list[str] = []
-    for sec in a.sections:
-        for p in sec.paragraphs:
-            for sid in cited_ids(p):
-                if sid in known and sid not in order:
-                    order.append(sid)
+    for p in [a.claim] + [p for sec in a.sections for p in sec.paragraphs]:     # reading order, the box first
+        for sid in cited_ids(p):
+            if sid in known and sid not in order:
+                order.append(sid)
     order += [s.id for s in b.sources if s.id not in order]
     return {sid: n for n, sid in enumerate(order, 1)}
 
@@ -120,6 +123,10 @@ ul.connected .why { color: var(--muted); font-size: .9rem; }
 ol.sources li { margin-bottom: 1rem; }
 ol.sources blockquote { margin: .35rem 0 0; padding: .5rem .75rem; background: var(--quote);
                         border-left: 3px solid var(--rule); }
+aside.claim { margin: 0 0 1.75rem; padding: .9rem 1.1rem; background: var(--quote);
+              border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0; }
+aside.claim p { margin: .3rem 0 0; font-size: 1.15rem; line-height: 1.5; }
+aside.claim > .stance { color: var(--accent); }
 .stance { font: 600 0.7rem -apple-system, system-ui, sans-serif; text-transform: uppercase;
           letter-spacing: .06em; color: var(--muted); }
 .note { font: 0.85rem/1.5 -apple-system, system-ui, sans-serif; color: var(--muted);
@@ -200,7 +207,7 @@ def _page(title: str, body: str, home: str, head: str = "", nav: str | None = No
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>{escape(title)}</title>{head}{THEME_INIT}<style>{CSS}</style></head>\n"
-            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">Mission Loop</a>{links}"
+            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">{escape(settings.publication_name())}</a>{links}"
             f"{THEME_TOGGLE}</header>\n{body}\n</main></body></html>\n")
 
 def epic_pill(title: str, proposed: bool = False, href: str = "") -> str:
@@ -235,7 +242,8 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
         return f'<span class="stance">{POSSIBILITY_LABEL}</span> {match.group(0)}'
 
     def para(text: str) -> str:
-        return POSSIBILITY.sub(label, CITATION.sub(cite, escape(text, quote=False)))
+        bold = BOLD.sub(r"<strong>\1</strong>", escape(text, quote=False))
+        return POSSIBILITY.sub(label, CITATION.sub(cite, bold))
 
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
     failed = "" if brief_checked and article_checked else " · Failed automated checks"
@@ -243,6 +251,8 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
     back = f'<a class="back" href="{home}">&larr; All articles</a>' if slug else ""
     body = [f"{back}<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
             f'<p class="meta">{pill + " " if epic else ""}{when} · {len(b.sources)} sources{failed}</p>']
+    if a.claim:
+        body.append(f'<aside class="claim"><span class="stance">{CLAIM_LABEL}</span><p>{para(a.claim)}</p></aside>')
     for sec in a.sections:
         body.append(f"<h2>{escape(sec.heading)}</h2>")
         body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
@@ -317,6 +327,8 @@ def article_text(b: ResearchBrief, a: Article, brief_checked: bool = True, artic
     lines = [a.dek, ""]
     if not (brief_checked and article_checked):
         lines += ["[Failed automated checks: see the note at the end.]", ""]
+    if a.claim:
+        lines += [f"{CLAIM_LABEL}: {para(a.claim)}", ""]
     for sec in a.sections:
         lines += [f"## {sec.heading}", ""]
         for p in sec.paragraphs:
@@ -344,12 +356,13 @@ def index_html(entries: list[dict]) -> str:
         chips += [f'<a href="{escape(tag_href("./", t))}" data-tag="{escape(t)}">{escape(t)}<span>{n}</span></a>'
                   for t, n in sorted(counts.items(), key=lambda kv: kv[0].lower())]
         tags = f'<nav class="tags" aria-label="Filter by tag">{"".join(chips)}</nav>{TAGS_JS}'
-    body = "<h1>Published</h1>" + tags + (f'<ul class="index">{"".join(items)}</ul>' if items
-                                          else "<p>Nothing published yet.</p>")
+    name, line = escape(settings.publication_name()), settings.tagline()
+    body = ("<h1>Published</h1>" + (f'<p class="dek">{escape(line)}</p>' if line else "") + tags
+            + (f'<ul class="index">{"".join(items)}</ul>' if items else "<p>Nothing published yet.</p>"))
     body += '<p class="meta">Subscribe: <a href="feed.xml">RSS</a> · <a href="feed.json">JSON Feed</a></p>'
-    head = ('<link rel="alternate" type="application/rss+xml" title="Mission Loop" href="feed.xml">'
-            '<link rel="alternate" type="application/feed+json" title="Mission Loop" href="feed.json">')
-    return _page("Mission Loop", body, "./", head, nav="articles")
+    head = (f'<link rel="alternate" type="application/rss+xml" title="{name}" href="feed.xml">'
+            f'<link rel="alternate" type="application/feed+json" title="{name}" href="feed.json">')
+    return _page(settings.publication_name(), body, "./", head, nav="articles")
 
 # Shows only the articles with the chosen tag, and keeps it in the address (?tag=) so it can be linked to.
 TAGS_JS = """<script>
@@ -419,7 +432,8 @@ AGENT_NOTES = [
     ("Reviews", "a human",
      "A person approves every brief or sends it back with notes, and reads every article before it is published."),
     ("Article writer", "Principal Investigator",
-     "Writes the article from the approved brief, labeling each possibility \u201cPossibility, not verified\u201d."),
+     "Writes the article from the approved brief in plain words: the claim up top, a short story, the evidence, "
+     "the other side, then the fine print, labeling each possibility \u201cPossibility, not verified\u201d."),
     ("Publisher", "code, no model",
      "Writes the article to this site, updates the feeds and passes it on to the other places it appears."),
 ]
@@ -441,11 +455,14 @@ def about_html() -> str:
              f'<div class="now"></div></section>')
     agents = "".join(f"<dt>{escape(name)}<small>{escape(who)}</small></dt><dd>{escape(text)}</dd>"
                      for name, who, text in AGENT_NOTES)
-    body = ("<h1>About</h1>"
-            "<p>Mission Loop is a small research desk run by AI agents, with a human editor. Every article starts "
-            "as a mission, a question worth answering, and moves along the line below, turning at each review. Code checks "
-            "the agents' work at each step, and nothing is published until a person has approved the research "
-            "and read the article.</p>"
+    name = settings.publication_name()
+    own = settings.about_statement()
+    intro = ("".join(f"<p>{escape(p)}</p>" for p in own.split("\n\n")) if own else
+             f"<p>{escape(name)} is a small research desk run by AI agents, with a human editor.</p>")
+    body = ("<h1>About</h1>" + intro +
+            "<p>Every article starts as a mission, a question worth answering, and moves along the line below, turning "
+            "at each review. Code checks the agents' work at each step, and nothing is published until a person has "
+            "approved the research and read the article.</p>"
             f"{strip}"
             '<p class="legend">Green: working now. Striped blocks: checks done by code. Dashed: a human review.</p>'
             "<h2>Who does what</h2>"
@@ -459,12 +476,15 @@ def about_html() -> str:
             '<script src="../assets/researchers.js" defer></script>'
             '<script src="../assets/flow.js" defer></script>'
             '<script src="../assets/about.js" defer></script>')
-    return _page("About · Mission Loop", body, "../", head, nav="about")
+    return _page(f"About · {name}", body, "../", head, nav="about")
 
 # ---------- feeds: the same entries as the index, with full text ----------
 
-FEED_TITLE = "Mission Loop"
-FEED_DESCRIPTION = "Every article Mission Loop has published, with its sources."
+def feed_title() -> str:
+    return settings.publication_name()
+
+def feed_description() -> str:
+    return settings.tagline() or f"Every article {settings.publication_name()} has published, with its sources."
 
 def _base(site_url: str) -> str:
     return site_url.rstrip("/") + "/" if site_url else ""
@@ -479,7 +499,7 @@ def feed_json(entries: list[dict], site_url: str = "") -> str:
     """JSON Feed 1.1. Ids are the slugs, so they stay the same when a site URL is set later.
     Without a site URL, links are relative to the feed file."""
     base = _base(site_url)
-    feed = {"version": "https://jsonfeed.org/version/1.1", "title": FEED_TITLE, "description": FEED_DESCRIPTION}
+    feed = {"version": "https://jsonfeed.org/version/1.1", "title": feed_title(), "description": feed_description()}
     if base:
         feed |= {"home_page_url": base, "feed_url": base + "feed.json"}
     feed["items"] = [{"id": e["slug"], "url": f'{base}{e["slug"]}/', "title": e["title"], "summary": e["dek"],
@@ -493,7 +513,7 @@ def feed_xml(entries: list[dict], site_url: str = "") -> str:
     ET.register_namespace("content", content)
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
-    for tag, value in (("title", FEED_TITLE), ("link", base or "./"), ("description", FEED_DESCRIPTION)):
+    for tag, value in (("title", feed_title()), ("link", base or "./"), ("description", feed_description())):
         ET.SubElement(channel, tag).text = value
     for e in entries:
         item = ET.SubElement(channel, "item")

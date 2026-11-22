@@ -1,7 +1,7 @@
 import json, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from contracts import Mission, Epic, Link, Combine, epic_title, slugify
+from contracts import Mission, Epic, Link, Combine, BoardNote, Mention, epic_title, slugify
 
 DB = Path("data/loop.db")
 INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder, which the Theorist evolves
@@ -49,6 +49,11 @@ def last_theory() -> dict:
         return {}
     return data if isinstance(data, dict) else {}
 
+def last_ideas() -> dict:
+    """The Theorist's last turn that looked across the desk (not a board turn), or {}."""
+    last = last_theory()
+    return (last.get("ideas") or {}) if last.get("kind") == "board" else last
+
 def save_theory(data: dict) -> None:
     THEORY.parent.mkdir(parents=True, exist_ok=True)
     THEORY.write_text(json.dumps(data))
@@ -75,6 +80,10 @@ def init():
             a TEXT, b TEXT, data TEXT NOT NULL, PRIMARY KEY (a, b));
         CREATE TABLE IF NOT EXISTS combines(
             slug TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS board(
+            kind TEXT, id TEXT, data TEXT NOT NULL, PRIMARY KEY (kind, id));
+        CREATE TABLE IF NOT EXISTS mentions(
+            a TEXT, b TEXT, kind TEXT, data TEXT NOT NULL, PRIMARY KEY (a, b, kind));
         """)
 
 def save_mission(m: Mission):
@@ -212,3 +221,51 @@ def all_combines(status: str | None = None) -> list[Combine]:
     rows = conn().execute("SELECT data FROM combines ORDER BY rowid").fetchall()
     found = [Combine.model_validate_json(r["data"]) for r in rows]
     return [c for c in found if status in (None, c.status)]
+
+# ---------- the cork board: note positions and the mentions code found ----------
+
+def board_notes() -> dict[tuple[str, str], BoardNote]:
+    rows = conn().execute("SELECT data FROM board ORDER BY rowid").fetchall()
+    notes = [BoardNote.model_validate_json(r["data"]) for r in rows]
+    return {(n.kind, n.id): n for n in notes}
+
+def save_board_note(n: BoardNote) -> BoardNote:
+    with conn() as c:
+        c.execute("INSERT INTO board VALUES (?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data",
+                  (n.kind, n.id, n.model_dump_json()))
+    return n
+
+def delete_board_note(kind: str, id_: str) -> None:
+    with conn() as c:
+        c.execute("DELETE FROM board WHERE kind = ? AND id = ?", (kind, id_))
+
+def save_mention(k: Mention) -> Mention:
+    k.a, k.b = _pair(k.a, k.b)
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO mentions VALUES (?, ?, ?, ?)", (k.a, k.b, k.kind, k.model_dump_json()))
+    return k
+
+def delete_mentions(slug: str, kinds: tuple[str, ...]) -> None:
+    """Forget the mentions of these kinds that involve this mission (before code finds them again)."""
+    with conn() as c:
+        c.execute(f"DELETE FROM mentions WHERE (a = ? OR b = ?) AND kind IN ({','.join('?' * len(kinds))})",
+                  (slug, slug, *kinds))
+
+def replace_mentions(kinds: tuple[str, ...], found: list[Mention]) -> None:
+    """Forget every mention of these kinds and save the ones found, in one transaction (the board's backfill)."""
+    rows = []
+    for k in found:
+        k.a, k.b = _pair(k.a, k.b)
+        rows.append((k.a, k.b, k.kind, k.model_dump_json()))
+    with conn() as c:
+        c.execute(f"DELETE FROM mentions WHERE kind IN ({','.join('?' * len(kinds))})", kinds)
+        c.executemany("INSERT OR REPLACE INTO mentions VALUES (?, ?, ?, ?)", rows)
+
+def delete_mention(a: str, b: str, kind: str) -> None:
+    a, b = _pair(a, b)
+    with conn() as c:
+        c.execute("DELETE FROM mentions WHERE a = ? AND b = ? AND kind = ?", (a, b, kind))
+
+def all_mentions() -> list[Mention]:
+    rows = conn().execute("SELECT data FROM mentions ORDER BY rowid").fetchall()
+    return [Mention.model_validate_json(r["data"]) for r in rows]

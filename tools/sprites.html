@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sprite studio</title>
+<!-- The sprite studio: try a sprite spec (SPRITES.md) against the real renderer. In the app it is at /sprites
+     (Settings, Avatars, Open the sprite studio). On its own, serve the repo and open /tools/sprites.html:
+     python -m http.server 8765   then   http://127.0.0.1:8765/tools/sprites.html -->
+<style>
+  :root { --bg: #faf8f3; --panel: #ffffff; --fg: #1d1b22; --muted: #6b6772; --rule: #e4e0d8; --bad: #b3261e; --good: #2f7d46; --floor: #efece5; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #17161b; --panel: #1f1e24; --fg: #ecebf0; --muted: #a29fab; --rule: #34323b; --bad: #ff8a80; --good: #7fd49a; --floor: #26252c; } }
+  :root[data-theme="dark"] { --bg: #17161b; --panel: #1f1e24; --fg: #ecebf0; --muted: #a29fab; --rule: #34323b; --bad: #ff8a80; --good: #7fd49a; --floor: #26252c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  textarea { width: 100%; height: 460px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--panel); color: var(--fg); border: 1px solid var(--rule); border-radius: 8px; padding: 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  figure { margin: 0; background: var(--floor); border-radius: 8px; padding: 6px 6px 2px; text-align: center; }
+  figcaption { font: 11px ui-monospace, monospace; color: var(--muted); }
+  canvas { image-rendering: pixelated; display: block; margin: 0 auto; }
+  #errors { margin: 8px 0 0; padding-left: 18px; color: var(--bad); font: 12px ui-monospace, monospace; }
+  #status { font: 12px ui-monospace, monospace; }
+  .ok { color: var(--good); } .bad { color: var(--bad); }
+  .cast { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cast label { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); cursor: pointer; font-size: 11px; }
+  .cast label.off canvas { opacity: .35; filter: grayscale(1); }
+  button, select { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--panel); color: var(--fg); }
+</style>
+</head>
+<body>
+<!--back-->
+<h1>Sprite studio</h1>
+<p>Edit a sprite spec and see it in the real renderer. The rules are in <code>SPRITES.md</code>; the example is <code>tools/example-sprite.json</code>.</p>
+<div class="grid">
+  <div>
+    <div class="row" style="align-items:center;margin-bottom:8px">
+      <label>Start from <select id="base"></select></label>
+      <button id="reset">Example</button>
+      <span id="status"></span>
+    </div>
+    <textarea id="spec" spellcheck="false" aria-label="Sprite spec (JSON)"></textarea>
+    <ul id="errors"></ul>
+  </div>
+  <div>
+    <h2>Poses</h2>
+    <div class="row" id="poses"></div>
+    <h2>Quirk</h2>
+    <div class="row" id="quirk"></div>
+    <h2>Cast (actual size, ×2)</h2>
+    <div class="cast" id="cast"></div>
+  </div>
+</div>
+<script src="../assets/researchers.js"></script>
+<script>
+(() => {
+  const R = window.Researchers, $ = id => document.getElementById(id);
+  const POSES = [["rest", 0.5], ["walk", 0.2], ["walk", 0.45], ["read", 1], ["typing", 1], ["eureka", 0.7], ["confused", 0.3], ["sleep", 1.3], ["wave", 0.3]];
+  const off = new Set();
+  let example = { base: "mei", name: "New sprite" };
+
+  function figure(host, spec, action, t, scale, label) {
+    const f = document.createElement("figure"), c = document.createElement("canvas"), cap = document.createElement("figcaption");
+    const res = R.renderSprite(c, spec, { action, t, scale, seed: 11 });
+    c.style.width = c.width + "px";
+    cap.textContent = label;
+    f.append(c, cap); host.append(f);
+    return res;
+  }
+  function draw() {
+    let spec;
+    try { spec = JSON.parse($("spec").value); } catch (e) { return show([`JSON: ${e.message}`]); }
+    const v = R.validateSprite(spec);
+    show(v.errors);
+    $("poses").replaceChildren(); $("quirk").replaceChildren();
+    if (!v.ok) return cast(null);
+    for (const [a, t] of POSES) figure($("poses"), spec, a, t, 3, `${a} ${t}s`);
+    const dur = (v.sprite.quirk && v.sprite.quirk.dur) || 2;
+    for (let i = 0; i < 5; i++) { const t = +(dur * (i + 0.5) / 5).toFixed(2); figure($("quirk"), spec, "quirk", t, 3, `${t}s`); }
+    cast(spec);
+  }
+  function show(errors) {
+    $("errors").replaceChildren(...errors.map(e => Object.assign(document.createElement("li"), { textContent: e })));
+    $("status").className = errors.length ? "bad" : "ok";
+    $("status").textContent = errors.length ? `${errors.length} to fix` : "follows the rules";
+  }
+  function cast(spec) {                          // like the planned on/off panel: tiny renders, click to switch off
+    const host = $("cast"); host.replaceChildren();
+    const keys = R.CAST.slice();
+    const items = keys.map(k => [k, k, R.ROSTER[k].name]);
+    if (spec) items.push(["preview", spec, spec.name || "preview"]);
+    for (const [key, sprite, name] of items) {
+      const l = document.createElement("label"), c = document.createElement("canvas");
+      R.renderSprite(c, sprite, { scale: 2, seed: 5 });
+      c.style.width = c.width + "px";
+      l.className = off.has(key) ? "off" : "";
+      l.title = off.has(key) ? `${name} is off` : `${name} is on`;
+      l.append(c, document.createTextNode(name));
+      l.addEventListener("click", () => { off.has(key) ? off.delete(key) : off.add(key); R.setSpriteEnabled(key, !off.has(key)); cast(spec); });
+      host.append(l);
+    }
+  }
+  for (const k of R.CAST) $("base").append(new Option(R.ROSTER[k].name, k));
+  $("base").addEventListener("change", () => {
+    let spec = {}; try { spec = JSON.parse($("spec").value); } catch (e) { /* start over */ }
+    spec.base = $("base").value; $("spec").value = JSON.stringify(spec, null, 2); draw();
+  });
+  $("reset").addEventListener("click", () => { $("spec").value = JSON.stringify(example, null, 2); draw(); });
+  let wait; $("spec").addEventListener("input", () => { clearTimeout(wait); wait = setTimeout(draw, 250); });
+  fetch("example-sprite.json").then(r => r.ok ? r.json() : example).catch(() => example)
+    .then(ex => { example = ex; $("spec").value = JSON.stringify(ex, null, 2); $("base").value = ex.base; draw(); });
+})();
+</script>
+</body>
+</html>

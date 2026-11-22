@@ -11,17 +11,19 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+`data/providers.json` the cloud model providers' API keys and `data/search.json` the Brave Search key: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
-  combines approve-combine reject-combine link unlink`
-- Tests: `pytest -q` (expects 536 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
-  custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
-  `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
+- First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
+  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
+- CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+  combines approve-combine reject-combine link unlink library`
+- Tests: `pytest -q` (expects 687 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+  custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
+  `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
   providers' keys, the 1F916 and Bluesky servers, the GitHub server and OAuth app, and the site address are looked
   up in `data/settings.json` (the
@@ -49,6 +51,27 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   no Ollama. "Connect Ollama" on the Settings page is the one-click start for a fresh clone: it checks Ollama
   answers and gives each worker without a model one of the installed ones (biggest to the PI, smallest to the
   Research Assistant; never overwrites a choice). Researcher Chat's picker lists cloud models too.
+- Setup check (`doctor.py`): one list of what this machine still needs, each with how to fix it: a model for each
+  worker that's on, those models answering (`deep=True` asks `llm.ready`, else Ollama's quick `llm.connection` and
+  whether a cloud provider has a key), the Brave key, `npx` and `uvx` (from `toolbox.server_status`), and something to
+  work on (a mission or an inspiration line). `python run.py doctor` prints it (exit 1 while a model is missing), the
+  Settings page's Setup section shows it, Researcher Chat reads it (`setup_status`), and the home page's Get started
+  card (`ui.setup_card`) walks through it: Connect Ollama (or links to get Ollama or add a cloud key), the Brave key
+  (checked with Brave by `doctor.check_search_key`, `TRANSPORT` for tests; offline it is saved with a note, a refusal
+  is not saved), an inspiration line with example lines (`ui.INSPIRATIONS`) or Add a mission, then play. The card goes
+  once every check passes, or when hidden (`settings.setup_dismissed`; Settings → Setup brings it back). It never
+  blocks anything. Every CLI command creates the database first (`run._start`), `ui` refuses a port with a live
+  listener (`run._port_free`) and writes the site's index and About page when `site/` has none, so `/site/` and the
+  top bar's About (`/about`) work before anything is published.
+- An honest loop: play (and Add and start loop) asks `agents.ready` first (`ui.can_start`) and refuses with the
+  reason. A running loop that can't work records why in `data/waiting.json` (`doctor.set_waiting`, logged once per
+  reason) and checks again every `run.WAIT_RETRY` (30 s) instead of resting; the top bar then says Waiting (amber,
+  the reason on hover) instead of Running, and the loop panel says what to fix. It is cleared when the loop can work
+  or stops.
+- Personalization: Settings → Publication sets the published site's name (`settings.publication_name`, default
+  "Mission Loop"), a tagline (under the index's heading and as the feeds' description) and an About statement (its
+  paragraphs open the About page, else the built-in line). Saving redraws every published page, the index, the About
+  page and the feeds (`orchestrator.refresh_site`). Nothing is stored at the defaults.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -78,8 +101,13 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   straight away); when no worker has anything left, the loop rests (`--every` minutes, or until the UI wakes
   it). A step that raises is logged on its mission and skipped until the loop starts again; the others go on.
   `run.py loop` sends its notifications after every model task.
-- Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. One structured call on the
-  Principal Investigator's model, no tools: it reads every epic with its latest missions, the missions in no epic,
+- Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. On the Principal Investigator's
+  model: first it searches the desk's library (see Library below; code looks up the inspiration line itself, then the
+  Theorist may run up to `LOOKUPS` (4) searches of its own, all in `LOOKUP_TIME`, 4 minutes, through the `library` MCP
+  server), then one structured call with what it found (`findings_text`, within `findings_room()`: `FINDINGS_CHARS`,
+  or two searches at the Settings page's Top N, at most `FINDINGS_MAX`) and no tools. Stop is checked before each search,
+  and a search still running past `stopping.TURN_GRACE` is given up. A library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
+  it searched for is `Theory.lookups`, in `data/theory.json` and its notes. It reads every epic with its latest missions, the missions in no epic,
   the latest published articles with the possibilities they left open, the links and combines so far (and the ones
   a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
   why). It looks for patterns inside an epic and themes emerging across epics, and replies with those patterns, the
@@ -98,6 +126,17 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Run Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
+  Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
+  included) is a board turn instead (#69), unless a human asked for that turn, which is always for ideas: `agents.tidy_board` (`theorist.tidy_board`, the same model, one
+  structured call, no tools) reads the cork board as text with no style (every note's id, stage, title, x, y and
+  size, every string, and a rough character grid of where the clusters sit) and replies with note moves and sizes
+  and why; nothing about epics, missions, combines, links or the line. Code holds it to the board
+  (`theorist.settle_board`): known notes only, each once, at most `MAX_MOVES` (12), sizes clamped, positions kept
+  within `BOARD_MARGIN` of the board's edges, and a note dropped on another nudged to the nearest free spot; what
+  it drops is noted. `orchestrator.apply_board` saves the moves `by="theorist"` on the main thread between tasks
+  (it may move a note a human dragged) and keeps the last turn that looked across the desk under `"ideas"` in
+  `theory.json` (`store.last_ideas`), so the notes show the board turn and the turn before it. Its gating is the
+  same as any turn's.
 - Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
   so a worker saving the mission it is busy with can't save over one.
   - Links (`contracts.Link`, one row per pair, `a < b`): two missions kept separate but connected, with why: two open
@@ -122,6 +161,25 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
     is never proposed again. Research on the bigger mission gets each member's topic, objective and brief so far (or
     its last failed brief). A COMBINED mission is out of the flow (no role, not in progress, left out of the
     Theorist's desk) and its page links to the mission that took it over.
+- Library: `library.py` (code, no chat model), retrieval (RAG) over the desk's own work for the Theorist and
+  Researcher Chat, reached by agents only through its MCP server (`library_tools.py`, `library` in `mcp.json`, one
+  tool: `search_library(query, epic, mission)`). Its passages (`library.passages_of`): each mission's topic and
+  objective, its brief's thesis, each claim with the quotes it cites, counterpoint and uncited sources, and its
+  article's title and dek and sections (long ones cut into `CHUNK_CHARS` pieces), each indexed under its mission's
+  topic; nothing from outside the desk, so a passage is background, never a source. Lightweight: one SQLite file
+  (`data/library.db`, on this machine only), plain Python, no vector database or numpy (about 0.6 s a search at 3,600
+  passages with 768-dim vectors). It always ranks by words (BM25) and, with an embedding model, by meaning (cosine),
+  fused by reciprocal rank; no mission fills more than half the list while others match. The embedding model is
+  config (`settings.embed_model`: the Settings page's Library section, then `MISSION_LOOP_EMBED_MODEL`, else none, which
+  ranks by words only): an Ollama model (`/api/embed`) or `<provider>/<model>` for a connected provider with an
+  embeddings API (the OpenAI shape's `/embeddings`; `settings.PROVIDERS` marks Anthropic, DeepSeek and Groq
+  `"embed": False`). The Settings page checks a model with one embedding before saving it. How many passages a search
+  returns is a pick from `settings.TOP_N_CHOICES` (3, 5, 8, 10, 15, 20; default 5, `settings.library_top_n`). Every
+  search first syncs the index with the desk (`library.sync`: new passages added, changed or gone ones dropped, other
+  models' vectors dropped), then embeds what has no vector for at most `EMBED_TIME` (60 s); the rest ranks by words
+  until a later search or Index now on the Settings page (or `python run.py library`) embeds it. A failed embedding
+  call ranks by words and says why. Embedding calls are made there, not in `agents/llm.py` (which is for chat
+  models). Stub runs never embed. `library.TRANSPORT` lets tests block the network.
 - Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
@@ -186,7 +244,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py`, checked by `checks/article_check.py`, in steps: a plan (`ArticlePlan`: title,
-  dek, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section on its own,
+  dek, the claim box, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section
+  on its own,
   seeing the plan and the sections before it. Code checks each piece as soon as it is written
   (`article_check.plan_problems`, `section_problems`: citations, unknown ids, links, quotes not in a source
   quote, with the closest real one shown, possibilities it must carry, the counterpoint's citation) and sends back
@@ -195,7 +254,18 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   every finished section are saved on the mission (`Mission.article_draft`): a stop or crash resumes after the
   last saved section, and after a failed article check only the sections its notes name are rewritten (all of
   them for a problem not tied to one section), each shown its last version and its problems. A passed article,
-  a human's send-back and a push-through clear the draft. Articles cite sources by short id (`[s1]`).
+  a human's send-back and a push-through clear the draft.
+  The brief stays as it is; the article is for readers, so the prompts ask for plain language (short sentences,
+  active voice, no filler, each possibility said once with "It is possible that" and no extra hedging, since the
+  page labels it) in a fixed order: the claim box (`Article.claim`, 1 or 2 cited sentences: who did what and why
+  it matters, shown above the body as "The claim"), an opening section that starts with a short scene built only
+  from cited facts and then states the claim (`writer.OPENING`), the evidence (`EVIDENCE`), the counterpoint, and
+  the fine print last (`FINE_PRINT`: what the sources don't establish). The words that carry a claim (who did what)
+  are in `**bold**` (`contracts.BOLD`; rendered `<strong>`, kept as Markdown in the plain text copy). Code drops
+  bold from the title, dek and headings and stray asterisks (`contracts.tidy_bold`), and a quotation matches its
+  source with bold ignored. The claim box is checked like a paragraph (`article_check.claim_problems`); one still
+  failing after the plan's fix round is left out (`_settle_plan`), so it never fails the article. Articles written
+  before it have `claim` empty and no box. Articles cite sources by short id (`[s1]`).
   A source whose id isn't one (a model sometimes uses the URL) gets the next free `s<n>` whenever a brief
   or source pick is read (`ResearchBrief._short_ids`, `SourcePick._short_ids`, so saved briefs are fixed
   too), and each written section has a bracketed citation of a brief source's URL turned into its id
@@ -230,7 +300,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
     (`assets/about.js` drives it through `assets/flow.js`; `data-demo` means nothing is polled), says what each
     agent does (`render.AGENT_NOTES`), and has a floor where a researcher or two drops by for a short visit and
     says something (`window.RESEARCHERS_PACE`). Rebuilding the index rewrites it and copies those three scripts to
-    `site/assets/`. `about` and `assets` are the site's own folders, so no mission gets them as its slug
+    `site/assets/`, and starting the UI copies any that differ from the code's (`publisher.refresh_assets`), so an
+    updated script reaches the site without waiting for the next article. The UI serves `/assets` and `/site` with
+    `Cache-Control: no-cache` (`ui.FreshFiles`) and writes every script's address with a stamp of its contents
+    (`ui.asset`, `ui.script`: `/assets/researchers.js?v=1a2b3c4d`), so a browser never keeps drawing with an old script. `about` and `assets` are the site's own folders, so no mission gets them as its slug
     (`contracts.SITE_FOLDERS`).
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
     `CHANNELS` in `agents/__init__.py`; `agents.channels()` is those plus the custom ones). When the loop starts,
@@ -317,9 +390,16 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - `agents/__init__.py` is still the only switchboard. Validators never call the LLM.
 - Tools are MCP servers, always: a new agent tool goes in a small server module registered in `mcp.json`
   (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
-  so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`.
-- Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and looks things up on the
-  web: the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
+  so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`, which `toolbox.CONFIG`
+  finds next to the code whatever the working folder. A server this machine can't run is skipped, not fatal: its
+  command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty (the
+  search server's `BRAVE_API_KEY`, which `settings.search_key` also reads from `data/search.json`). `Toolbox.skipped`
+  says which and why; the finder stops with that reason instead of searching with no tool.
+- Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and the desk's findings, looks
+  things up on the web, and can do everything the Theorist can (read the desk as it does, search the library, evolve
+  the line, propose epics and combines, link missions, queue a mission, ask for its turn), through the Theorist's own
+  checks (`theorist.settle_epic`, `settle_combine`, `settle_links`) and the same orchestrator functions
+  (`orchestrator.propose_epic`, `propose_combine`, `link`, with `by="chat"`; proposals still wait for the human): the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
   `python run.py ask "..." [--model]`. It needs Ollama but not the loop, so it works with the loop stopped. The panel
   has a model picker (installed Ollama models that can call tools; the default is shared with the loop, any other is
   loaded beside it), and keeps the conversation, the unsent draft and a question still being answered in that
@@ -335,18 +415,22 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   short prompt that explains the app, at most 8 tool calls in 3 minutes, tool results cut to 2,500 characters (web
   pages and searches 4,000), only the last 4 messages the page sends back, no memory and nothing saved. Its tools
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
-  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`; `mission_status` names a mission's links and
-  combines, `theorist_notes` the Theorist's last combine and links), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
+  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
+  and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`, and
+  `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and
+  combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
   panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
-  `add_mission` and `set_mission_epic` only read the database, `data/activity.json`, the channels' state files, the
+  `add_mission`, `set_mission_epic` and the Theorist's moves only read the database, `data/activity.json`, the channels' state files, the
   trails and `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the
   UI's Add mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones
   included, in an epic like the Epic field on its page (`orchestrator.assign_epic`). Neither changes a mission's
   stage or work. The panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists).
   By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
   then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
-  reloading it.
+  reloading it. With no model chosen anywhere (a fresh clone) it uses the first installed model that can call tools,
+  else a connected cloud provider's first, so it can help with setup; with none at all it says how to get one.
 - Stopping and progress (`stopping.py`, `checkpoint.py`): the database otherwise changes only when a task ends,
   so long tasks save each finished piece the moment it is done through `checkpoint.save`, and the orchestrator
   writes it (`orchestrator.save_progress`, set up per worker task in `_as_worker`). A checkpoint writes only the
@@ -366,6 +450,40 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   Pieces are short, so whatever is in flight when stop is pressed usually finishes inside the grace
   (`TURN_GRACE` 30 s for a tool turn, `GRACE` 120 s for a reply). The UI's mission cards say how far saved work
   got ("Carrying on the paused search.", "1 of 3 sections written.").
+- Cork board (`board.py`, code, no model; `/board`, the Board button between Published and Settings): every
+  mission and epic as a sticky note on one zoomable cork board, joined by string (#66, #67). A note gets a position
+  the first time the board is read and keeps it (`board` table, `contracts.BoardNote`): a new epic takes the first
+  free spot on wide rings round the centre, a new mission the first free spot spiralling out from its epic's note
+  (missions in no epic round an Unsorted label, a combined mission's members round the mission that took them
+  over), the same desk always placed the same way. Size means importance: from its stage plus a little per string
+  (`STAGE_SIZE`, `PER_STRING`), unless a human or the Theorist set one (clamped to `SIZE_MIN`..`SIZE_MAX`). Strings
+  are never stored: epic to mission, the active links, and mentions (`mentions` table, `contracts.Mention`, never on
+  the mission): `source` (two briefs cite the same page; an archived copy counts as its original), `name` (a brief
+  or article contains another mission's full topic or article title, `MIN_NAME` (4)+ words, or its slug written with
+  its hyphens, whole phrase), both found by `board.find_mentions` whenever a brief or article is saved
+  (`orchestrator._mentions`; display only, a failure is printed) and for an older desk the first time a board opens
+  each server start (`find_all_mentions`: each mission read once, pairs checked once, one transaction; an artifact
+  that won't load is skipped); and `background` (research was shown a related
+  published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
+  transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
+  a note and its corner resizes it (`POST /board/move`, saved `by="human"`; only a resize fixes the size; the Theorist's board turn may move it later), a
+  mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
+  the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more
+  string away, All) that fades the rest and glides to fit. It polls `/api/board` every `POLL_SECONDS` and updates
+  in place, so a new mission appears on its own. Every mission card and mission page has "On the board"
+  (`/board?focus=<slug>`, zoomed onto it). Its look (#68) is the gear on the board or Settings → Display → Board, the
+  same setting (`settings.board_style`, saved in `data/settings.json` only when not cork, sticky notes and red
+  string): a surface (cork, paper, grid, night, fridge, arcade; grid, night and arcade move with the view), cards (sticky notes;
+  fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
+  tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
+  panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
+  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour (the gear and Settings → Display → Board both have the picker). A card's colour is its
+  stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
+  a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
+  researcher from that worker's crew: on a sticky note it stands inside the card on its bottom edge (the busy note
+  grows room there) and tilts with it; on the other styles it walks along the top, which stays level. Laser pulses and holograms
+  flicker only while Animations are on. Board notes override the published site's `.note` and `.epic` styles,
+  which share their class names.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -426,12 +544,21 @@ step's kind of work, runs after its mission when the mission moves on (sources, 
 ends, moves to another mission or passes to the other worker it says a closing line about where the work went
 (your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
-repeats soon. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
+repeats soon. Nobody is ever on the page twice at once (the chat's guide included), and the last three arrivals wait
+while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
+giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
+the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), the sprite studio the place to try one (`/sprites` in the app,
+from Settings → Avatars; it is `tools/sprites.html`, which also opens from a served copy of the repo), and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. The avatar
+studio (`/avatars`, `assets/avatars.js`) builds them: pieces drawn as your own avatar wearing them, a live preview,
+and "Ask a model" (`agents/avatar.py`, `agents.edit_avatar`: one call held to a JSON schema of the real parts, thinking
+off, a picture only to a local model Ollama says can see, every result checked in the browser with up to two repair
+rounds; nudity refused before any model). Avatars and the on/off list live in `data/sprites.json` (`avatars.py`),
+which `ui.page` hands to every page; Who visits switches anyone off. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
 most bits pass without a word. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
-The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
+The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Page scripts get theirs as `window.I18N`: the shared few in `ui.JS_STRINGS`, and the board's and avatar studio's from every string literal inside their `tr(...)` calls (`ui.script_strings`, so no list to keep). The setup checks (`doctor.py`) are wrapped too; `run.py doctor` and Researcher Chat's `setup_status` read them in English. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
 when not System) and the chat colour (the app's red, seven pastels in `settings.CHAT_COLORS`, or any colour picked;
 `settings.chat_color()`). Both go on the UI's `<html>` from the server (`ui.html_attrs`: `data-theme` and the
 `--chat`/`--chat-ink` variables, the ink picked for contrast by `settings.ink_on`), so there is no theme switch in the
@@ -440,7 +567,12 @@ appearance and hides its own switch; the published site keeps its switch for rea
 
 | You want to | Command |
 |---|---|
-| Open the UI | `python run.py ui` → http://127.0.0.1:8770 |
+| Install and open it the first time | `./start.sh` (again any time to start the app) |
+| Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
+| Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
+| Check this machine's setup | `python run.py doctor`, or Settings → Setup |
+| Set the published site's name, tagline and About statement | Settings → Publication |
+| Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
@@ -448,6 +580,8 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Approve or reject a proposed combine | its card under Needs you on the UI home page, or `python run.py combines`, then `approve-combine <slug>` / `reject-combine <slug>` |
 | Link two missions, or remove a link | Connections on a mission's page, or `python run.py link <a> <b> --why "..."` / `unlink <a> <b>` |
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
+| Search what the desk has found (the library) | `python run.py library "<words>" [--epic "<title>"] [--mission <slug>]`; no words indexes it; or ask Researcher Chat |
+| Pick the library's embedding model or top N | Settings → Library (provider, model, passages per search) |
 | Have the Theorist look across the desk now | Run Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
@@ -467,6 +601,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
+| See every mission and epic on one map | Board in the UI's top bar, or On the board on any mission card |
 | Pick each worker's model, how many of it run at once, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
 | Point at another Ollama | the Ollama address under Model providers on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Start on a fresh clone with Ollama | Settings → Model providers → Connect Ollama (fills in each worker's model), then play |

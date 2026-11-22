@@ -19,13 +19,16 @@ def called(path: Path) -> set[str]:
 
 def keys() -> set[str]:
     """Every English string the UI looks up: the literals, and the tables it translates at display time."""
-    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py")
+    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py") | called(ROOT / "doctor.py")
     out |= set(ui.MESSAGES.values()) | set(ui.ERRORS.values()) | set(ui.LABELS.values())
     out |= set(activity.AGENTS.values()) | set(settings.WORKERS.values()) | set(ui.WORKER_BLURBS.values())
     out |= {s for steps in ui.ROLE_STEPS.values() for s in steps} | set(ui.ASK_ACTION.values())
     out |= {title for _k, _i, title in ui.STAGES} | set(ui.SUGGESTIONS) | set(ui.JS_STRINGS)
     out |= set(settings.CUSTOM_FORMATS.values()) | set(settings.CUSTOM_KINDS.values())
-    out |= {p["blurb"] for p in settings.PROVIDERS.values()}
+    out |= {p["blurb"] for p in settings.PROVIDERS.values()} | set(ui.BY.values()) | {settings.PROVIDERS["custom"]["name"]}
+    out |= set(settings.BOARD_SURFACES.values()) | set(settings.BOARD_CARDS.values()) | set(settings.BOARD_STRING_NAMES.values())
+    out |= {name for colors in settings.BOARD_STRINGS.values() for name in colors}
+    out |= set(ui.script_strings("board.js")) | set(ui.script_strings("avatars.js"))
     out |= set(settings.CHAT_COLORS) | {"Library red"} | {label for _v, _i, label in ui.THEME_CHOICES}
     out |= {text for _k, _kind, text in flowchart.FLOW} | {sub for _i, sub in flowchart.TILES.values()}
     out |= set(flowchart.REVIEW_SUB.values()) | {t for t, _tone in flowchart.HUMAN_STEPS.values()}
@@ -64,7 +67,7 @@ def test_settings_page_switches_the_language_and_the_published_site_stays_englis
     assert settings.language() == "fr"
     html = client.get("/").text
     assert '<html lang="fr"' in html and "Paramètres" in html and "window.I18N = " in html
-    assert '<script src="/assets/lines/fr.js"></script>' in html
+    assert '<script src="/assets/lines/fr.js?v=' in html
     from render import about_html
     assert "Review brief" in about_html() and "Relire" not in about_html()
     client.post("/settings/language", data={"language": "xx"})

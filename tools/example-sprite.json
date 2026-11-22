@@ -1,0 +1,26 @@
+{
+  "base": "mei",
+  "name": "Dr. Nova",
+  "hair": ["#f2f0f7", "#c9b8e8"],
+  "frame": "#7b5ea7",
+  "shirt": "#b197fc",
+  "prop": null,
+  "maps": [
+    { "layer": "head", "at": [-4, 14], "rows": [".h.....h.", "hrh...hrh", "hhh...hhh"], "pal": { "r": "#ffb3c7" } },
+    { "layer": "back", "at": [-10, 1], "fps": 3,
+      "frames": [["hh..", ".hh.", "..hh"], ["..hh", ".hh.", "hh.."]] }
+  ],
+  "propMap": { "arm": "forward", "at": [-1, 1], "rows": ["..k..", ".kwk.", ".kgk.", "kgwgk", "kgggk", ".kkk."], "pal": { "g": "#69db7c" } },
+  "quirk": {
+    "dur": 2.4,
+    "say": ["Nya-hypothesis!", "Peer-reviewed purr."],
+    "sayAt": 0.9,
+    "keys": [
+      { "t": 0, "armF": ["up", 0], "eyes": "wide", "mouth": "o" },
+      { "t": 0.8, "hop": 3, "icon": "heart", "eyes": "happy", "mouth": "smile", "blush": true },
+      { "t": 1.2, "hop": 0 },
+      { "t": 1.6, "armF": ["face", 0], "glint": true, "mouth": "smirk" }
+    ]
+  },
+  "fav": { "beaker": 2, "microscope": 2 }
+}

@@ -30,6 +30,7 @@ def entries(site: Path | None = None) -> list[dict]:
 def rebuild_index(site: Path | None = None) -> Path:
     """site/index.html, feed.json and feed.xml, all from the same entries."""
     site = site or SITE
+    site.mkdir(parents=True, exist_ok=True)   # a fresh clone has no site/ yet
     found = entries(site)
     (site / "feed.json").write_text(feed_json(found, settings.site_url()))
     (site / "feed.xml").write_text(feed_xml(found, settings.site_url()))
@@ -42,9 +43,21 @@ def write_about(site: Path) -> None:
     """The About page and the scripts it plays, so the site works on its own wherever it is hosted."""
     (site / "about").mkdir(parents=True, exist_ok=True)
     (site / "about" / "index.html").write_text(about_html())
-    (site / "assets").mkdir(exist_ok=True)
+    refresh_assets(site)
+
+def refresh_assets(site: Path | None = None) -> list[str]:
+    """Copy the About page's scripts into site/assets/ where they differ from the code's; returns the ones copied.
+    The site keeps its own copies (it is served on its own), so without this an updated script, the researchers'
+    drawing say, stays old there until the next article rebuilds the index."""
+    site = site or SITE
+    (site / "assets").mkdir(parents=True, exist_ok=True)
+    copied = []
     for name in ABOUT_ASSETS:
-        (site / "assets" / name).write_bytes((ASSETS / name).read_bytes())
+        fresh, there = (ASSETS / name).read_bytes(), site / "assets" / name
+        if not there.exists() or there.read_bytes() != fresh:
+            there.write_bytes(fresh)
+            copied.append(name)
+    return copied
 
 def missing_text(site: Path | None = None) -> set[str]:
     """Slugs published before meta.json carried the article text."""

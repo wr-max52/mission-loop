@@ -16,12 +16,12 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, clock, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
-from icons import icon, CSS as ICON_CSS
+from icons import icon, PATHS as ICON_PATHS, CSS as ICON_CSS
 import flowchart, i18n
 from flowchart import flow_steps
 from i18n import _, _n
@@ -68,9 +68,12 @@ MESSAGES = {
     "auto_off": "Auto mode off.",
     "animations_on": "Animations on.",
     "animations_off": "Animations off.",
+    "library_saved": "Library settings saved.",
+    "library_indexing": "Indexing the library. Refresh in a minute.",
     "theme_saved": "Appearance saved.",
     "language_saved": "Language saved.",
     "chat_color_saved": "Chat colour saved.",
+    "board_style_saved": "Board look saved.",
     "ollama_saved": "Ollama address saved.",
     "ollama_connected": "Ollama connected. Models assigned.",
     "ollama_ready": "Ollama connected. Press play to start.",
@@ -90,6 +93,12 @@ MESSAGES = {
     "custom_removed": "Channel removed.",
     "republish": "Publishing queued.",
     "republish_off": "Publishing now.",
+    "search_saved": "Web search key saved.",
+    "search_unchecked": "Web search key saved, but Brave didn't answer. If search fails, check the key.",
+    "search_off": "Web search key removed.",
+    "setup_hidden": "Setup hidden. Settings → Setup brings it back.",
+    "setup_shown": "Setup shown on the Missions page.",
+    "publication_saved": "Publication saved.",
 }
 ERRORS = {
     "combine": "Can't combine now: a mission is in use or has moved on.",
@@ -97,6 +106,7 @@ ERRORS = {
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
     "language": "Pick a language from the list.",
+    "board_style": "Pick a surface, cards and string.",
     "chat_color": "That colour wasn't a #rrggbb colour.",
     "slug": "Short name: lowercase letters, numbers and dashes only.",
     "exists": "A mission with that short name already exists.",
@@ -104,6 +114,7 @@ ERRORS = {
     "state": "That action no longer applies.",
     "running": "The loop is already running.",
     "every": "Enter whole minutes.",
+    "top_n": "Pick a number from the list.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different approved epic.",
@@ -120,6 +131,10 @@ ERRORS = {
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
     "github_app": "That isn't a valid OAuth client ID.",
     "places": "Pick at least one place.",
+    "notready": "The loop can't start yet",
+    "search_key": "Brave refused that key.",
+    "search_format": "That isn't a Brave API key. Paste it without spaces.",
+    "publication": "Too long. Limits: name {name}, tagline {tagline}, About {about} characters.",
 }
 
 # ---------- loop status ----------
@@ -270,13 +285,18 @@ def signature() -> str:
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
     working = ",".join(f'{e["worker"]}:{e["slug"]}:{e["agent"]}' for e in running_now())
     raw = ("".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
-           f"|{settings.auto_mode()}")
+           f"|{settings.auto_mode()}|{(doctor.waiting() or {}).get('reason', '')}|{settings.setup_dismissed()}"
+           f"|{bool(settings.search_key())}")
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 # ---------- page shell ----------
 
 UI_CSS = """
 main { max-width: 56rem; }
+.onboard { display:inline-flex; align-items:center; gap:.25rem; margin-left:.6rem; font-size:.82em; color:var(--muted);
+           text-decoration:none; cursor:pointer; white-space:nowrap; }
+.onboard:hover { color:var(--accent); }
+.onboard svg { width:.95em; height:.95em; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
 body { font-family: -apple-system, system-ui, sans-serif; font-size: 16px; }
 nav.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
           border-bottom:1px solid var(--rule); padding-bottom:1rem; margin-bottom:1.5rem; }
@@ -402,6 +422,31 @@ label { display:block; font-size:.85rem; font-weight:600; margin:.8rem 0 .3rem; 
 .code-big code { font-size:1.6rem; letter-spacing:.15em; padding:.3rem .6rem; }
 .inline-buttons button { margin-right:.4rem; }
 .actions { border:1px solid var(--rule); border-radius:10px; padding:1rem; margin:1rem 0 1.5rem; }
+.setup { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
+.setup-top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+.setup-top h2 { display:flex; align-items:center; gap:.5rem; margin:0; font-size:1.15rem; }
+.setup-top form { margin:0; }
+.setup-steps { list-style:none; padding:0; margin:.75rem 0 0; display:grid; gap:.6rem; }
+.setup-step { border:1px solid var(--rule); border-radius:8px; padding:.7rem .85rem; }
+.setup-step.done { opacity:.75; }
+.setup-head { display:flex; align-items:center; gap:.55rem; }
+.setup-body { margin-left:1.85rem; }
+.setup-body p { margin:.35rem 0; }
+.setup-form { display:flex; gap:.4rem; flex-wrap:wrap; margin:.4rem 0; }
+.setup-form input { flex:1 1 14rem; min-width:0; }
+.mark { width:1.3rem; height:1.3rem; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+        flex:none; border:2px solid var(--muted); }
+.mark.ok { background:#2f9e44; border-color:#2f9e44; color:#fff; }
+.mark svg { width:.85rem; height:.85rem; }
+.chips { display:flex; flex-wrap:wrap; gap:.35rem; margin:.3rem 0; }
+.chip { font:500 .82rem -apple-system, system-ui, sans-serif; padding:.3rem .65rem; border-radius:999px;
+        border:1px solid var(--rule); background:var(--quote); color:var(--fg); cursor:pointer; }
+.chip:hover { border-color:var(--muted); }
+button.link { background:none; border:0; padding:0; color:var(--accent); cursor:pointer; font:inherit;
+              display:inline-flex; align-items:center; gap:.3rem; text-decoration:underline; }
+.setup-more { margin:.8rem 0 0; color:var(--muted); font-size:.9rem; }
+ul.checks { list-style:none; padding:0; margin:.5rem 0; display:grid; gap:.45rem; }
+ul.checks li { display:flex; gap:.55rem; align-items:flex-start; }
 .actions .buttons { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-start; }
 .actions details { margin-top:.8rem; }
 pre.notes { white-space:pre-wrap; background:var(--quote); padding:.8rem 1rem; border-radius:8px;
@@ -530,6 +575,10 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .crew { position:relative; height:116px; margin:0 -1rem; border-top:1px solid var(--rule);
         background:linear-gradient(var(--quote), var(--quote)) bottom / 100% 9px no-repeat; }
 .crew canvas.lab-stage { bottom:0; height:116px; }
+.crew-wrap { position:relative; }
+.crew-edit { position:absolute; top:.45rem; right:.2rem; display:inline-flex; align-items:center; gap:.25rem; font-size:.75rem;
+             color:var(--muted); text-decoration:none; opacity:.75; }
+.crew-edit:hover { color:var(--accent); opacity:1; }
 .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 .who { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
 table.models td.size { white-space:nowrap; color:var(--muted); }
@@ -630,10 +679,75 @@ KEEP_SCROLL_JS = """<script>
 </script>"""
 
 # Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
-RESEARCHERS_SRC = "/assets/researchers.js"
-RESEARCHERS = f'<script src="{RESEARCHERS_SRC}" defer></script>'
 ASSETS = Path(__file__).parent / "assets"
-FLOW_JS = '<script src="/assets/flow.js" defer></script>'   # keeps the pipeline strip live
+TOOLS = Path(__file__).parent / "tools"
+_stamps: dict = {}
+
+def asset(name: str) -> str:
+    """A script's address with a stamp of its contents (`/assets/researchers.js?v=1a2b3c4d`), so the address changes
+    whenever the file does and no browser can go on using a copy from before an update."""
+    path = ASSETS / name
+    try:
+        stat = path.stat()
+        seen = _stamps.get(name)
+        if not seen or seen[0] != (stat.st_mtime_ns, stat.st_size):
+            seen = _stamps[name] = ((stat.st_mtime_ns, stat.st_size), hashlib.sha1(path.read_bytes()).hexdigest()[:8])
+        return f"/assets/{name}?v={seen[1]}"
+    except OSError:
+        return f"/assets/{name}"
+
+def script(name: str) -> str:
+    return f'<script src="{asset(name)}" defer></script>'
+
+STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+def script_strings(name: str) -> list[str]:
+    """Every string literal inside a page script's tr(...) calls (assets/board.js, assets/avatars.js), ternaries
+    included, in the order written."""
+    code, out, i = (ASSETS / name).read_text(), [], 0
+    while (i := code.find("tr(", i)) != -1:
+        if i and (code[i - 1].isalnum() or code[i - 1] in "_$."):
+            i += 3
+            continue
+        depth, j = 0, i + 2
+        while j < len(code):               # to the matching ")", stepping over strings
+            c = code[j]
+            if c == '"':
+                j = code.index('"', j + 1) if code[j + 1] != '"' else j + 1
+                while code[j - 1] == "\\" and code[j - 2] != "\\":
+                    j = code.index('"', j + 1)
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if not depth:
+                    break
+            j += 1
+        out += [json.loads(f'"{m}"') for m in STRING.findall(code[i + 3:j])]
+        i = j
+    return list(dict.fromkeys(x for x in out if x.strip()))
+
+def script_i18n(name: str) -> str:
+    """The translations one page script needs, added to window.I18N before it runs (English needs none)."""
+    if i18n.current() == "en":
+        return ""
+    table = json.dumps({s: _(s) for s in script_strings(name)}, ensure_ascii=False).replace("</", "<\\/")
+    return f"<script>window.I18N = Object.assign(window.I18N || {{}}, {table});</script>"
+
+def lines_script() -> str:
+    """The researchers' lines in the UI's language (none for English), loaded before researchers.js."""
+    code = i18n.current()
+    name = f"lines/{code}.js"
+    return f'<script src="{asset(name)}"></script>' if code != "en" and (ASSETS / name).exists() else ""
+
+class FreshFiles(StaticFiles):
+    """Static files the browser checks before every use. Without this a browser guesses how long a script stays
+    good from its age, so after an update it can keep drawing with the old researchers for hours. With it, an
+    unchanged file costs one short "not modified" answer and a changed one is fetched at once."""
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
              '<path d="M12 3c3 3 3.6 6 3.6 9s-.6 6-3.6 9c-3-3-3.6-6-3.6-9s.6-6 3.6-9z"/></svg>')
@@ -642,6 +756,8 @@ ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
                  '<path d="M9.8 4.9 10.4 2.1 13.6 2.1 14.2 4.9 15.5 5.5 17.9 3.9 20.1 6.1 18.5 8.5 19.1 9.8 21.9 10.4 '
                  '21.9 13.6 19.1 14.2 18.5 15.5 20.1 17.9 17.9 20.1 15.5 18.5 14.2 19.1 13.6 21.9 10.4 21.9 9.8 19.1 '
                  '8.5 18.5 6.1 20.1 3.9 17.9 5.5 15.5 4.9 14.2 2.1 13.6 2.1 10.4 4.9 9.8 5.5 8.5 3.9 6.1 6.1 3.9 8.5 5.5z"/></svg>')
+
+ICON_BOARD = f'<svg viewBox="0 0 24 24" aria-hidden="true">{ICON_PATHS["board"]}</svg>'   # one drawing, in icons.py
 
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
 
@@ -662,6 +778,9 @@ def loop_button() -> str:
     elif orchestrator.STOP_FLAG.exists():
         action, ico, text, dot = "", "pause", _("Stopping"), "stopping"
         title = _("Stopping after the current task")
+    elif waiting := doctor.waiting():
+        action, ico, text, dot = "stop", "pause", _("Waiting"), "stopping"
+        title = _("Waiting: {reason}. Checks again every 30 s. Pause to stop.").format(reason=waiting["reason"])
     else:
         action, ico, text, dot = "stop", "pause", _("Running"), "on"
         title = _("Pause the loop")
@@ -730,12 +849,14 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title><style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{avatars.script_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
             f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
-            f'<a href="/settings">{ICON_SETTINGS}{_("Settings")}</a></span></nav>'
-            f"{body}</main>{js_strings()}{i18n.lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
+            f'<a href="/board">{ICON_BOARD}{_("Board")}</a>'
+            f'<a href="/settings">{ICON_SETTINGS}{_("Settings")}</a>'
+            f'<a href="/about" target="_blank" title="{escape(_("How it works, on the published site"), quote=True)}">{icon("book")}{_("About")}</a></span></nav>'
+            f"{body}</main>{js_strings()}{lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
 
 JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
@@ -747,12 +868,19 @@ def js_strings() -> str:
     if i18n.current() == "en":
         return ""
     table = {s: _(s) for s in JS_STRINGS}
-    return f"<script>window.I18N = {json.dumps(table, ensure_ascii=False).replace('</', '<\\/')};</script>"
+    return f"<script>window.I18N = Object.assign(window.I18N || {{}}, {json.dumps(table, ensure_ascii=False).replace('</', '<\\/')});</script>"
 
 def flash(request: Request) -> str:
     done, err = request.query_params.get("done"), request.query_params.get("error")
+    if err == "notready":
+        why = (doctor.waiting() or {}).get("reason", "")
+        return f'<div class="flash err">{escape(_(ERRORS[err]))}{": " + escape(why) if why else ""}.</div>'
     if err in ERRORS:
-        return f'<div class="flash err">{escape(_(ERRORS[err]).replace("{max}", str(settings.MAX_COUNT)))}</div>'
+        text = _(ERRORS[err])
+        for key, value in (("{max}", settings.MAX_COUNT), ("{name}", settings.NAME_MAX),
+                           ("{tagline}", settings.TAGLINE_MAX), ("{about}", settings.ABOUT_MAX)):
+            text = text.replace(key, str(value))
+        return f'<div class="flash err">{escape(text)}</div>'
     if done in MESSAGES:
         return f'<div class="flash">{escape(_(MESSAGES[done]))}</div>'
     return ""
@@ -824,6 +952,10 @@ def loop_panel(back: str) -> str:
     if running and stopping:
         state, dot = _("Stopping after the current task"), "stopping"
         controls = ""
+    elif running and (waiting := doctor.waiting()):
+        state = _("Loop waiting: {reason}. Checks again every 30 s.").format(reason=escape(waiting["reason"]))
+        state, dot = f'{state} <a href="/settings#setup">{_("Settings → Setup")}</a>', "stopping"
+        controls = ""
     elif running:
         state, dot = _("Loop running"), "on"
         controls = (f'<form method="post" action="/loop/wake"><input type="hidden" name="back" value="{back}">'
@@ -832,7 +964,7 @@ def loop_panel(back: str) -> str:
         state, dot = _("Loop off. Press play at the top to start."), ""
         controls = ""
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
-            f'{flow_strip(flow_state())}</div>{FLOW_JS}')
+            f'{flow_strip(flow_state())}</div>{script("flow.js")}')   # flow.js keeps the pipeline strip live
 
 def finder_panel() -> str:
     line = store.get_inspiration()
@@ -849,12 +981,33 @@ def finder_panel() -> str:
 def _when(at: str) -> str:
     return escape(at[:16].replace("T", " ")) + " UTC" if at else ""
 
+BY = {"human": "you", "chat": "Researcher Chat", "theorist": "Theorist"}   # who changed the line
+
 def theorist_notes() -> str:
     """The Theorist's last turn and how the line got here, folded away under the inspiration box."""
     last, history = store.last_theory(), store.inspiration_history(6)
     if not last and not history:
         return ""
     parts = []
+    if last.get("kind") == "board":        # a board turn, then the turn before it that looked across the desk
+        board = f'<a href="/board">{_("board")}</a>'
+        if last.get("failed"):
+            failed = _("Last turn {when} ({board}) failed: {error}").format(
+                when=_when(last["at"]), board=board, error=escape(last["failed"]))
+            parts.append(f'<p class="muted">{failed}</p>')
+        else:
+            moved = last.get("moved", [])
+            sized = sum(1 for mv in moved if mv.get("size") is not None)
+            what = ((_n("moved {n} note", "moved {n} notes", len(moved))
+                     + (", " + _n("resized {n}", "resized {n}", sized) if sized else ""))
+                    if moved else _("moved nothing"))
+            tidied = _("Last turn {when} tidied the {board}: {what}.").format(when=_when(last["at"]), board=board, what=what)
+            parts.append(f'<p class="muted">{tidied} {escape(last.get("why", ""))}</p>')
+            if last.get("notes"):
+                parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
+        last = last.get("ideas") or {}
+        if last:
+            parts.append(f'<p class="hint">{_("Turn before:")}</p>')
     if last.get("failed"):
         failed = _("Last run {when} failed: {error}").format(when=_when(last["at"]), error=escape(last["failed"]))
         parts.append(f'<p class="muted">{failed}</p>')
@@ -878,11 +1031,14 @@ def theorist_notes() -> str:
             made.append(f'<li>{_("Linked")} {mission_link(a)} · {mission_link(b)}</li>')
         if made:
             parts.append(f"<ul>{''.join(made)}</ul>")
+        if last.get("lookups"):
+            parts.append(f"<p>{_('Library searches:')}</p><ul>" + "".join(f"<li>{escape(q)}</li>"
+                                                                   for q in last["lookups"]) + "</ul>")
         if last.get("notes"):
             parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
     if history:
         rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
-                       f'{_("you") if h.get("by") == "human" else _("Theorist")}:</span> '
+                       f'{_(BY.get(h.get("by"), "Theorist"))}:</span> '
                        f'{escape(h.get("line") or _("(cleared)"))}</li>' for h in reversed(history))
         parts.append(f'<p>{_("Line history, newest first:")}</p><ul>{rows}</ul>')
     return f'<details><summary>{icon("bulb")}{_("Theorist\'s notes")}</summary>{"".join(parts)}</details>'
@@ -1034,7 +1190,7 @@ def model_options(current: str, conn: dict, models: list[dict] | None = None) ->
         groups.setdefault(m["provider"], []).append(
             f'<option value="{escape(m["ref"], quote=True)}"{" selected" if m["ref"] == current else ""}>'
             f'{" · ".join(bits)}</option>')
-    opts = [f'<optgroup label="{escape(settings.PROVIDERS[pid]["name"], quote=True)}">{"".join(o)}</optgroup>'
+    opts = [f'<optgroup label="{escape(provider_name(pid), quote=True)}">{"".join(o)}</optgroup>'
             for pid, o in groups.items()]
     if not current:                        # nothing chosen on this machine yet: the code has no default
         opts.insert(0, f'<option value="" selected disabled>{_("Choose a model")}</option>')
@@ -1080,7 +1236,8 @@ def worker_card(worker: str, conn: dict, now: list[dict], models: list[dict] | N
         note = "".join(f'<p class="note">{_("Now")}{" (" + escape(seat_name(e["worker"])) + ")" if many else ""}: '
                        f'{doing(e)}</p>' for e in busy)
     checked = " checked" if on else ""
-    crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
+    crew = (f'<div class="crew-wrap"><div class="crew" data-crew="{worker}" aria-hidden="true"></div>'
+            f'<a class="crew-edit" href="/avatars">{icon("pencil")}{_("Edit avatars")}</a></div>' if settings.animations() else "")
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
   <input type="hidden" name="worker" value="{worker}">
   <div class="head"><h3>{name}</h3>
@@ -1109,7 +1266,7 @@ def workers_section(conn: dict, models: list[dict] | None = None) -> str:
                 _("Only the {worker} is on. It runs every step, {n} at a time.")).format(worker=worker_name(w), n=n)
     models = models if models is not None else llm.catalog(conn)
     cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
-    return (f'{heading("people", _("Workers"))}{f"<p>{lead}</p>" if lead else ""}'
+    return (f'{heading("people", _("Workers"), anchor="workers")}{f"<p>{lead}</p>" if lead else ""}'
             f'<div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
 # The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
@@ -1169,6 +1326,11 @@ def ollama_card(conn: dict) -> str:
     lead = (_("Connected at {host}").format(host=f"<code>{host}</code>") + " · " + _n("{n} model", "{n} models", count))
     return f'{head}<p>{lead}</p>{connect if settings.missing_models() else ""}{ollama_form()}{table}</div>'
 
+def provider_name(pid: str) -> str:
+    """A provider's name as shown: the brands as they are, the generic one in the UI's language."""
+    name = settings.PROVIDERS[pid]["name"]
+    return _(name) if pid == "custom" else name
+
 def cloud_card(pid: str) -> str:
     spec = settings.PROVIDERS[pid]
     names, error = providers.models(pid)
@@ -1185,10 +1347,10 @@ def cloud_card(pid: str) -> str:
     if settings.provider_saved(pid):
         remove = (f'<form method="post" action="/settings/provider"><input type="hidden" name="do" value="forget">'
                   f'<input type="hidden" name="provider" value="{pid}"><button>'
-                  f'{_("Disconnect {provider}").format(provider=escape(spec["name"]))}</button></form>')
+                  f'{_("Disconnect {provider}").format(provider=escape(provider_name(pid)))}</button></form>')
     else:
         remove = f'<p class="hint">{_("Set in .env ({key}).").format(key=escape(spec["key_env"]))}</p>'
-    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(spec["name"])}</h3><span class="badge">{_("Cloud")}</span>'
+    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(provider_name(pid))}</h3><span class="badge">{_("Cloud")}</span>'
             f'</div><p>{status}</p>{remove}</div>')
 
 def add_provider_forms() -> str:
@@ -1207,8 +1369,8 @@ def add_provider_forms() -> str:
   <input type="text" id="url_{pid}" name="url" required maxlength="300" placeholder="http://127.0.0.1:1234/v1">"""
         key_label = _("API key") + (f' <span class="hint">{_("optional")}</span>' if spec.get("optional_key") else "")
         required = "" if spec.get("optional_key") else " required"
-        out.append(f"""<details class="pubbox add"><summary><strong>{escape(spec["name"])}</strong> · {escape(_(spec["blurb"]))}</summary>
-<p>{_("Billed per use by {provider}.").format(provider=escape(spec["name"]))}{get_key} {_("Key saved to data/providers.json.")}{env}</p>
+        out.append(f"""<details class="pubbox add"><summary><strong>{escape(provider_name(pid))}</strong> · {escape(_(spec["blurb"]))}</summary>
+<p>{_("Billed per use by {provider}.").format(provider=escape(provider_name(pid)))}{get_key} {_("Key saved to data/providers.json.")}{env}</p>
 <form method="post" action="/settings/provider">
   <input type="hidden" name="do" value="connect"><input type="hidden" name="provider" value="{pid}">
   {url}
@@ -1222,6 +1384,65 @@ def connection_section(conn: dict) -> str:
     cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
     return (f'{heading("plug", _("Model providers"), anchor="providers")}'
             f'{cards}<h3 class="sub">{_("Add a provider")}</h3>{add_provider_forms()}')
+
+EMBEDDY = re.compile(r"embed|bge|minilm|e5-|gte|arctic|mxbai|nomic", re.I)   # an Ollama embedding model's name
+
+def library_section(conn: dict) -> str:
+    """The desk's library (library.py): which provider and model embed its passages, and how many a search returns."""
+    current, env = settings.embed_model(), settings._env(settings.EMBED_ENV)
+    pid, name = settings.split_model(current) if current else ("none", "")
+    choices = [("none", _("None: rank by words only"))] + [
+        (p, provider_name(p)) for p in settings.embed_providers()]
+    if pid not in dict(choices):           # set to a provider since disconnected: keep it visible
+        choices.append((pid, _("{provider} not connected").format(provider=settings.PROVIDERS.get(pid, {}).get("name", pid))))
+    opts = "".join(f'<option value="{p}"{" selected" if p == pid else ""}>{escape(label)}</option>' for p, label in choices)
+    names = [(m["name"], "Ollama") for m in conn["models"] if EMBEDDY.search(m["name"])]
+    for p in settings.embed_providers()[1:]:
+        names += [(n, settings.PROVIDERS[p]["name"]) for n in providers.models(p, embed=True)[0]]
+    suggestions = "".join(f'<option value="{escape(n, quote=True)}" label="{escape(label, quote=True)}">'
+                          for n, label in names)
+    tops = "".join(f'<option value="{n}"{" selected" if n == settings.library_top_n() else ""}>{n}</option>'
+                   for n in settings.TOP_N_CHOICES)
+    from_env = env and current == env and settings.saved().get("embed_model") in (None, "")
+    source = " " + _("(from {key} in .env)").format(key="MISSION_LOOP_EMBED_MODEL") if from_env else ""
+    now = (" " + _("Embedding model: {model}").format(model=f"<code>{escape(current)}</code>") + f"{source}.") if current else ""
+    intro = _("Missions, briefs, sources and articles, searched by the Theorist and Researcher Chat. "
+              "Ranks by words; an embedding model adds meaning. Stored in {file}.").format(file="<code>data/library.db</code>")
+    return f"""{heading("book", _("Library"), anchor="library")}
+<p>{intro}</p>
+<div class="pubbox channel"><div class="head"><h3>{_("Index")}</h3><span class="badge">{_("On this machine")}</span></div>
+<p>{library_line()}{now}</p>
+<form method="post" action="/settings/library" class="inline"><input type="hidden" name="do" value="index">
+  <button>{_("Index now")}</button><span class="hint">{_("embeds every new passage now")}</span></form></div>
+<form method="post" action="/settings/library">
+  <input type="hidden" name="do" value="save">
+  <label for="embed_provider">{_("Embedding provider")} <span class="hint">{_("Anthropic, DeepSeek and Groq have none")}</span></label>
+  <select id="embed_provider" name="provider">{opts}</select>
+  <label for="embed_model">{_("Embedding model")} <span class="hint">{_("checked before saving")}</span></label>
+  <input type="text" id="embed_model" name="model" maxlength="200" list="embed_models" value="{escape(name, quote=True)}" autocomplete="off">
+  <datalist id="embed_models">{suggestions}</datalist>
+  <label for="top_n">{_("Passages per search")} <span class="hint">{_("more context, more cost")}</span></label>
+  <select id="top_n" name="top_n">{tops}</select>
+  <p><button>{_("Save")}</button></p>
+</form>"""
+
+def library_line() -> str:
+    st = library.status()
+    line = _("{passages} passages from {missions} missions").format(passages=st["passages"], missions=st["missions"])
+    how = (_("{done} of {total} embedded").format(done=st["embedded"], total=st["passages"]) if st["model"]
+           else _("ranked by words only"))
+    return f"{line} · {how}."
+
+def index_now() -> threading.Thread:
+    """Bring the whole library up to date in the background, embedding everything new (searches do a minute's worth)."""
+    def go():
+        try:
+            library.sync(time_limit=30 * 60)
+        except Exception as e:
+            print(f"library indexing failed: {type(e).__name__}: {e}", flush=True)
+    t = threading.Thread(target=go, name="library", daemon=True)
+    t.start()
+    return t
 
 def ollama_picks(conn: dict) -> dict[str, str]:
     """Which installed model each worker without one gets: the biggest to the Principal Investigator (writing), the
@@ -1245,15 +1466,17 @@ async def connect_ollama(request: Request) -> Response:
     """One click: is Ollama there, and does every worker have a model? Fills in the workers that have none."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    back = _back(form) if form.get("back") else "/settings"
     conn = await run_in_threadpool(llm.connection, 5)
     if not conn["ok"]:
-        return go("/settings", error="ollama")
+        return go(back, error="ollama")
     if not conn["models"]:
-        return go("/settings", error="ollama_empty")
+        return go(back, error="ollama_empty")
     picks = ollama_picks(conn)
     for worker, model in picks.items():
         settings.set_worker(worker, model, settings.worker_on(worker))
-    return go("/settings", done="ollama_connected" if picks else "ollama_ready")
+    return go(back, done="ollama_connected" if picks else "ollama_ready")
 
 async def save_provider(request: Request) -> Response:
     if not same_origin(request):
@@ -1262,7 +1485,7 @@ async def save_provider(request: Request) -> Response:
     pid, do = str(form.get("provider") or ""), str(form.get("do") or "")
     if pid not in settings.PROVIDERS or pid == settings.LOCAL:
         return go("/settings", error="provider")
-    name = settings.PROVIDERS[pid]["name"]
+    name = provider_name(pid)
     if do == "forget":
         settings.forget_provider(pid)
         providers.forget_models(pid)
@@ -1582,10 +1805,13 @@ def settings_body(request: Request, error: str = "") -> str:
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
     models = llm.catalog(conn)
-    sprites = RESEARCHERS if settings.animations() else ""
+    sprites = script("researchers.js") if settings.animations() else ""
     return f"""{err}<h1>{_("Settings")}</h1>
+{setup_section(conn)}
 {workers_section(conn, models)}
 {connection_section(conn)}
+{search_section()}
+{library_section(conn)}
 {heading("clock", _("Loop"))}
 <form method="post" action="/settings/loop-every" class="inline">
   <label for="every" style="margin:0">{_("Rest when idle")}</label>
@@ -1595,11 +1821,14 @@ def settings_body(request: Request, error: str = "") -> str:
 </form>
 {heading("monitor", _("Display"))}
 {display_forms()}
+{board_style_form()}
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
   {_("Animations")} <span class="hint">{_("pixel researchers on active missions")}</span></label>
   <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>
+{avatar_link()}
+{publication_section()}
 {publishing_section()}
 {sprites}"""
 
@@ -1668,6 +1897,37 @@ async def save_loop_every(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="every")
     return go("/settings", done="every_saved")
+
+async def save_library(request: Request) -> Response:
+    """The Library section: index now, or save the embedding provider and model (checked with one embedding first)
+    and the top N."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "index":
+        index_now()
+        return go("/settings", done="library_indexing")
+    try:
+        top_n = int(str(form.get("top_n") or settings.TOP_N))
+        if top_n not in settings.TOP_N_CHOICES:
+            raise ValueError
+    except ValueError:
+        return go("/settings", error="top_n")
+    pid, model = str(form.get("provider") or "none"), str(form.get("model") or "").strip()[:200]
+    try:
+        if pid != "none" and pid not in settings.PROVIDERS:
+            raise ValueError(_("pick a provider"))
+        if pid != "none" and not model:
+            raise ValueError(_("name the embedding model"))
+        ref = settings.model_ref(pid, model) if pid != "none" else ""
+        if ref != settings.embed_model():                 # unchanged: store nothing, so .env keeps applying
+            if ref:
+                await run_in_threadpool(library.check, ref)
+            settings.set_embed_model(ref or settings.WORDS_ONLY)
+    except (ValueError, library.LibraryError) as e:
+        return page(_("Settings"), settings_body(request, _("Embedding model not saved: {error}").format(error=e)))
+    settings.set_library_top_n(top_n)
+    return go("/settings", done="library_saved")
 
 async def save_animations(request: Request) -> Response:
     if not same_origin(request):
@@ -1847,7 +2107,7 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
     or reject it."""
     active = store.all_epics("active")
-    theorist = {t.lower() for t in store.last_theory().get("epics", [])}
+    theorist = {t.lower() for t in store.last_ideas().get("epics", [])}
     epics = {e.slug: e for e in store.all_epics()}
     out = []
     for e in store.all_epics("proposed"):
@@ -1887,7 +2147,7 @@ def combine_proposals() -> list[str]:
         why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
         out.append(ask(
             "propose", c.topic, _("Combine missions"),
-            f'<div class="sub">{_("Theorist proposes combining {n} missions into one.").format(n=len(c.members))}</div>'
+            f'<div class="sub">{(_("Researcher Chat proposes combining {n} missions into one.") if c.by == "chat" else _("Theorist proposes combining {n} missions into one.")).format(n=len(c.members))}</div>'
             f'{epic}{why}<ul>{items}</ul>'
             f'<details><summary>{_("Objective")}</summary><p>{escape(c.objective)}</p></details>',
             f'<form method="post" action="/combines/{quote(c.slug)}/approve"><button class="primary">{_("Combine")}</button></form>'
@@ -1905,7 +2165,7 @@ def connections(m: Mission) -> str:
     for k in store.links_of(m.slug):
         other = store.get_mission(k.other(m.slug))
         state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
-        who = _("Theorist") if k.by == "theorist" else _("you") if k.by == "human" else k.by
+        who = {"theorist": _("Theorist"), "human": _("you"), "chat": _("Researcher Chat")}.get(k.by, k.by)
         why = f": {escape(k.why)}" if k.why else ""
         rows.append(f'<li class="link-row">{_("Linked to {mission}").format(mission=mission_link(k.other(m.slug)))}{state} '
                     f'<span class="hint">{_("by {who}").format(who=escape(who))}</span>{why}'
@@ -1971,7 +2231,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
-            f'{" · " + escape(sub) if sub else ""}</span></div></a>')
+            f'{" · " + escape(sub) if sub else ""}</span>{board_link(m.slug)}</div></a>')
 
 # ---------- the publishing queue ----------
 
@@ -2017,6 +2277,219 @@ def queue_section(queued: list) -> str:
 
 # ---------- pages ----------
 
+# ---------- first run: the setup card, Settings → Setup, web search, publication ----------
+
+INSPIRATIONS = (                       # example lines for the setup card; a click puts one in the box
+    "Who really decides what the Federal Reserve does?",
+    "Where does the money for local ballot measures come from?",
+    "What changed after the last big outage, and who paid for it?",
+    "Which promises in this year's farm bill can be checked?",
+)
+
+async def can_start() -> bool:
+    """Can the loop work right now? Records why not (doctor.waiting) so the page can say it."""
+    ok, why = await run_in_threadpool(agents.ready)
+    if ok:
+        doctor.clear_waiting()
+    else:
+        doctor.set_waiting(why)
+    return ok
+
+def _mark(ok: bool) -> str:
+    return (f'<span class="mark ok" title="{_("Done")}">{icon("check")}</span>' if ok
+            else f'<span class="mark todo" title="{_("To do")}"></span>')
+
+def _step(n: int, title: str, ok: bool, body: str) -> str:
+    return (f'<li class="setup-step{" done" if ok else ""}"><div class="setup-head">{_mark(ok)}'
+            f'<strong>{n}. {escape(title)}</strong></div><div class="setup-body">{body}</div></li>')
+
+def _open_link(link: str) -> str:
+    if not link:
+        return ""
+    new_tab = ' target="_blank" rel="noopener"' if link.startswith("http") else ""
+    return f' <a href="{escape(link)}"{new_tab}>{_("Open")}</a>'
+
+def _fixes(found: list) -> str:
+    return "".join(f'<p class="hint">{escape(c.detail)} {escape(c.fix)}{_open_link(c.link)}</p>' for c in found if not c.ok)
+
+def search_form(back: str) -> str:
+    label = escape(_("Brave Search API key"), quote=True)
+    return (f'<form method="post" action="/settings/search" class="inline setup-form">'
+            f'<input type="hidden" name="back" value="{back}">'
+            f'<input type="password" name="key" autocomplete="off" placeholder="{label}" aria-label="{label}" required>'
+            f'<button>{_("Check and save")}</button></form>')
+
+def setup_card(found: list | None = None) -> str:
+    """The home page's first run: connect a model, web search, something to work on, start. Shown until every
+    check passes or the human hides it; it never blocks anything (Settings → Setup brings it back)."""
+    if settings.setup_dismissed():
+        return ""
+    conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
+    found = found if found is not None else doctor.checks(conn=conn)
+    if doctor.done(found):
+        return ""
+    by = {c.key: c for c in found}
+    model_checks = [c for c in found if c.key in ("models", "connection")]
+    models_ok = all(c.ok for c in model_checks)
+    if models_ok:
+        body = f'<p class="hint">{escape(by["models"].detail)}.</p>'
+    else:
+        body = _fixes(model_checks)
+        if settings.missing_models() and conn["ok"] and conn["models"]:
+            body += ('<form method="post" action="/settings/ollama-connect" class="inline"><input type="hidden" name="back" value="/">'
+                     f'<button class="primary">{_("Connect Ollama")}</button><span class="hint">'
+                     f'{_n("gives each worker one of your {n} model", "gives each worker one of your {n} models", len(conn["models"]))}'
+                     f'</span></form>')
+        elif settings.missing_models() and not conn["ok"]:
+            body += (f'<p><a class="btn" href="{doctor.OLLAMA_DOWNLOAD}" target="_blank" rel="noopener">{_("Get Ollama")}</a> '
+                     f'<span class="hint">{_("free, runs on this computer. Pull a model, then come back.")}</span></p>')
+        cloud = _("Or use a cloud model: {link}.").format(link=f'<a href="/settings#providers">{_("add an API key")}</a>')
+        body += f'<p class="hint">{cloud}</p>'
+    tool_checks = [c for c in found if c.key in ("search", "npx", "uvx")]
+    tools_ok = all(c.ok for c in tool_checks)
+    get_key = (f'<p class="hint"><a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a key")}</a>. '
+               f'{_("It stays on this machine.")}</p>')
+    tools = (f'<p class="hint">{_("Research can search the web and read pages.")}</p>' if tools_ok else
+             f'<p class="hint">{_("Research searches the web with Brave Search (free tier available).")}</p>'
+             + (search_form("/") + get_key if not by["search"].ok else "")
+             + _fixes([c for c in tool_checks if c.key != "search"]))
+    work_ok = by["work"].ok
+    chips = "".join(f'<button type="button" class="chip" data-line="{escape(line, quote=True)}">{escape(line)}</button>'
+                    for line in INSPIRATIONS)
+    work = (f'<p class="hint">{escape(by["work"].detail)}</p>' if work_ok else
+            f'<p class="hint">{_("Give the mission finder a line to explore, or add a mission yourself.")}</p>'
+            f'<form method="post" action="/inspiration" class="inline setup-form">'
+            f'<input type="text" id="setup-line" name="inspiration" maxlength="500" '
+            f'placeholder="{escape(_("A question worth digging into"), quote=True)}" '
+            f'aria-label="{escape(_("Inspiration line"), quote=True)}">'
+            f'<button>{_("Save inspiration")}</button></form><div class="chips">{chips}</div>'
+            f'<p><button type="button" class="btn" onclick="document.getElementById(\'add-mission\').click()">'
+            f'{icon("plus")}{_("Add a mission instead")}</button></p>')
+    can = all(c.ok for c in found if c.blocks_loop)
+    start = (f'<p class="hint">{_("Press play at the top. Briefs and articles wait for your review below.")}</p>' if can else
+             f'<p class="hint">{_("Play works once a model is connected.")}</p>')
+    steps = (_step(1, _("Connect a model"), models_ok, body) + _step(2, _("Web search"), tools_ok, tools)
+             + _step(3, _("Something to work on"), work_ok, work) + _step(4, _("Start the loop"), loop_running(), start))
+    left = sum(not ok for ok in (models_ok, tools_ok, work_ok))
+    return (f'<section class="setup actions" id="setup" aria-label="{_("Setup")}">'
+            f'<div class="setup-top"><h2>{icon("compass")}{_("Get started")}</h2>'
+            f'<form method="post" action="/setup/dismiss"><button class="link" '
+            f'title="{escape(_("Hide setup. Settings → Setup brings it back."), quote=True)}">{_("Hide")}</button></form></div>'
+            f'<p class="hint">{_n("{n} step left. None of it is needed to look around.", "{n} steps left. None of it is needed to look around.", left)}</p>'
+            f'<ol class="setup-steps">{steps}</ol>'
+            f'<p class="setup-more"><a href="/about" target="_blank">{_("How it works")}</a> · '
+            f'<button type="button" class="link" data-ask="{escape(_("How do I set up Mission Loop, and what is left?"), quote=True)}">'
+            f'{icon("message")}{_("Ask Researcher Chat")}</button></p></section>{SETUP_JS}')
+
+SETUP_JS = """<script>
+document.addEventListener("click", e => {
+  const chip = e.target.closest(".chip[data-line]");
+  if (!chip) return;
+  const box = document.getElementById("setup-line");
+  if (box) { box.value = chip.dataset.line; box.focus(); }
+});
+</script>"""
+
+def setup_section(conn: dict) -> str:
+    """Settings → Setup: every check with what to do, and the way back to the home page's setup card."""
+    found = doctor.checks(conn=conn)
+    rows = "".join(f'<li class="{"ok" if c.ok else "todo"}">{_mark(c.ok)}<span><strong>{escape(c.title)}</strong>: '
+                   f'{escape(c.detail)}' + (f' <span class="hint">{escape(c.fix)}</span>' if c.fix else "")
+                   + (_open_link(c.link) if not c.ok else "") + "</span></li>" for c in found)
+    waiting = doctor.waiting() if loop_running() else None
+    note = (f'<p class="hint"><strong>{_("Loop waiting:")}</strong> {escape(waiting["reason"])}.</p>' if waiting else "")
+    again = (f'<form method="post" action="/setup/show" class="inline"><button>{_("Show setup on the Missions page")}</button></form>'
+             if settings.setup_dismissed() and not doctor.done(found) else "")
+    summary = (_("Everything is set up.") if doctor.done(found) else
+               _("The loop can start. The rest helps it work.") if all(c.ok for c in found if c.blocks_loop) else
+               _("The loop can't start until a model is connected."))
+    cli = _("Same checks: {command}.").format(command="<code>python run.py doctor</code>")
+    return (f'{heading("compass", _("Setup"), anchor="setup")}<div class="actions"><p>{summary} {cli}</p>'
+            f'{note}<ul class="checks">{rows}</ul>{again}</div>')
+
+def search_section() -> str:
+    key = settings.search_key()
+    if key and settings.search_key_saved():
+        state = (_("Brave Search key saved in {file}.").format(file="<code>data/search.json</code>")
+                 + '<form method="post" action="/settings/search" class="inline"><input type="hidden" name="remove" value="1">'
+                 f'<button>{_("Remove key")}</button></form>')
+    elif key:
+        state = _("Brave Search key set in {file}. Paste one here to use it instead.").format(file="<code>.env</code>")
+    else:
+        state = (_("No key. Research can read pages but not search the web.") + " "
+                 f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a free key from Brave")}</a>.')
+    status = toolbox_status()
+    return (f'{heading("search", _("Web search"), anchor="search")}<div class="actions"><p>{state}</p>'
+            f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
+
+def toolbox_status() -> str:
+    from agents import toolbox
+    found = toolbox.server_status(["search", "fetch"])
+    bad = [f"{name}: {why}" for name, why in found.items() if why and "not installed" in why]
+    install = _("Install with {command}.").format(command="<code>brew install node uv</code>")
+    return f'<p class="hint">{escape("; ".join(bad))}. {install}</p>' if bad else ""
+
+def publication_section() -> str:
+    name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
+    return (f'{heading("newspaper", _("Publication"), anchor="publication")}'
+            f'<form method="post" action="/settings/publication" class="actions">'
+            f'<p class="hint">{_("Name, tagline and About text for the published site and feeds. Saving redraws every page.")}</p>'
+            f'<label for="pub-name">{_("Name")}</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
+            f'value="{escape(name, quote=True)}" placeholder="{settings.PUBLICATION_DEFAULT}">'
+            f'<label for="pub-tagline">{_("Tagline")} <span class="hint">{_("optional, shown under the name")}</span></label>'
+            f'<input type="text" id="pub-tagline" name="tagline" maxlength="{settings.TAGLINE_MAX}" value="{escape(tag, quote=True)}">'
+            f'<label for="pub-about">{_("About statement")} <span class="hint">'
+            f'{_("optional, top of the About page. A blank line starts a paragraph. Empty: the built-in text.")}</span></label>'
+            f'<textarea id="pub-about" name="about" rows="5" maxlength="{settings.ABOUT_MAX}">{escape(about_text)}</textarea>'
+            f'<p><button>{_("Save publication")}</button></p></form>')
+
+async def save_search(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    back = _back(form) if form.get("back") else "/settings"
+    if form.get("remove"):
+        settings.forget_search_key()
+        return go(back, done="search_off")
+    key = str(form.get("key") or "").strip()
+    if not key or len(key) > 200 or any(c.isspace() for c in key):
+        return go(back, error="search_format")
+    ok, note = await run_in_threadpool(doctor.check_search_key, key)
+    if not ok:
+        return go(back, error="search_key")
+    settings.save_search_key(key)
+    return go(back, done="search_unchecked" if note else "search_saved")
+
+async def save_publication(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        settings.set_publication(str(form.get("name") or "")[:500], str(form.get("tagline") or "")[:500],
+                                 str(form.get("about") or "")[:5000])
+    except ValueError:
+        return go("/settings#publication", error="publication")
+    await run_in_threadpool(orchestrator.refresh_site)
+    return go("/settings#publication", done="publication_saved")
+
+async def setup_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    action = request.path_params["action"]
+    if action == "dismiss":
+        settings.set_setup_dismissed(True)
+        return go("/", done="setup_hidden")
+    if action == "show":
+        settings.set_setup_dismissed(False)
+        return go("/", done="setup_shown")
+    return PlainTextResponse("Unknown action.", status_code=404)
+
+async def about(request: Request) -> Response:
+    """The About page lives on the published site; make sure it is there (a fresh clone has published nothing)."""
+    if not (publisher.SITE / "about" / "index.html").exists():
+        await run_in_threadpool(publisher.rebuild_index)
+    return RedirectResponse("/site/about/", status_code=303)
+
 async def home(request: Request) -> HTMLResponse:
     """The flow chart read from its end: what needs you, then what is in progress closest to published first,
     grouped by stage; then the inputs (inspiration, epics). Adding a mission is one slim card right under the
@@ -2028,7 +2501,8 @@ async def home(request: Request) -> HTMLResponse:
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     lab = settings.animations()
-    body = [flash(request), loop_panel("/"), new_mission()]
+    setup = await run_in_threadpool(setup_card)  # it asks Ollama, which may be slow or off: never on the event loop
+    body = [flash(request), setup, loop_panel("/"), new_mission()]
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
@@ -2068,7 +2542,7 @@ async def home(request: Request) -> HTMLResponse:
                 f'<span class="badge">{_n("{n} article", "{n} articles", done)}</span></div>'
                 f'<div class="sub">{_("Where each article went, and republish")}</div></a>')
     if lab:
-        body.append(RESEARCHERS)
+        body.append(script("researchers.js"))
     return page("Mission Loop", "\n".join(body), poll=True)
 
 def new_mission() -> str:
@@ -2233,7 +2707,7 @@ async def mission(request: Request) -> Response:
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request),
             f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
-            f'<span class="muted">{escape(m.slug)}</span></p>',
+            f'<span class="muted">{escape(m.slug)}</span> {board_link(m.slug, real=True)}</p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
         body.append(f'<p class="muted objective">{escape(m.objective)}</p>')
@@ -2380,7 +2854,7 @@ CHAT_JS = """<script>
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " " + t("Web search off (set BRAVE_API_KEY in .env).");
+    else if (data.web === false) hint.textContent += " " + t("Web search off. Add a Brave key in Settings → Web search.");
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
@@ -2478,8 +2952,9 @@ CHAT_JS = """<script>
 
 def chat_widget() -> str:
     chips = "".join(f'<button type="button">{escape(_(q))}</button>' for q in SUGGESTIONS)
+    sprites_src = asset("researchers.js")
     chat = escape(_("Researcher Chat"), quote=True)
-    guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{RESEARCHERS_SRC}"></div>'
+    guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{sprites_src}"></div>'
              if settings.animations() else "")
     return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="{chat}" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
@@ -2561,7 +3036,750 @@ async def api_signature(request: Request) -> PlainTextResponse:
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
 
+# ---------- the cork board (board.py places the notes and finds the strings; this adds the words) ----------
+
+# A card is one link already, so its "On the board" is a span this sends to the board, zoomed onto the mission.
+BOARD_LINK_JS = """<script>
+(() => {
+  const go = e => {
+    const b = e.target.closest && e.target.closest("[data-board]");
+    if (!b || (e.type === "keydown" && e.key !== "Enter")) return;
+    e.preventDefault(); e.stopPropagation();
+    location.href = "/board?focus=" + encodeURIComponent(b.dataset.board);
+  };
+  document.addEventListener("click", go, true);
+  document.addEventListener("keydown", go, true);
+})();
+</script>"""
+
+def board_link(slug: str, real: bool = False) -> str:
+    """A small "On the board" link to the board, zoomed onto this mission (a span inside a card, which is a link)."""
+    if real:
+        return f'<a class="onboard" href="/board?focus={quote(slug)}">{ICON_BOARD}{_("On the board")}</a>'
+    return (f'<span class="onboard" role="link" tabindex="0" data-board="{escape(slug, quote=True)}" '
+            f'title="{escape(_("Show on the board"), quote=True)}">{ICON_BOARD}{_("On the board")}</span>')
+
+PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
+         State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
+         State.COMBINED: "queued"}
+
+def paper(m: Mission) -> str:
+    """The sticky note's colour: the stage it is at, like the cards' tones."""
+    if m.state == State.BRIEF_READY:
+        return "writing" if m.approved else "review"
+    return PAPER.get(m.state, "queued")
+
+def _cut(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rsplit(" ", 1)[0] + "…"
+
+def board_state() -> dict:
+    """What the board shows: board.layout()'s notes and strings, with each note's words. /api/board serves it."""
+    data = board.layout()
+    missions = {m.slug: m for m in store.all_missions()}
+    epics = {e.slug: e for e in store.all_epics()}
+    live = {e["slug"]: settings.seat_worker(e["worker"]) for e in running_now()}   # slug -> whose crew visits it
+    strung: dict[str, int] = {}
+    for s in data["strings"]:
+        if s["kind"] != "epic":
+            for end in (s["a"], s["b"]):
+                strung[end] = strung.get(end, 0) + 1
+    members: dict[str, int] = {}
+    for m in missions.values():
+        if m.state != State.COMBINED:
+            key = m.epic if m.epic in epics else board.UNSORTED
+            members[key] = members.get(key, 0) + 1
+    for n in data["notes"]:
+        if n["kind"] == "mission":
+            m = missions[n["slug"]]
+            try:
+                brief, article = _brief(m.slug), _article(m.slug)
+            except ValueError:             # an artifact from an older schema: show the note without it
+                brief = article = None
+            thesis = brief.thesis if brief else m.brief_sources.thesis if m.brief_sources else ""
+            sources = len(brief.sources) if brief else 0
+            links = strung.get(n["id"], 0)
+            meta = [_n("{n} source", "{n} sources", sources) if sources else "",
+                    _n("{n} connection", "{n} connections", links) if links else "",
+                    _("attempt {n} of {total}").format(n=m.attempts, total=m.max_attempts)
+                    if m.state == State.RESEARCHING and m.attempts else "",
+                    _("combined into {mission}").format(mission=m.combined_into) if m.combined_into else ""]
+            n.update(title=article.title if article else m.topic, short=_cut(article.title if article else m.topic, 90),
+                     thesis=_cut(thesis or m.objective or m.topic, board.PREVIEW_CHARS),
+                     thesis_label=_("Thesis") if thesis else _("Objective"), stage=label(m), paper=paper(m),
+                     epic=epics[m.epic].title if m.epic in epics else "", url=f"/m/{quote(m.slug)}",
+                     open=_("Open article") if article else _("Open brief") if brief else _("Open mission"),
+                     meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED,
+                     worker=live.get(m.slug) if live.get(m.slug) in settings.WORKERS else "")
+        else:
+            count = members.get(n["slug"], 0)
+            e = epics.get(n["slug"])
+            n.update(title=e.title if e else _("Unsorted"), proposed=bool(e and e.status == "proposed"),
+                     count_text=_n("{n} mission", "{n} missions", count))
+    data.update(poll=board.POLL_SECONDS * 1000, size_min=board.SIZE_MIN, size_max=board.SIZE_MAX,
+                style=settings.board_style(), animations=settings.animations())
+    data["sig"] = hashlib.sha1(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return data
+
+async def api_board(request: Request) -> JSONResponse:
+    data = await run_in_threadpool(board_state)
+    if request.query_params.get("sig") == data["sig"]:
+        return JSONResponse({"same": True})
+    return JSONResponse(data)
+
+async def board_move(request: Request) -> JSONResponse:
+    """A human dragged or resized a note (assets/board.js)."""
+    if not same_origin(request):
+        return JSONResponse({"error": "cross-site"}, status_code=403)
+    try:
+        body = await request.json()
+        prefix, _, slug = str(body["id"]).partition(":")
+        kind = {"m": "mission", "e": "epic"}[prefix]
+        x, y, size = body["x"], body["y"], body.get("size")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x, y)) or \
+                (size is not None and (isinstance(size, bool) or not isinstance(size, (int, float)))):
+            raise ValueError("x, y and size must be numbers")
+        note = board.move(kind, slug, float(x), float(y), None if size is None else float(size))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse(note.model_dump())
+
+def board_style_panel(style: dict) -> str:
+    """The board's own gear: surface, cards, string and its colour, changed in place (assets/board.js)."""
+    def seg(key: str, options: dict) -> str:
+        return (f'<div class="seg" data-key="{key}">' + "".join(
+            f'<button type="button" data-value="{v}" class="{"on" if style[key] == v else ""}">{escape(_(n))}</button>'
+            for v, n in options.items()) + "</div>")
+    dots = "".join(f'<button type="button" class="dot{" on" if style["color"] == c else ""}" data-kind="{kind}" '
+                   f'data-value="{c}" style="--c:{c}" title="{escape(_(name))}" aria-label="{escape(_(name))}"'
+                   f'{"" if kind == style["string"] else " hidden"}></button>'
+                   for kind, colors in settings.BOARD_STRINGS.items() for name, c in colors.items())
+    own = escape(_("Your own colour"), quote=True)
+    return (f'<div class="board-style" hidden><div class="lbl">{_("Surface")}</div>{seg("surface", settings.BOARD_SURFACES)}'
+            f'<div class="lbl">{_("Cards")}</div>{seg("cards", settings.BOARD_CARDS)}'
+            f'<div class="lbl">{_("Joined by")}</div>{seg("string", settings.BOARD_STRING_NAMES)}'
+            f'<div class="lbl">{_("Colour")}</div><div class="dots">{dots}'
+            f'<label class="dot own" title="{own}"><input type="color" value="{style["color"]}" '
+            f'aria-label="{own}"></label></div>'
+            f'<a class="more" href="/settings#board">{_("Settings")}</a></div>')
+
+def board_style_form() -> str:
+    """The same choices on the Settings page; each change saves at once."""
+    style = settings.board_style()
+    def choice(key: str, options: dict) -> str:
+        return "".join(f'<label><input type="radio" name="{key}" value="{v}"{" checked" if style[key] == v else ""} '
+                       f'onchange="this.form.requestSubmit()">{escape(_(n))}</label>' for v, n in options.items())
+    colors = settings.BOARD_STRINGS[style["string"]]
+    swatches = "".join(
+        f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
+        f'{" checked" if style["color"] == c else ""} onchange="this.form.requestSubmit()"><span class="dab"></span>'
+        f'{escape(_(n))}</label>' for n, c in colors.items())
+    presets = {c for kind in settings.BOARD_STRINGS.values() for c in kind.values()}
+    own = style["color"] not in presets
+    swatches += (f'<label class="swatch own{" set" if own else ""}" style="--c:{style["color"]};--ink:{settings.ink_on(style["color"])}">'
+                 f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="{escape(_("Your own colour"), quote=True)}" '
+                 f'onchange="this.form.querySelectorAll(\'input[name=color]\').forEach(r => r.checked = false); '
+                 f'this.form.requestSubmit()">{_("Your own")}</label>')
+    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board">
+  <h3>{ICON_BOARD}{_("Board")}</h3>
+  <p class="hint">{_("Surface, cards and string for the {board}. Same as the gear on the board.").format(board=f'<a href="/board">{_("board")}</a>')}</p>
+  <div class="choice" role="radiogroup" aria-label="{_("Surface")}">{choice("surface", settings.BOARD_SURFACES)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="{_("Cards")}">{choice("cards", settings.BOARD_CARDS)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="{_("Joined by")}">{choice("string", settings.BOARD_STRING_NAMES)}</div>
+  <p></p><div class="swatches" role="radiogroup" aria-label="{_("Colour")}">{swatches}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
+</form>"""
+
+def _board_style_from(values) -> dict:
+    get = lambda k: (str(values.get(k)) if values.get(k) is not None else None)
+    return settings.set_board_style(surface=get("surface"), cards=get("cards"), string=get("string"), color=get("color"))
+
+async def board_style_save(request: Request) -> JSONResponse:
+    """The board's gear changed its look (assets/board.js)."""
+    if not same_origin(request):
+        return JSONResponse({"error": "cross-site"}, status_code=403)
+    try:
+        return JSONResponse(_board_style_from(await request.json()))
+    except (ValueError, AttributeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+async def save_board_style(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    values = {k: form.get(k) for k in ("surface", "cards", "string", "color") if form.get(k)}
+    if "color" not in values and form.get("own"):
+        values["color"] = form.get("own")      # the colour picker: no preset is ticked
+    if "string" in values and values["string"] != settings.board_style()["string"]:
+        values.pop("color", None)              # a new kind brings its own first colour
+    try:
+        _board_style_from(values)
+    except ValueError:
+        return go("/settings", error="board_style")
+    return go("/settings", done="board_style_saved")
+
+_MENTIONS_FOUND = False                    # an older desk's mentions are found the first time a board opens
+
+async def board_page(request: Request) -> Response:
+    global _MENTIONS_FOUND
+    if not _MENTIONS_FOUND:
+        _MENTIONS_FOUND = True             # once per start, even if it fails: the board shows without them
+        try:
+            await run_in_threadpool(board.find_all_mentions)
+        except Exception as e:
+            print(f"board: finding mentions failed ({type(e).__name__}: {e})", flush=True)
+    data = await run_in_threadpool(board_state)
+    focus = request.query_params.get("focus", "")
+    raw = json.dumps(data).replace("<", "\\u003c")   # no "</script>" or "<!--" can end the data block
+    empty = "" if data["notes"] else (f'<p class="board-empty">{_("Board empty.")} '
+                                      f'<a href="/">{_("Add a mission")}</a></p>')
+    style = data["style"]
+    looks = (f'surface-{style["surface"]} cards-{style["cards"]} str-{style["string"]}'
+             + (" animate" if data["animations"] else ""))
+    body = (f'<style>{BOARD_CSS}</style>'
+            f'<div class="board-wrap {looks}" id="board" style="--string:{style["color"]}" '
+            f'data-focus="{escape(focus, quote=True)}">'
+            f'<div class="world"><svg class="strings" aria-hidden="true"></svg></div>{empty}'
+            f'<div class="board-crumb" hidden></div>'
+            f'<div class="board-pop" hidden></div>'
+            f'<div class="board-legend"><span><i class="e"></i>{_("Epic")}</span><span><i class="l"></i>{_("Links")}</span>'
+            f'<span><i class="m"></i>{_("Same source or mention")}</span></div>'
+            f'<div class="board-zoom"></div>'
+            f'<div class="board-tools"><button type="button" data-tool="out" title="{_("Zoom out")}" aria-label="{_("Zoom out")}">−</button>'
+            f'<button type="button" data-tool="in" title="{_("Zoom in")}" aria-label="{_("Zoom in")}">+</button>'
+            f'<button type="button" data-tool="fit" title="{_("Fit everything")}" aria-label="{_("Fit everything")}">'
+            f'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>'
+            f'<button type="button" data-tool="style" title="{_("Board style")}" aria-label="{_("Board style")}" '
+            f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
+            f'</div><script type="application/json" id="board-data">{raw}</script>'
+            f'{script_i18n("board.js")}{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
+    return page(_("Board"), body)
+
+BOARD_CSS = """
+body:has(.board-wrap) { overflow-x:hidden; }
+body:has(.board-wrap) nav.top { margin-bottom:1rem; }
+.board-wrap { --string:#c0242b; position:relative; width:calc(100vw - 2rem); margin-left:calc(50% - 50vw + 1rem);
+  height:calc(100vh - 8rem); min-height:420px; overflow:hidden; border-radius:6px; touch-action:none; user-select:none;
+  cursor:grab; background-color:#b98a57;
+  background-image:
+    radial-gradient(rgba(70,40,15,.28) 1px, transparent 1.4px),
+    radial-gradient(rgba(255,230,190,.18) 1px, transparent 1.6px),
+    radial-gradient(rgba(90,55,20,.22) 1.5px, transparent 2px),
+    radial-gradient(ellipse at 30% 20%, rgba(255,220,170,.25), transparent 60%),
+    radial-gradient(ellipse at 80% 90%, rgba(60,30,10,.25), transparent 55%);
+  background-size:7px 7px, 11px 13px, 17px 19px, 100% 100%, 100% 100%;
+  background-position:0 0, 3px 5px, 8px 2px, 0 0, 0 0;
+  box-shadow:inset 0 0 0 12px #6e4a2a, inset 0 0 0 14px #4c321b, inset 0 0 60px rgba(0,0,0,.35); }
+.board-wrap:active { cursor:grabbing; }
+.board-wrap .world { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
+.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible; }
+.board-wrap .str path { fill:none; stroke-linecap:round; }
+.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }
+.board-wrap .str.link .line { stroke-width:1.8; }
+.board-wrap .str.mention .line { stroke-width:1.3; stroke-dasharray:5 4; opacity:.8; }
+.board-wrap .str .hit { stroke:transparent; stroke-width:12; pointer-events:stroke; }
+.board-wrap .str.epic .hit { pointer-events:none; }
+.board-wrap .faded { opacity:.2; filter:saturate(.3); transition:opacity .3s; }
+.board-wrap .note { border:none; margin:0; }                /* not the site's .note */
+.board-wrap .note { --s:1; position:absolute; transform:translate(-50%,-50%) rotate(var(--r,0deg));
+  width:calc(160px * var(--s)); padding:calc(20px * var(--s)) calc(13px * var(--s)) calc(11px * var(--s));
+  font-size:calc(13px * var(--s)); line-height:1.3; background:var(--paper,#fff3a3); color:#2b2620; border-radius:2px;
+  box-shadow:0 1px 1px rgba(0,0,0,.15), 0 8px 14px -6px rgba(0,0,0,.45); cursor:pointer; transition:opacity .3s, filter .3s; }
+.board-wrap .note.lifted { box-shadow:0 2px 3px rgba(0,0,0,.2), 0 18px 26px -8px rgba(0,0,0,.5); z-index:2; cursor:grabbing; }
+.board-wrap .note .pin { position:absolute; top:6px; left:50%; width:14px; height:14px; margin-left:-7px; border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #ff8a8a, #c0242b 55%, #6d0f13); box-shadow:1px 3px 3px rgba(0,0,0,.45); }
+.board-wrap .note .t { font-family:Georgia, serif; font-weight:600; }
+.board-wrap .note .stage { margin-top:.6em; font-size:.8em; letter-spacing:.04em; text-transform:uppercase; color:rgba(0,0,0,.55); }
+.board-wrap .note .stage::before { content:""; display:inline-block; width:.55em; height:.55em; border-radius:50%;
+  margin-right:.4em; background:var(--dot,#888); }
+.board-wrap .note .stamp { display:inline-block; margin-top:.6em; font:700 .75em/1 system-ui, sans-serif; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--dot); border:1.5px solid var(--dot); padding:3px 5px; border-radius:3px;
+  transform:rotate(-4deg); opacity:.85; }
+.board-wrap .note .now { position:absolute; top:-10px; right:-8px; background:#2f8a4a; color:#fff;
+  font:600 9.5px/1 system-ui, sans-serif; padding:3px 6px; border-radius:999px; }
+.board-wrap .note.live { outline:2.5px solid #2f8a4a; outline-offset:3px; }
+.board-wrap .note .grip { position:absolute; right:0; bottom:0; width:14px; height:14px; cursor:nwse-resize; opacity:0;
+  background:linear-gradient(135deg, transparent 50%, rgba(0,0,0,.25) 50%); }
+.board-wrap .note:hover .grip { opacity:1; }
+.board-wrap .queued   { --paper:#eef1f4; --dot:#7d8792; }
+.board-wrap .research { --paper:#fff3a3; --dot:#b08f00; }
+.board-wrap .review   { --paper:#cfe6ff; --dot:#2f6fd0; }
+.board-wrap .writing  { --paper:#ffe1bf; --dot:#d9822b; }
+.board-wrap .publish  { --paper:#d4f2cf; --dot:#2f8a4a; }
+.board-wrap .done     { --paper:#fffdf8; --dot:#2f8a4a; }
+.board-wrap .parked   { --paper:#ffd6d6; --dot:#c0242b; }
+.board-wrap .note.combined { opacity:.55; filter:saturate(.5); }
+.board-wrap .note.combined .stamp { --dot:#6b6b70; }
+.board-wrap .note.epic { display:block; white-space:normal; font:400 calc(13px * var(--s))/1.3 -apple-system, system-ui, sans-serif;
+  letter-spacing:normal; border:none; color:#2b2620; }      /* not the site's .epic pill */
+.board-wrap .note.epic { --paper:#fffaf0; text-align:center; padding-top:calc(24px * var(--s));
+  background-image:repeating-linear-gradient(to bottom, transparent 0 1.6em, rgba(60,110,200,.18) 1.6em calc(1.6em + 1px));
+  background-position:0 calc(3.1em); }
+.board-wrap .note.epic::before { content:""; position:absolute; top:calc(2.9em); left:0; right:0; height:1.5px; background:rgba(200,50,50,.45); }
+.board-wrap .note.epic .k { font:600 .62em/1 system-ui, sans-serif; letter-spacing:.14em; color:#8a2b2b; text-transform:uppercase; }
+.board-wrap .note.epic .t { font-size:1.45em; margin-top:.75em; line-height:1.15; }
+.board-wrap .note.epic .n { margin-top:.5em; font-size:.85em; color:#6b6b70; }
+.board-wrap .note.epic .pin { width:18px; height:18px; margin-left:-9px; top:4px;
+  background:radial-gradient(circle at 35% 30%, #fff1a6, #e0b100 55%, #7a5c00); }
+.board-wrap .note.epic.proposed { outline:2px dashed rgba(138,43,43,.7); outline-offset:4px; }
+.board-wrap .note.unsorted { background:none; box-shadow:none; text-align:center; width:200px; cursor:default; color:rgba(40,22,8,.7); }
+.board-wrap .note.unsorted .t { font-style:italic; font-size:1.3em; }
+.board-wrap .note.unsorted .n { font-size:.85em; }
+.board-pop { position:absolute; width:320px; max-width:calc(100% - 24px); background:var(--bg); color:var(--fg); border-radius:12px;
+  padding:14px 16px 12px; box-shadow:0 18px 40px -10px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.06); font-size:13.5px;
+  z-index:4; cursor:auto; user-select:text; }
+.board-pop .pop-row { display:flex; justify-content:space-between; align-items:center; gap:.6rem; }
+.board-pop .tag { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--quote); font-weight:600; }
+.board-pop .tag.review { background:#cfe6ff; color:#1f4f99; } .board-pop .tag.publish { background:#d4f2cf; color:#1e6b34; }
+.board-pop .tag.parked { background:#ffd6d6; color:#8f1a1f; } .board-pop .tag.research { background:#fff3a3; color:#6d5700; }
+.board-pop .tag.writing { background:#ffe1bf; color:#8a4b0f; } .board-pop .tag.done { background:#e8f5e4; color:#1e6b34; }
+.board-pop .epicpill { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--rule); color:var(--muted); }
+.board-pop h3 { font-family:Georgia, serif; font-size:16px; line-height:1.3; margin:.55rem 0 .45rem; }
+.board-pop .lbl { font:600 10.5px/1 system-ui, sans-serif; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-top:.5rem; }
+.board-pop p { margin:.3rem 0 .6rem; line-height:1.45; }
+.board-pop .meta { font-size:12px; color:var(--muted); }
+.board-pop .open { flex:none; font-size:12.5px; font-weight:600; color:#fff; background:var(--accent); border-radius:8px;
+  padding:.38rem .7rem; text-decoration:none; white-space:nowrap; }
+.board-wrap .deg { display:inline-flex; gap:4px; }
+.board-wrap .deg button { min-width:30px; border:1px solid var(--rule); background:var(--bg); color:var(--fg); border-radius:7px;
+  padding:.2rem .45rem; font:600 12px system-ui, sans-serif; cursor:pointer; }
+.board-wrap .deg button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.board-pop .deg { margin:.45rem 0 .2rem; }
+.board-crumb, .board-legend, .board-tools button { background:color-mix(in srgb, var(--bg) 95%, transparent);
+  box-shadow:0 4px 12px rgba(0,0,0,.3); border-radius:10px; z-index:3; }
+.board-crumb { position:absolute; left:24px; top:24px; padding:.4rem .7rem; font-size:12.5px; display:flex; gap:.5rem;
+  align-items:center; cursor:auto; }
+.board-crumb[hidden] { display:none; }
+.board-crumb b { font-family:Georgia, serif; } .board-crumb .x { color:var(--muted); }
+.board-crumb .clear { border:none; background:none; color:var(--muted); cursor:pointer; font-size:13px; }
+.board-legend { position:absolute; left:24px; bottom:24px; padding:.5rem .8rem; font-size:11.5px; display:flex; gap:1rem; cursor:auto; }
+.board-legend span { display:inline-flex; align-items:center; gap:.35rem; }
+.board-legend i { display:inline-block; width:24px; border-top:2.4px solid var(--string); }
+.board-legend i.l { border-top-width:1.8px; } .board-legend i.m { border-top:1.4px dashed var(--string); }
+.board-zoom { position:absolute; right:206px; top:36px; font:600 11px system-ui, sans-serif; color:rgba(255,255,255,.9);
+  text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:3; }
+.board-tools { position:absolute; right:24px; top:24px; display:flex; gap:6px; z-index:3; }
+.board-tools button { width:38px; height:38px; border:none; display:grid; place-items:center; font:600 18px system-ui, sans-serif;
+  color:var(--fg); cursor:pointer; }
+.board-tools svg { width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; }
+.board-empty { position:absolute; inset:0; display:grid; place-items:center; margin:0; color:#fff;
+  font:italic 1.2rem Georgia, serif; text-shadow:0 1px 3px rgba(0,0,0,.6); }
+.board-empty a { color:#fff; }
+@media (max-width: 640px) { .board-legend { display:none; } .board-wrap { height:calc(100vh - 11rem); } }/* ---------- surfaces (cork is the default above) ---------- */
+.board-wrap.surface-paper { background-color:#f4efe4; border-radius:4px;
+  background-image:radial-gradient(rgba(120,100,70,.09) 1px, transparent 1.5px), radial-gradient(rgba(120,100,70,.06) 1px, transparent 1.6px),
+    radial-gradient(ellipse at 20% 10%, rgba(255,255,255,.7), transparent 55%), radial-gradient(ellipse at 90% 100%, rgba(150,120,70,.14), transparent 60%);
+  background-size:9px 9px, 13px 11px, 100% 100%, 100% 100%; background-position:0 0, 4px 6px, 0 0, 0 0;
+  box-shadow:inset 0 0 0 1px #d9d0bf, inset 0 0 50px rgba(120,90,40,.15); }
+.board-wrap.surface-grid { background-color:#fbfcff;
+  background-image:linear-gradient(rgba(60,110,200,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(60,110,200,.22) 1px, transparent 1px),
+    linear-gradient(rgba(60,110,200,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(60,110,200,.09) 1px, transparent 1px);
+  background-size:calc(var(--gz,1) * 100px) calc(var(--gz,1) * 100px), calc(var(--gz,1) * 100px) calc(var(--gz,1) * 100px),
+    calc(var(--gz,1) * 20px) calc(var(--gz,1) * 20px), calc(var(--gz,1) * 20px) calc(var(--gz,1) * 20px);
+  background-position:var(--gx,0) var(--gy,0); box-shadow:inset 0 0 0 1px #c9d6ee; }
+.board-wrap.surface-dark { background-color:#0d1220;
+  background-image:radial-gradient(rgba(130,180,255,.22) 1px, transparent 1.5px), radial-gradient(ellipse at 50% 0%, rgba(70,110,200,.22), transparent 65%);
+  background-size:calc(var(--gz,1) * 28px) calc(var(--gz,1) * 28px), 100% 100%; background-position:var(--gx,0) var(--gy,0), 0 0;
+  box-shadow:inset 0 0 90px rgba(0,0,0,.7); }
+.board-wrap.surface-fridge { background-color:#eceff1; border-radius:18px;
+  background-image:linear-gradient(100deg, transparent 18%, rgba(255,255,255,.8) 30%, transparent 42%),
+    linear-gradient(100deg, transparent 58%, rgba(255,255,255,.45) 64%, transparent 70%), linear-gradient(180deg, #f8f9fa, #dfe3e6);
+  box-shadow:inset 0 0 0 10px #d3d8dc, inset 0 0 0 11px #b6bcc2, inset 0 -40px 70px rgba(0,0,0,.07); }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-zoom { color:#555; text-shadow:none; }
+.board-wrap.surface-dark .note.unsorted, .board-wrap.surface-dark .board-empty { color:#cfe2ff; }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty, .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty a { color:#555; text-shadow:none; }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .note.unsorted { color:#6b6b70; }
+
+/* ---------- what joins them: string (default), laser, wire ---------- */
+.board-wrap.str-laser .str .line { stroke-width:1.7; filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser .str .core { stroke:#fff; stroke-width:.6; opacity:.9; }
+.board-wrap.str-laser .str.mention .line, .board-wrap.str-laser .str.mention .core { stroke-dasharray:6 6; }
+.board-wrap.str-laser.animate .str .line { animation:laser 2.6s ease-in-out infinite alternate; }
+@keyframes laser { from { opacity:.65; } to { opacity:1; } }
+.board-wrap.str-wire .str .line { stroke-width:2; filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire .str .core { stroke:rgba(255,255,255,.6); stroke-width:.7; transform:translate(-.4px, -.5px); }
+.board-wrap.str-wire .str.mention .line { stroke-dasharray:none; stroke-width:1.2; opacity:.75; }
+.board-wrap.str-laser .board-legend i { box-shadow:0 0 6px var(--string); }
+
+/* ---------- cards: fridge magnets ---------- */
+.board-wrap.cards-magnets .note { width:auto; max-width:calc(230px * var(--s)); padding:0; background:none; box-shadow:none;
+  font-size:calc(13px * var(--s)); }
+.board-wrap.cards-magnets .note.lifted { filter:drop-shadow(0 14px 12px rgba(0,0,0,.35)); }
+.board-wrap.cards-magnets .alpha { display:flex; gap:calc(2px * var(--s)); justify-content:center; }
+.board-wrap.cards-magnets .alpha b { display:inline-block; font:900 calc(34px * var(--s))/1 "Arial Rounded MT Bold", "Nunito", "Trebuchet MS", system-ui, sans-serif;
+  color:hsl(var(--h) 80% 52%); transform:rotate(var(--r)); -webkit-text-stroke:calc(1px * var(--s)) hsl(var(--h) 75% 38%);
+  text-shadow:0 1px 0 hsl(var(--h) 80% 70%), 1px 3px 0 hsl(var(--h) 70% 32%), 2px 6px 6px rgba(0,0,0,.35); }
+.board-wrap.cards-magnets .tape { margin:calc(6px * var(--s)) auto 0; width:max-content; max-width:calc(200px * var(--s)); padding:2px 7px;
+  background:#1d1d1f; color:#f4f4f4; font:600 .72em/1.3 "Courier New", monospace; letter-spacing:.06em; text-transform:uppercase;
+  border-radius:2px; box-shadow:1px 2px 3px rgba(0,0,0,.35); text-align:center; }
+.board-wrap.cards-magnets .tiles { display:flex; flex-wrap:wrap; gap:calc(4px * var(--s)); justify-content:center; width:calc(200px * var(--s)); }
+.board-wrap.cards-magnets .tiles i { font:500 calc(13px * var(--s))/1 Georgia, "Times New Roman", serif; font-style:normal; color:#1d1d1f;
+  background:#fdfdfb; padding:calc(4px * var(--s)) calc(6px * var(--s)); transform:rotate(var(--r));
+  box-shadow:0 1px 0 #d9d7d0, 1px 3px 4px rgba(0,0,0,.3); }
+.board-wrap.cards-magnets .tiles i.tag { background:var(--dot,#555); color:#fff; font:700 calc(9px * var(--s))/1.2 system-ui, sans-serif;
+  letter-spacing:.08em; text-transform:uppercase; align-self:center; }
+.board-wrap.cards-magnets .postcard { width:calc(210px * var(--s)); background:#fffdf7; padding:calc(6px * var(--s));
+  box-shadow:0 1px 1px rgba(0,0,0,.2), 2px 8px 14px -4px rgba(0,0,0,.45); border-radius:3px; }
+.board-wrap.cards-magnets .postcard .photo { height:calc(58px * var(--s)); border-radius:2px; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.45); overflow:hidden;
+  background:linear-gradient(180deg, hsl(var(--h) 75% 70%) 0 45%, hsl(calc(var(--h) + 30) 60% 45%) 45% 100%); }
+.board-wrap.cards-magnets .postcard .greet { font:italic .7em Georgia, serif; }
+.board-wrap.cards-magnets .postcard .place { font:900 1.25em/1 "Arial Black", Impact, system-ui, sans-serif; letter-spacing:.02em;
+  text-transform:uppercase; text-align:center; padding:0 .3em; }
+.board-wrap.cards-magnets .postcard .back { position:relative; padding:calc(7px * var(--s)) calc(44px * var(--s)) calc(4px * var(--s)) calc(3px * var(--s)); }
+.board-wrap.cards-magnets .postcard .back .t { font:italic 600 1em/1.25 "Bradley Hand", "Segoe Print", "Comic Sans MS", cursive; color:#253a6b; }
+.board-wrap.cards-magnets .postcard .stampbox { position:absolute; right:calc(4px * var(--s)); top:calc(6px * var(--s)); width:calc(30px * var(--s));
+  height:calc(36px * var(--s)); background:repeating-linear-gradient(45deg, var(--dot) 0 3px, #fff 3px 6px); border:2px dotted #fff;
+  outline:1px solid var(--dot); }
+.board-wrap.cards-magnets .postcard .postmark { position:absolute; right:calc(14px * var(--s)); top:calc(32px * var(--s));
+  font:700 .55em/1 system-ui, sans-serif; letter-spacing:.06em; text-transform:uppercase; color:rgba(30,60,120,.65);
+  border:1.5px solid rgba(30,60,120,.5); border-radius:50%; padding:.7em .4em; transform:rotate(-14deg); }
+.board-wrap.cards-magnets .souvenir { width:calc(190px * var(--s)); padding:calc(10px * var(--s)) calc(12px * var(--s)) calc(12px * var(--s));
+  text-align:center; color:#fff; border-radius:calc(22px * var(--s)); border:calc(4px * var(--s)) solid #fff;
+  background:radial-gradient(circle at 30% 20%, hsl(var(--h) 80% 62%), hsl(var(--h) 70% 38%));
+  box-shadow:0 0 0 1px rgba(0,0,0,.15), 2px 10px 16px -4px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.35); }
+.board-wrap.cards-magnets .souvenir .horseshoe { width:calc(34px * var(--s)); height:auto; fill:#e23b3b; stroke:#fff; stroke-width:1.5; }
+.board-wrap.cards-magnets .souvenir .horseshoe .tip { fill:#d9dde2; }
+.board-wrap.cards-magnets .souvenir .k { font:700 .6em/1 system-ui, sans-serif; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin-top:.3em; }
+.board-wrap.cards-magnets .souvenir .t { font:900 1.5em/1.05 "Arial Black", Impact, system-ui, sans-serif; margin-top:.25em;
+  text-shadow:0 2px 0 rgba(0,0,0,.25); }
+.board-wrap.cards-magnets .souvenir .n { font-size:.8em; color:#fff; opacity:.9; margin-top:.3em; }
+.board-wrap.cards-magnets .note.epic { padding:0; background:none; }
+.board-wrap.cards-magnets .note.epic::before { display:none; }
+.board-wrap.cards-magnets .note.epic.proposed .souvenir { border-style:dashed; }
+.board-wrap.cards-magnets .note.epic.proposed { outline:none; }
+.board-wrap.cards-magnets .note.live { outline:none; }
+.board-wrap.cards-magnets .note.live > :first-child { outline:2.5px solid #2f8a4a; outline-offset:5px; border-radius:4px; }
+.board-wrap.cards-magnets .note .now { top:-14px; }
+
+/* ---------- cards: hologram ---------- */
+.board-wrap.cards-hologram .note { --holo:#7fd8ff; color:#e8fbff; background:linear-gradient(160deg, color-mix(in srgb, var(--holo) 22%, transparent),
+  color-mix(in srgb, var(--holo) 8%, transparent)), repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px);
+  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px; backdrop-filter:blur(2px);
+  box-shadow:0 0 14px color-mix(in srgb, var(--holo) 45%, transparent), inset 0 0 18px color-mix(in srgb, var(--holo) 25%, transparent);
+  text-shadow:0 0 6px color-mix(in srgb, var(--holo) 70%, transparent); }
+.board-wrap.cards-hologram .note .t { font-family:"SF Mono", Menlo, Consolas, monospace; font-weight:600; letter-spacing:.01em; }
+.board-wrap.cards-hologram .note .stage, .board-wrap.cards-hologram .note .stamp { color:var(--holo); border-color:var(--holo); }
+.board-wrap.cards-hologram .note .stage::before { background:var(--holo); box-shadow:0 0 6px var(--holo); }
+.board-wrap.cards-hologram .note .pin { width:10px; height:10px; margin-left:-5px; top:6px; background:var(--holo);
+  box-shadow:0 0 6px var(--holo), 0 0 14px var(--holo); }
+.board-wrap.cards-hologram .note::after { content:""; position:absolute; inset:5px; pointer-events:none;
+  background:linear-gradient(var(--holo), var(--holo)) top left / 10px 1.5px, linear-gradient(var(--holo), var(--holo)) top left / 1.5px 10px,
+    linear-gradient(var(--holo), var(--holo)) bottom right / 10px 1.5px, linear-gradient(var(--holo), var(--holo)) bottom right / 1.5px 10px;
+  background-repeat:no-repeat; opacity:.9; }
+.board-wrap.cards-hologram .queued { --holo:#9fb7d4; } .board-wrap.cards-hologram .research { --holo:#ffe066; }
+.board-wrap.cards-hologram .review { --holo:#5ab0ff; } .board-wrap.cards-hologram .writing { --holo:#ffa94d; }
+.board-wrap.cards-hologram .publish { --holo:#4cff9a; } .board-wrap.cards-hologram .done { --holo:#b8f3ff; }
+.board-wrap.cards-hologram .parked { --holo:#ff5c7a; }
+.board-wrap.cards-hologram .note.epic { --holo:#d38bff; background-image:linear-gradient(160deg, rgba(211,139,255,.28), rgba(211,139,255,.08)),
+  repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px); }
+.board-wrap.cards-hologram .note.epic::before { background:var(--holo); opacity:.6; }
+.board-wrap.cards-hologram .note.epic { color:#e8fbff; }
+.board-wrap.cards-hologram .note.epic .k, .board-wrap.cards-hologram .note.epic .n { color:var(--holo); }
+.board-wrap.cards-hologram .note.unsorted { --holo:transparent; border:none; box-shadow:none; background:none; color:#cfe2ff; }
+.board-wrap.cards-hologram .note.unsorted::after { display:none; }
+.board-wrap.cards-hologram .note.live { outline-color:#4cff9a; box-shadow:0 0 22px #4cff9a; }
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note.epic {    /* light boards: dark ink */
+  color:color-mix(in srgb, var(--holo) 25%, #0b1b2b); text-shadow:none;
+  background-color:color-mix(in srgb, var(--holo) 14%, rgba(255,255,255,.5)); }
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note .stage,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note .stamp,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note.epic :is(.k, .n) {
+  color:color-mix(in srgb, var(--holo) 55%, #0b1b2b); border-color:currentColor; }
+.board-wrap.cards-hologram.animate .note:not(.unsorted) { animation:holo 7s infinite; }
+.board-wrap.cards-hologram.animate .note:nth-child(3n) { animation-delay:-2.3s; }
+.board-wrap.cards-hologram.animate .note:nth-child(3n+1) { animation-delay:-4.6s; }
+@keyframes holo { 0%, 92%, 100% { opacity:1; } 93% { opacity:.72; } 94% { opacity:1; } 96% { opacity:.85; } }
+@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap .str .line { animation:none !important; } }
+
+/* ---------- the gear's panel ---------- */
+.board-style { position:absolute; right:24px; top:72px; width:300px; max-width:calc(100% - 48px); z-index:5; cursor:auto;
+  background:var(--bg); color:var(--fg); border-radius:12px; padding:12px 14px; box-shadow:0 18px 40px -10px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.06); }
+.board-style[hidden] { display:none; }
+.board-style .lbl { font:600 10.5px/1 system-ui, sans-serif; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:.7rem 0 .35rem; }
+.board-style .lbl:first-child { margin-top:0; }
+.board-style .seg { display:flex; flex-wrap:wrap; gap:4px; }
+.board-style .seg button { border:1px solid var(--rule); background:var(--bg); color:var(--fg); border-radius:999px; padding:.28rem .65rem;
+  font:600 12px system-ui, sans-serif; cursor:pointer; }
+.board-style .seg button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.board-style .dots { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.board-style .dot { width:26px; height:26px; border-radius:50%; border:none; padding:0; background:var(--c); cursor:pointer;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.15); }
+.board-style .dot[hidden] { display:none; }
+.board-style .dot.on { box-shadow:inset 0 0 0 1px rgba(0,0,0,.15), 0 0 0 2px var(--bg), 0 0 0 4px var(--fg); }
+.board-style .dot.own { position:relative; overflow:hidden; background:conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.board-style .dot.own input { position:absolute; inset:-6px; width:40px; height:40px; opacity:0; cursor:pointer; }
+.board-style .more { display:block; margin-top:.8rem; font-size:12px; }
+.board-tools button svg { width:18px; height:18px; fill:none; stroke:var(--fg); stroke-width:1.8; }
+/* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
+.board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
+  pointer-events:none; image-rendering:pixelated; }
+.board-wrap:not(.cards-sticky) .note[data-lab] { --r:0deg !important; }   /* level ground to walk on */
+/* sticky notes: the researcher stands inside the card on its bottom edge and tilts with it */
+.board-wrap.cards-sticky .note canvas.lab-stage { bottom:0; }
+.board-wrap.cards-sticky .note[data-lab] { padding-bottom:calc(11px * var(--s) + 46px); }
+
+/* ---------- surface: arcade ---------- */
+.board-wrap.surface-arcade { background-color:#1d2b53; border-radius:0;
+  background-image:linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 125%, rgba(126,37,83,.6), transparent 62%);
+  background-size:calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), 100% 100%;
+  background-position:var(--gx,0) var(--gy,0), var(--gx,0) var(--gy,0), 0 0;
+  box-shadow:inset 0 0 0 6px #000, inset 0 0 0 10px #5f574f, inset 0 0 0 12px #000; }
+.board-wrap.surface-arcade .note.unsorted, .board-wrap.surface-arcade .board-empty { color:#fff1e8; }
+
+/* ---------- strings: pixel (right-angle elbows) ---------- */
+.board-wrap.str-pixel .str path { stroke-linecap:square; stroke-linejoin:miter; }
+.board-wrap.str-pixel .str .line { stroke-width:3; filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel .str.link .line { stroke-width:2.5; }
+.board-wrap.str-pixel .str.mention .line { stroke-width:2; stroke-dasharray:6 6; opacity:.9; }
+.board-wrap.str-pixel .board-legend i { border-top-width:3px; }
+
+/* ---------- cards: pixel (flat 8-bit colours, stepped borders, hard shadows) ---------- */
+.board-wrap.cards-pixel .note { --px:calc(3px * var(--s)); --ink:#1d1d1f; transform:translate(-50%,-50%);
+  background:var(--pix,#c2c3c7); color:var(--ink); border-radius:0; letter-spacing:.01em;
+  font:700 calc(12px * var(--s))/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding:calc(17px * var(--s)) calc(12px * var(--s)) calc(10px * var(--s));
+  box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink), calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink),
+    inset var(--px) var(--px) 0 0 rgba(255,255,255,.5), inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 0 rgba(0,0,0,.18),
+    calc(3 * var(--px)) calc(3 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note.lifted { box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink),
+  calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink), calc(5 * var(--px)) calc(5 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note .t { font-family:inherit; font-weight:800; }
+.board-wrap.cards-pixel .note .pin { border-radius:0; width:calc(8px * var(--s)); height:calc(8px * var(--s)); top:calc(5px * var(--s));
+  margin-left:calc(-4px * var(--s)); background:#ff004d; box-shadow:0 0 0 2px var(--ink), 2px 2px 0 2px rgba(0,0,0,.3); }
+.board-wrap.cards-pixel .note .stage { color:rgba(0,0,0,.7); font-size:.78em; }
+.board-wrap.cards-pixel .note .stage::before { border-radius:0; background:var(--ink); }
+.board-wrap.cards-pixel .note .stamp { transform:none; border-radius:0; border-width:2px; color:var(--ink); border-color:var(--ink);
+  background:rgba(255,255,255,.55); opacity:1; }
+.board-wrap.cards-pixel .note .now { border-radius:0; background:#00e436; color:#1d1d1f; font:800 9.5px/1 ui-monospace, Menlo, monospace;
+  box-shadow:0 0 0 2px #1d1d1f, 2px 2px 0 2px rgba(0,0,0,.35); top:-12px; }
+.board-wrap.cards-pixel .note.live { outline:3px dashed #00e436; outline-offset:6px; }
+.board-wrap.cards-pixel .queued   { --pix:#c2c3c7; } .board-wrap.cards-pixel .research { --pix:#ffec27; }
+.board-wrap.cards-pixel .review   { --pix:#29adff; } .board-wrap.cards-pixel .writing  { --pix:#ffa300; }
+.board-wrap.cards-pixel .publish  { --pix:#00e436; } .board-wrap.cards-pixel .done     { --pix:#fff1e8; }
+.board-wrap.cards-pixel .parked   { --pix:#ff77a8; }
+.board-wrap.cards-pixel .note.epic { --pix:#7e2553; --ink:#000; color:#fff1e8; background-image:none;
+  font:700 calc(13px * var(--s))/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.board-wrap.cards-pixel .note.epic::before { display:none; }
+.board-wrap.cards-pixel .note.epic .k { color:#ffec27; font:800 .7em/1 ui-monospace, Menlo, monospace; letter-spacing:.2em; }
+.board-wrap.cards-pixel .note.epic .t { font-family:inherit; font-weight:800; font-size:1.4em; }
+.board-wrap.cards-pixel .note.epic .n { color:#fff1e8; opacity:.85; }
+.board-wrap.cards-pixel .note.epic .pin { background:#ffec27; }
+.board-wrap.cards-pixel .note.epic.proposed { outline:3px dashed #ffec27; outline-offset:6px; }
+.board-wrap.cards-pixel .note.unsorted { background:none; box-shadow:none; }
+.board-wrap.cards-pixel .note .grip { background:linear-gradient(135deg, transparent 50%, var(--ink) 50%); }
+"""
+
 # ---------- actions (POST, then redirect back) ----------
+
+# ---------- the avatar studio: researchers built from pieces, or by asking a model (assets/avatars.js) ----------
+
+def avatar_link() -> str:
+    """The Settings page's way into the studio, with what is customised so far."""
+    n, off = len(avatars.custom()), len(avatars.off())
+    bits = [_n("{n} of your own", "{n} of your own", n) if n else "", _n("{n} staying home", "{n} staying home", off) if off else ""]
+    now = " · ".join(b for b in bits if b) or _("built-in researchers only")
+    return f"""<div class="actions avatar-link">
+  <h3>{icon("person")}{_("Avatars")}</h3>
+  <p class="hint">{_("Build a researcher from pieces, or ask a model to draw one. Now: {now}.").format(now=escape(now))}</p>
+  <p><a class="btn" href="/avatars">{_("Avatar studio")}</a>
+  <a class="btn" href="/sprites">{_("Sprite studio")}</a></p>
+  <p class="hint">{_("Sprite studio: write a sprite spec by hand ({file}) and see every pose.").format(file="<code>SPRITES.md</code>")}</p>
+</div>"""
+
+async def avatars_page(request: Request) -> HTMLResponse:
+    lede = _("Build a researcher from pieces, or describe one to a model. Saved avatars join their crew. "
+             "Stored in {file}.").format(file="<code>data/sprites.json</code>")
+    body = (f'<style>{AVATAR_CSS}</style><h1>{_("Avatar studio")}</h1>'
+            f'<p class="hint lede">{lede}</p>'
+            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>{_("The studio needs JavaScript.")}</noscript></div>'
+            f'{script("researchers.js")}{script_i18n("avatars.js")}{script("avatars.js")}')
+    return page(_("Avatar studio"), body)
+
+async def sprite_studio(request: Request) -> Response:
+    """The sprite studio (tools/sprites.html): a sprite's spec on the left, the real renderer on the right. The page
+    also opens on its own from a served copy of the repo; here its script gets the stamped address."""
+    try:
+        html = (TOOLS / "sprites.html").read_text()
+    except OSError:
+        return PlainTextResponse(_("tools/sprites.html is missing."), status_code=404)
+    html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"')
+    html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")')
+    html = html.replace("<!--back-->", f'<p><a href="/settings">&larr; {_("Settings")}</a></p>')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+async def sprite_example(request: Request) -> Response:
+    try:
+        return Response((TOOLS / "example-sprite.json").read_bytes(), media_type="application/json", headers={"Cache-Control": "no-cache"})
+    except OSError:
+        return JSONResponse({"error": "no example"}, status_code=404)
+
+async def avatar_models(request: Request) -> JSONResponse:
+    try:
+        found = await run_in_threadpool(agents.avatar_models)
+    except Exception:
+        found = []
+    return JSONResponse({"models": found})
+
+async def _json(request: Request) -> dict:
+    try:
+        data = await request.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+async def avatar_ask(request: Request) -> JSONResponse:
+    """The designer edits the spec it was sent; the page checks the reply and may send it back with `errors`."""
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    data = await _json(request)
+    spec, look = data.get("spec"), data.get("look")
+    if not isinstance(spec, dict) or len(json.dumps(spec)) > avatars.MAX_SPEC * 2:
+        return JSONResponse({"error": _("Avatar arrived incomplete. Try again.")}, status_code=400)
+    errors = data.get("errors") if isinstance(data.get("errors"), list) else None
+    try:
+        out = await run_in_threadpool(agents.edit_avatar, spec, str(data.get("message") or ""),
+                                      look if isinstance(look, dict) else None, str(data.get("model") or "")[:100] or None,
+                                      data.get("image") if isinstance(data.get("image"), str) else None,
+                                      [str(e) for e in errors] if errors else None,
+                                      data.get("catalog") if isinstance(data.get("catalog"), dict) else None)
+    except ValueError as e:                # a picture that didn't decode, or was too big
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": _("Model took too long. Try a smaller model or a simpler ask.")}, status_code=504)
+    except Exception as e:                 # Ollama closed, model missing
+        why = f"{type(e).__name__}: {str(e)[:160]}"
+        return JSONResponse({"error": _("Model didn't answer ({error}). Is Ollama running?").format(error=why)}, status_code=502)
+    return JSONResponse(out)
+
+async def avatar_save(request: Request) -> JSONResponse:
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    data = await _json(request)
+    try:
+        key = avatars.save(str(data.get("key") or "").strip(), data.get("spec"), str(data.get("replace") or ""))
+    except avatars.AvatarError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "key": key})
+
+async def avatar_action(request: Request) -> JSONResponse:
+    """Switch a researcher on or off, or delete one of your own."""
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    key, action = request.path_params["key"], request.path_params["action"]
+    try:
+        if action in ("on", "off"):
+            avatars.set_on(key, action == "on")
+        elif action == "delete":
+            if not avatars.delete(key):
+                return JSONResponse({"error": _("No avatar called {key}.").format(key=key)}, status_code=404)
+        else:
+            return JSONResponse({"error": _("Unknown action.")}, status_code=404)
+    except avatars.AvatarError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True})
+
+AVATAR_CSS = """
+main:has(#studio) { max-width: 72rem; }
+.lede { max-width: 46rem; margin-top:-.4rem; }
+canvas.px { image-rendering: pixelated; image-rendering: crisp-edges; display:block; }
+.av-studio { display:grid; grid-template-columns: minmax(0, 330px) minmax(0, 1fr); gap:1.4rem; align-items:start; margin-top:1rem; }
+@media (max-width: 820px) { .av-studio { grid-template-columns: 1fr; } }
+.av-left { position:sticky; top:1rem; }
+@media (max-width: 820px) { .av-left { position:static; } }
+/* a little room: a wall with a window of light, and floorboards the avatar stands on */
+.av-room { position:relative; border-radius:14px; overflow:hidden; border:1px solid var(--rule);
+  background:
+    radial-gradient(circle at 78% 22%, rgba(255,236,170,.55) 0 2.4rem, transparent 2.5rem),
+    linear-gradient(to bottom, transparent 0 72%, rgba(0,0,0,.06) 72% 73%, transparent 73%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,.035) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #efe7d8 0 72%, #d9b98c 72% 100%); }
+:root[data-theme="dark"] .av-room { background:
+    radial-gradient(circle at 78% 22%, rgba(140,160,255,.25) 0 2.4rem, transparent 2.5rem),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #24232b 0 72%, #3b3027 72% 100%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .av-room { background:
+    radial-gradient(circle at 78% 22%, rgba(140,160,255,.25) 0 2.4rem, transparent 2.5rem),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #24232b 0 72%, #3b3027 72% 100%); } }
+.stage-canvas { width:304px; height:264px; margin:0 auto; max-width:100%; object-fit:contain; }
+.now-doing { position:absolute; left:.7rem; top:.55rem; font:600 .72rem ui-monospace, Menlo, monospace; color:#6b5a45;
+  text-transform:uppercase; letter-spacing:.08em; }
+.av-acts, .av-buttons, .chips, .suggest { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0; }
+.av-acts button, .chip, .suggest button { font-size:.78rem; padding:.3rem .6rem; border-radius:999px; }
+.av-acts button.on, .chip.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.av-fields { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+.av-fields label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; font-weight:600; color:var(--muted); margin:0; }
+.av-fields input { width:100%; }
+.av-fields .hint { font-size:.72rem; min-height:1em; } .av-fields .hint.bad { color:#c92a2a; }
+.av-buttons button { font-size:.82rem; padding:.4rem .7rem; }
+.av-status { font:.78rem/1.4 ui-monospace, Menlo, monospace; margin:.2rem 0 0; }
+.av-status.ok { color:#2f7d46; } .av-status.bad { color:#c92a2a; }
+.av-tabs { display:flex; flex-wrap:wrap; gap:.3rem; border-bottom:1px solid var(--rule); padding-bottom:.6rem; }
+.av-tabs button { font-size:.85rem; padding:.4rem .8rem; border-radius:8px 8px 8px 8px; }
+.av-tabs button[aria-selected="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+.av-panel { padding-top:.4rem; }
+.av-group h3 { font-size:.78rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:1rem 0 .45rem; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:.45rem; }
+.tile { display:flex; flex-direction:column; align-items:center; gap:.25rem; padding:.45rem .3rem .4rem; border-radius:10px;
+  background:var(--quote); border:2px solid transparent; font-size:.74rem; font-weight:600; color:var(--fg); transition:transform .12s; }
+.tile:hover { transform:translateY(-2px); border-color:var(--rule); }
+.tile.on { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.tile canvas { margin:0 auto; }
+/* in the dark, pieces sit on a lighter card so the sprites' dark outlines still read */
+:root[data-theme="dark"] .tile, :root[data-theme="dark"] .visitor canvas, :root[data-theme="dark"] canvas.mini { background:#34333b; }
+:root[data-theme="dark"] .now-doing { color:#a99a86; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .tile, :root:not([data-theme]) .visitor canvas,
+  :root:not([data-theme]) canvas.mini { background:#34333b; } :root:not([data-theme]) .now-doing { color:#a99a86; } }
+.visitor canvas { border-radius:8px; }
+.swatches { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; }
+.swatch { width:1.7rem; height:1.7rem; padding:0; border-radius:50%; background:var(--c); border:2px solid var(--rule); }
+.swatch.on { outline:2px solid var(--fg); outline-offset:2px; }
+.swatch.own { display:inline-grid; place-items:center; overflow:hidden; cursor:pointer;
+  background:conic-gradient(#e03131, #f08c00, #ffd43b, #2f9e44, #1c7ed6, #7048e8, #e03131); }
+.swatch.own input { opacity:0; width:100%; height:100%; cursor:pointer; }
+.extra { display:flex; align-items:center; gap:.7rem; padding:.45rem .6rem; border:1px solid var(--rule); border-radius:10px; margin:.35rem 0; }
+.extra span { flex:1; font-size:.85rem; }
+canvas.mini { background:var(--quote); border-radius:4px; }
+.av-json { width:100%; font:12px/1.4 ui-monospace, Menlo, monospace; margin:.4rem 0; }
+/* ask a model */
+.av-chat { border:1px solid var(--rule); border-radius:14px; padding:.8rem; }
+.av-log { display:flex; flex-direction:column; gap:.5rem; max-height:22rem; overflow-y:auto; }
+.av-log:empty { display:none; }
+.msg { max-width:80%; padding:.55rem .75rem; border-radius:14px; font-size:.9rem; display:flex; gap:.6rem; align-items:center; }
+.msg p { margin:0; }
+.msg.me { align-self:flex-end; background:var(--chat, var(--accent)); color:var(--chat-ink, #fff); border-bottom-right-radius:4px; }
+.msg.me img { width:44px; height:44px; object-fit:cover; border-radius:6px; }
+.msg.them { align-self:flex-start; background:var(--quote); border-bottom-left-radius:4px; flex-wrap:wrap; }
+.msg.refused { border:1px solid #e8a33d; }
+.msg.pending p { color:var(--muted); animation:blink 1.4s ease-in-out infinite; }
+.msg button.link { background:none; border:0; padding:0; color:var(--accent); font-size:.82rem; text-decoration:underline; }
+.av-ask .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-top:.5rem; }
+.av-ask .row.grow textarea { flex:1; min-width:12rem; }
+.av-ask .model { display:flex; align-items:center; gap:.4rem; font-size:.82rem; font-weight:600; margin:0; }
+.attach.sees { border-color:#2f9e44; }
+.av-thumb { display:inline-flex; align-items:center; gap:.3rem; }
+.av-thumb img { width:2.4rem; height:2.4rem; object-fit:cover; border-radius:6px; border:1px solid var(--rule); }
+.av-thumb button { padding:.1rem .45rem; }
+.av-flag { margin:.5rem 0 0; padding:.45rem .7rem; border-radius:8px; font-size:.85rem; background:#fff3bf; border:1px solid #f0b429; color:#5c3c00; }
+:root[data-theme="dark"] .av-flag { background:rgba(255,212,59,.13); color:#ffd43b; border-color:rgba(255,212,59,.45); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .av-flag { background:rgba(255,212,59,.13); color:#ffd43b; border-color:rgba(255,212,59,.45); } }
+/* who visits */
+.av-cast h3 { font-size:.85rem; margin:1rem 0 .5rem; color:var(--muted); }
+.crew-row { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:.5rem; }
+.visitor { display:flex; flex-direction:column; align-items:center; gap:.2rem; padding:.6rem .4rem; border:1px solid var(--rule);
+  border-radius:12px; text-align:center; transition:opacity .2s, filter .2s; }
+.visitor.off canvas { opacity:.35; filter:grayscale(1); }
+.visitor.editing { border-color:var(--accent); }
+.visitor strong { font-size:.82rem; } .visitor small { color:var(--muted); font-size:.7rem; }
+.visitor .switch { font-size:.75rem; margin:.2rem 0; }
+.visitor-acts { display:flex; gap:.3rem; }
+.visitor-acts button { font-size:.72rem; padding:.25rem .55rem; }
+.visitor-acts .danger:hover { border-color:#c92a2a; color:#c92a2a; }
+.avatar-link .btn { text-decoration:none; }
+"""
 
 def same_origin(request: Request) -> bool:
     """Refuse form posts from other websites (a page elsewhere can't approve or publish for you)."""
@@ -2573,7 +3791,8 @@ def same_origin(request: Request) -> bool:
 
 def go(path: str, done: str = "", error: str = "") -> RedirectResponse:
     q = f"?error={error}" if error else f"?done={done}" if done else ""
-    return RedirectResponse(path + q, status_code=303)
+    path, _, fragment = path.partition("#")   # the message goes before a #section, or the server never sees it
+    return RedirectResponse(path + q + (f"#{fragment}" if fragment else ""), status_code=303)
 
 def _back(form) -> str:
     back = str(form.get("back") or "/")
@@ -2680,6 +3899,8 @@ async def add_mission(request: Request) -> Response:
         wake()
         done = "added_next" if rush else "added"
     elif rush:
+        if not await can_start():
+            return go(f"/m/{quote(slug)}", error="notready")
         start_loop(settings.loop_every())
         done = "added_started"
     else:
@@ -2769,6 +3990,8 @@ async def loop_action(request: Request) -> Response:
             every = max(1.0, float(form.get("every") or settings.loop_every()))
         except ValueError:
             every = settings.loop_every()
+        if not await can_start():
+            return go(back, error="notready")
         start_loop(every)
         return go(back, done="started")
     if action == "stop":
@@ -2785,16 +4008,29 @@ app = Starlette(routes=[
     Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/theorist", ask_theorist, methods=["POST"]),
     Route("/settings", settings_page),
+    Route("/sprites", sprite_studio),
+    Route("/sprites/example.json", sprite_example),
+    Route("/avatars", avatars_page),
+    Route("/avatars/models", avatar_models),
+    Route("/avatars/ask", avatar_ask, methods=["POST"]),
+    Route("/avatars/save", avatar_save, methods=["POST"]),
+    Route("/avatars/{key}/{action}", avatar_action, methods=["POST"]),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
+    Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/publication", save_publication, methods=["POST"]),
+    Route("/setup/{action}", setup_action, methods=["POST"]),
+    Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/language", save_language, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
+    Route("/settings/board-style", save_board_style, methods=["POST"]),
     Route("/auto", save_auto, methods=["POST"]),
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
+    Route("/settings/library", save_library, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),
@@ -2806,6 +4042,9 @@ app = Starlette(routes=[
     Route("/settings/custom-channel", add_custom_channel, methods=["POST"]),
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
+    Route("/board", board_page),
+    Route("/board/move", board_move, methods=["POST"]),
+    Route("/board/style", board_style_save, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
@@ -2814,6 +4053,7 @@ app = Starlette(routes=[
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),
-    Mount("/assets", StaticFiles(directory=ASSETS)),
-    Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),
+    Route("/api/board", api_board),
+    Mount("/assets", FreshFiles(directory=ASSETS)),
+    Mount("/site", FreshFiles(directory="site", html=True, check_dir=False)),
 ])

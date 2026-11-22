@@ -110,13 +110,15 @@ def _get(m, key):
 def _as_dict(m) -> dict:
     return m if isinstance(m, dict) else m.model_dump(exclude_none=True)
 
-async def chat(messages, tools=None, format=None, model=None, stoppable=True) -> ollama.Message:
+async def chat(messages, tools=None, format=None, model=None, stoppable=True, think=None) -> ollama.Message:
     """One model call, on the Principal Investigator's model unless `model` names another. Structured outputs
     (format set) are streamed so that, if stop is pressed, what was written before the grace ran out isn't
     lost: it comes back on Cut. A tool turn in flight when stop is pressed gets the shorter turn grace, so the
     write-out still has time. A reply that hits its token cap or REPLY_TIME_LIMIT raises Overrun with what it
     had written. stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP
-    can outlive a stopped loop. A cloud model ("provider/name") goes the same way through agents/providers.py."""
+    can outlive a stopped loop. A cloud model ("provider/name") goes the same way through agents/providers.py.
+    think=False asks an Ollama thinking model to answer straight away (the avatar studio's quick edits); None leaves
+    the model's own default, and cloud models ignore it."""
     model = model or model_for("pi")
     provider, name = settings.split_model(model)
     local = provider == settings.LOCAL
@@ -124,8 +126,9 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
         if not local:
             return (await providers.chat(provider, name, messages, tools, format, CLOUD_REPLY_TOKENS))[0]
         client = ollama.AsyncClient(host=settings.ollama_host())
+        extra = {} if think is None else {"think": think}
         return (await client.chat(model=name, messages=messages, tools=tools, format=format,
-                                  options=OPTIONS, keep_alive="24h")).message
+                                  options=OPTIONS, keep_alive="24h", **extra)).message
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 

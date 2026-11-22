@@ -2,6 +2,7 @@
   "search": {
     "command": "npx",
     "args": ["-y", "@brave/brave-search-mcp-server"],
+    "requires": ["BRAVE_API_KEY"],
     "env": {
       "BRAVE_API_KEY": "${BRAVE_API_KEY}",
       "BRAVE_MCP_ENABLED_TOOLS": "brave_web_search brave_news_search"
@@ -18,5 +19,9 @@
   "loop": {
     "command": "python",
     "args": ["status_tools.py"]
+  },
+  "library": {
+    "command": "python",
+    "args": ["library_tools.py"]
   }
 }

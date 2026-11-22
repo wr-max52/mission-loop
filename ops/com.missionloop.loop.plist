@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Runs `python run.py loop` in the background, starts at login, restarts if it crashes.
-     Install:   cp ops/com.missionloop.loop.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.missionloop.loop.plist
+     First:     change every /Users/will/projects/mission-loop below to this folder's path (`pwd` prints it).
+     Install:  cp ops/com.missionloop.loop.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.missionloop.loop.plist
      Pause:     python run.py stop      (the loop exits cleanly; launchd will NOT restart a clean exit)
      Resume:    launchctl kickstart gui/$(id -u)/com.missionloop.loop
      Uninstall: launchctl unload ~/Library/LaunchAgents/com.missionloop.loop.plist && rm ~/Library/LaunchAgents/com.missionloop.loop.plist
