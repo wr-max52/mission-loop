@@ -35,8 +35,18 @@ def test_dashboard_groups_missions(client):
     assert '<span>Needs you</span><span class="n" data-n="1">1</span>' in html and "Brief topic" in html
     assert '<span>In progress</span><span class="n" data-n="1">1</span>' in html and "Queued topic" in html
     assert '<span>Queued</span><span class="n">1</span></h3>' in html         # grouped by workflow stage
-    assert html.index("Needs you") < html.index("In progress") < html.index("Inspiration") < html.index("New mission")
+    assert html.index('id="flow"') < html.index('id="add-mission"') < html.index("Needs you")   # right under the strip
+    assert html.index("Needs you") < html.index("In progress") < html.index("Inspiration")
     assert "Loop is off" in html
+
+def test_add_mission_is_a_card_that_opens_the_wizard(client):
+    html = client.get("/").text
+    card = html.split('id="add-mission"')[1].split("</button>")[0]
+    assert "Add a mission" in card and ui.icon("plus") in card and ui.icon("pencil") in card
+    wizard = html.split('<dialog id="wizard"')[1].split("</dialog>")[0]
+    assert 'action="/missions"' in wizard and wizard.count('class="wiz-step"') == 3
+    assert all(f'name="{f}"' in wizard for f in ("topic", "objective", "epic", "slug"))
+    assert 'dialog[open]' in html                       # the page's refresh holds off while it is open
 
 def test_mission_page_shows_brief_and_actions(client):
     brief_ready()
