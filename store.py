@@ -49,6 +49,11 @@ def last_theory() -> dict:
         return {}
     return data if isinstance(data, dict) else {}
 
+def last_ideas() -> dict:
+    """The Theorist's last turn that looked across the desk (not a board turn), or {}."""
+    last = last_theory()
+    return (last.get("ideas") or {}) if last.get("kind") == "board" else last
+
 def save_theory(data: dict) -> None:
     THEORY.parent.mkdir(parents=True, exist_ok=True)
     THEORY.write_text(json.dumps(data))

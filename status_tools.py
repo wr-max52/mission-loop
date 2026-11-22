@@ -197,9 +197,19 @@ def agent_steps(slug: str, last: int = 8) -> str:
 def theorist_notes() -> str:
     """What the Theorist saw on its last turn (patterns inside and across epics), how it evolved the
     inspiration line and why, the epics, mission and combine it proposed, the missions it linked, and the line's
-    recent history."""
+    recent history. Every third turn only tidies the cork board; then it says what moved, and the turn before."""
     last = store.last_theory()
     lines = [f"Inspiration line now: {store.get_inspiration() or '(none; the finder and the Theorist are off)'}"]
+    if last.get("kind") == "board":        # every third turn only arranges the cork board
+        if last.get("failed"):
+            lines.append(f"Last turn {_since(last['at'])} was a board turn and failed: {last['failed']}")
+        else:
+            lines.append(f"Last turn {_since(last['at'])} tidied the cork board, moving {len(last.get('moved', []))} "
+                         f"note(s). Why: {last.get('why') or '-'}")
+            lines += [f"Code dropped: {n}" for n in last.get("notes", [])]
+        last = last.get("ideas") or {}
+        if last:
+            lines.append("The turn before that looked across the desk:")
     if not last:
         lines.append("The Theorist has not had a turn yet.")
     elif last.get("failed"):

@@ -10,9 +10,9 @@ mission and a published article. Code holds it to that: the line may only ask qu
 KEEP of the current line's words (an evolution, not a rewrite), a new epic needs MIN_EPIC_MISSIONS missions, a
 new mission must not repeat one the desk has, a combine takes only missions not yet being written, and a link
 needs an open mission and a reason. The orchestrator applies what is left (orchestrator.apply_theory)."""
-import asyncio, re
+import asyncio, math, re
 from pydantic import BaseModel, ValidationError
-import store
+import board, store
 from contracts import Mission, State, ResearchBrief, Article, COMBINABLE, epic_title, is_open, words
 from agents import llm
 from agents.finder import too_similar
@@ -408,3 +408,132 @@ def theorize(now=None) -> Theory:
     if not line:
         raise TheoryFailed("no inspiration line to evolve")
     return asyncio.run(run_theorist(line, store.inspiration_history(), store.all_missions(), now))
+
+
+# ---------- board turns: every BOARD_EVERY-th turn only arranges the cork board (#69) ----------
+
+MAX_MOVES = 12                             # notes a board turn may move or resize
+BOARD_MARGIN = 800                         # px a note may go past the board's current edges
+GRID_COLS, GRID_ROWS = 60, 22              # the rough picture of the board the Theorist sees
+
+BOARD_SYSTEM = """You are the Theorist of an investigative research desk. This turn you do one thing only: arrange
+the desk's cork board so a human reading it sees how the work hangs together. You change nothing else: no
+missions, epics, links or inspiration.
+
+The board is a 2D map in pixels; x grows to the right, y grows downwards. Each note is a mission or an epic. A
+note at size 1.0 is about 160 px wide and 110 px tall; sizes run from {size_min} to {size_max}. Strings join an
+epic to its missions, linked missions, and missions that cite the same page or name each other.
+
+Make the board read well:
+- Keep each epic's missions round it, the closest work nearest; put epics whose missions are strung together
+  near each other, and keep unrelated epics apart.
+- Make a note bigger when it matters more: published or nearly published, strongly connected, or central to a
+  pattern you see; smaller when it is a side question.
+- Leave room between notes (at least {gap} px between centres) so nothing hides another, and keep crossings of
+  strings few.
+- Move only what helps; leave a note alone when it already sits well. At most {max_moves} notes.
+
+Reply with "moves": each {{"id": a note id from the list, "x", "y", "size"}} (size may be null to keep it), and
+"why": one or two sentences on what you arranged and why."""
+
+class NoteMove(BaseModel):
+    id: str                                # a note id: "m:<slug>" or "e:<slug>"
+    x: float
+    y: float
+    size: float | None = None
+
+class BoardReply(BaseModel):
+    """What the model writes on a board turn."""
+    moves: list[NoteMove] = []
+    why: str = ""
+
+class BoardTidy(BoardReply):
+    """A board turn after code has checked it."""
+    dropped: list[str] = []
+
+def board_picture(notes: list[dict]) -> str:
+    """The board as a rough character grid, no style: E an epic, a letter per mission stage, + two in one cell."""
+    if not notes:
+        return "(the board is empty)"
+    xs, ys = [n["x"] for n in notes], [n["y"] for n in notes]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    grid = [[" "] * GRID_COLS for _ in range(GRID_ROWS)]
+    for n in notes:
+        c = round((n["x"] - x0) / max(1, x1 - x0) * (GRID_COLS - 1))
+        r = round((n["y"] - y0) / max(1, y1 - y0) * (GRID_ROWS - 1))
+        mark = "E" if n["kind"] != "mission" else n.get("mark", "o")
+        grid[r][c] = mark if grid[r][c] == " " else "+"
+    rows = ["|" + "".join(row) + "|" for row in grid]
+    edge = "+" + "-" * GRID_COLS + "+"
+    return "\n".join([f"x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}", edge, *rows, edge,
+                      "E epic or Unsorted, q queued, r researching, b brief, w writing, a article in review, "
+                      "p published, x parked, c combined, + two notes in one cell"])
+
+MARKS = {State.QUEUED: "q", State.RESEARCHING: "r", State.BRIEF_READY: "b", State.AWAITING_COMMENTS: "w",
+         State.WRITING: "w", State.ARTICLE_READY: "a", State.DONE: "p", State.PARKED: "x", State.COMBINED: "c"}
+
+def board_desk() -> dict:
+    """board.layout() with what the Theorist needs to read each note: its title and stage."""
+    data = board.layout()
+    missions = {m.slug: m for m in store.all_missions()}
+    epics = {e.slug: e for e in store.all_epics()}
+    for n in data["notes"]:
+        if n["kind"] == "mission":
+            m = missions[n["slug"]]
+            n.update(title=m.topic, stage=STAGES[m.state], mark=MARKS[m.state])
+        else:
+            e = epics.get(n["slug"])
+            n.update(title=e.title if e else "Unsorted (missions in no epic)", stage="epic" if e else "label")
+    return data
+
+def board_text(data: dict) -> str:
+    """The board for the prompt: every note with its place and size, every string, and the rough picture."""
+    rows = [f"- {n['id']} | {n['stage']} | {n['title']} | x={n['x']:.0f} y={n['y']:.0f} size={n['size']:.2f}"
+            for n in data["notes"]]
+    strings = [f"- {s['a']} -- {s['b']} ({s['kind']}{': ' + s['why'] if s.get('why') else ''})" for s in data["strings"]]
+    return ("Notes:\n" + "\n".join(rows) + "\n\nStrings:\n" + ("\n".join(strings) or "- none")
+            + "\n\nThe board now:\n" + board_picture(data["notes"]))
+
+def settle_board(reply: BoardReply, data: dict) -> BoardTidy:
+    """Code holds a board turn to the board: known notes only, each once, at most MAX_MOVES, sizes in range,
+    positions near the board, and no note dropped on top of another (it is nudged to the nearest free spot)."""
+    notes = {n["id"]: n for n in data["notes"]}
+    if not notes:
+        return BoardTidy(why=_clean(reply.why), dropped=[f"{len(reply.moves)} move(s): the board is empty"] if reply.moves else [])
+    xs, ys = [n["x"] for n in notes.values()], [n["y"] for n in notes.values()]
+    box = (min(xs) - BOARD_MARGIN, max(xs) + BOARD_MARGIN, min(ys) - BOARD_MARGIN, max(ys) + BOARD_MARGIN)
+    where = {i: (n["x"], n["y"]) for i, n in notes.items()}
+    kept, dropped = [], []
+    for mv in reply.moves:
+        if mv.id not in notes:
+            dropped.append(f"{mv.id}: no such note")
+        elif any(k.id == mv.id for k in kept):
+            dropped.append(f"{mv.id}: moved twice")
+        elif len(kept) >= MAX_MOVES:
+            dropped.append(f"{mv.id}: at most {MAX_MOVES} moves a turn")
+        elif not all(map(math.isfinite, (mv.x, mv.y))) or (mv.size is not None and not math.isfinite(mv.size)):
+            dropped.append(f"{mv.id}: not a number")
+        else:
+            x, y = min(box[1], max(box[0], mv.x)), min(box[3], max(box[2], mv.y))
+            others = [xy for i, xy in where.items() if i != mv.id]
+            if not board._far(x, y, others, board.MIN_GAP):
+                x, y = board._spot(x, y, board.MIN_GAP / 3, others, board.MIN_GAP)
+            size = None
+            if mv.size is not None and notes[mv.id]["kind"] != "unsorted":
+                size = round(min(board.SIZE_MAX, max(board.SIZE_MIN, mv.size)), 2)
+            where[mv.id] = (round(x, 1), round(y, 1))
+            kept.append(NoteMove(id=mv.id, x=round(x, 1), y=round(y, 1), size=size))
+    return BoardTidy(moves=kept, why=_clean(reply.why), dropped=dropped)
+
+async def run_board(data: dict, now=None) -> BoardTidy:
+    today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
+    system = today + BOARD_SYSTEM.format(size_min=board.SIZE_MIN, size_max=board.SIZE_MAX, gap=board.MIN_GAP,
+                                         max_moves=MAX_MOVES)
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": board_text(data) + "\n\nArrange the board. Reply as JSON matching the schema."}]
+    reply = await llm.ask(messages, BoardReply, "theorist", TheoryFailed)
+    return settle_board(reply, data)
+
+def tidy_board(now=None) -> BoardTidy:
+    """Sync entry point the orchestrator calls on a board turn. Reads the board; changes nothing (apply_board does)."""
+    return asyncio.run(run_board(board_desk(), now))

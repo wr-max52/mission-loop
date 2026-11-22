@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink`
-- Tests: `pytest -q` (expects 543 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 548 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -98,6 +98,17 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
+  Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
+  included) is a board turn instead (#69): `agents.tidy_board` (`theorist.tidy_board`, the same model, one
+  structured call, no tools) reads the cork board as text with no style (every note's id, stage, title, x, y and
+  size, every string, and a rough character grid of where the clusters sit) and replies with note moves and sizes
+  and why; nothing about epics, missions, combines, links or the line. Code holds it to the board
+  (`theorist.settle_board`): known notes only, each once, at most `MAX_MOVES` (12), sizes clamped, positions kept
+  within `BOARD_MARGIN` of the board's edges, and a note dropped on another nudged to the nearest free spot; what
+  it drops is noted. `orchestrator.apply_board` saves the moves `by="theorist"` on the main thread between tasks
+  (it may move a note a human dragged) and keeps the last turn that looked across the desk under `"ideas"` in
+  `theory.json` (`store.last_ideas`), so the notes show the board turn and the turn before it. Its gating is the
+  same as any turn's.
 - Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
   so a worker saving the mission it is busy with can't save over one.
   - Links (`contracts.Link`, one row per pair, `a < b`): two missions kept separate but connected, with why: two open
@@ -380,7 +391,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   printed) and for an older desk the first time a board opens; and `background` (research was shown a related
   published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
   transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
-  a note and its corner resizes it (`POST /board/move`, saved `by="human"`; the Theorist may move it later), a
+  a note and its corner resizes it (`POST /board/move`, saved `by="human"`; the Theorist's board turn may move it later), a
   mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
   the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more
   string away, All) that fades the rest and glides to fit. It polls `/api/board` every `POLL_SECONDS` and updates

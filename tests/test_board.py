@@ -225,3 +225,111 @@ def test_pixel_cards_arcade_and_pixel_string():
     import settings
     style = settings.set_board_style(surface="arcade", cards="pixel", string="pixel")
     assert style == {"surface": "arcade", "cards": "pixel", "string": "pixel", "color": "#ff004d"}
+
+# ---------- the Theorist's board turns (#69) ----------
+
+from datetime import datetime, timezone
+from ollama import Message
+import agents
+from agents import llm, stubs, theorist
+
+NOW = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
+
+def small_desk():
+    store.set_inspiration("Who really runs the grid?")
+    grid = store.create_epic("Grid Power")
+    store.save_mission(Mission(slug="a", topic="Texas winter rule", epic=grid.slug, state=State.DONE))
+    store.save_mission(Mission(slug="b", topic="PJM auction critics", epic=grid.slug))
+    store.save_mission(Mission(slug="c", topic="Loose idea"))
+    board.layout()                                                       # placed by code, as an open board would
+    return grid
+
+def rows():
+    return {k: (n.x, n.y, n.size, n.by) for k, n in store.board_notes().items()}
+
+def one_turn(now=NOW):
+    """The Theorist's turn the way the loop takes it: think on a worker, then apply between tasks."""
+    result = orchestrator.think(now)
+    if result is not None and hasattr(result, "moves"):
+        return orchestrator.apply_board(result, now)
+    return orchestrator.apply_theory(result, now) if result else 0
+
+def test_every_third_turn_only_arranges_the_board(monkeypatch):
+    small_desk()
+    monkeypatch.setattr(agents, "theorize", stubs.theorize)
+    monkeypatch.setattr(agents, "tidy_board", theorist.tidy_board)
+    seen = []
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        seen.append(messages)
+        reply = theorist.BoardReply(why="Kept the grid work together.", moves=[
+            theorist.NoteMove(id="m:b", x=1200, y=-900, size=9), theorist.NoteMove(id="m:ghost", x=0, y=0)])
+        return Message(role="assistant", content=reply.model_dump_json())
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    before, missions = rows(), len(store.all_missions())
+    for n in (1, 2):
+        one_turn()
+        assert rows() == before and store.last_theory()["turn"] == n and store.last_theory()["kind"] == "ideas"
+    assert not seen                                                      # ideas turns never see the board
+    one_turn()
+    after = rows()
+    assert {k for k in after if after[k] != before[k]} == {("mission", "b")}   # only board rows change
+    x, y, size, by = after[("mission", "b")]
+    assert (size, by) == (board.SIZE_MAX, "theorist")                    # clamped, and saved as the Theorist's
+    last = store.last_theory()
+    assert (last["turn"], last["kind"], last["why"]) == (3, "board", "Kept the grid work together.")
+    assert any("m:ghost" in n for n in last["notes"])                    # the note it invented is dropped
+    assert last["ideas"]["patterns"] == ["Stub pattern"] and store.last_ideas()["turn"] == 2
+    assert len(store.all_missions()) == missions and store.get_inspiration() == "Who really runs the grid?"
+    prompt = seen[0][0]["content"] + seen[0][1]["content"]
+    assert "m:b | queued | PJM auction critics" in prompt and "e:grid-power" in prompt and "E epic" in prompt
+    one_turn()
+    assert store.last_theory()["kind"] == "ideas" and store.last_theory()["turn"] == 4
+
+def test_settle_board_holds_moves_to_the_board():
+    small_desk()
+    data = theorist.board_desk()
+    epic = next(n for n in data["notes"] if n["kind"] == "epic")
+    far = theorist.NoteMove(id="m:c", x=10 ** 7, y=0, size=0.1)
+    on_top = theorist.NoteMove(id="m:a", x=epic["x"], y=epic["y"])
+    twice = theorist.NoteMove(id="m:c", x=0, y=0)
+    tidy = theorist.settle_board(theorist.BoardReply(moves=[far, on_top, twice]), data)
+    assert [m.id for m in tidy.moves] == ["m:c", "m:a"] and "m:c: moved twice" in tidy.dropped
+    c, a = tidy.moves
+    xs = [n["x"] for n in data["notes"]]
+    assert c.x == max(xs) + theorist.BOARD_MARGIN and c.size == board.SIZE_MIN   # kept near the board, in range
+    assert math.hypot(a.x - epic["x"], (a.y - epic["y"]) * board.TALL) >= board.MIN_GAP   # nudged off the epic
+    many = [theorist.NoteMove(id=n["id"], x=i * 1000, y=0) for i, n in enumerate(data["notes"])] * 5
+    assert len(theorist.settle_board(theorist.BoardReply(moves=many), data).moves) <= theorist.MAX_MOVES
+
+def test_the_loop_takes_a_board_turn_when_it_is_due(monkeypatch, stub_agents):
+    small_desk()
+    monkeypatch.setattr(agents, "tidy_board", stubs.tidy_board)
+    store.save_theory({"at": "2026-01-01T00:00:00+00:00", "fingerprint": "old", "turn": 2, "kind": "ideas",
+                       "patterns": ["Earlier pattern"]})
+    orchestrator.THINK_FLAG.parent.mkdir(exist_ok=True)
+    orchestrator.THINK_FLAG.touch()
+    orchestrator.run_until_idle(lambda: NOW)
+    last = store.last_theory()
+    assert (last["turn"], last["kind"], last["moved"]) == (3, "board", [])
+    assert last["ideas"]["patterns"] == ["Earlier pattern"]
+
+def test_a_failed_board_turn_counts_and_keeps_the_ideas(monkeypatch):
+    small_desk()
+    store.save_theory({"at": "2026-01-01T00:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["P"]})
+    def boom(now): raise RuntimeError("no model")
+    monkeypatch.setattr(agents, "tidy_board", boom)
+    assert orchestrator.think(NOW) is None
+    last = store.last_theory()
+    assert (last["turn"], last["kind"], last["failed"], last["ideas"]["patterns"]) == (3, "board", "RuntimeError: no model", ["P"])
+
+def test_the_notes_say_what_a_board_turn_moved(client):
+    small_desk()
+    store.save_theory({"at": "2026-11-02T09:00:00+00:00", "turn": 3, "kind": "board", "why": "Grouped the grid.",
+                       "moved": [{"id": "m:b", "x": 1, "y": 2, "size": 1.2}], "notes": [],
+                       "ideas": {"at": "2026-11-01T09:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["Old pattern"]}})
+    html = client.get("/").text
+    assert "tidied the" in html and "moved 1 note, resizing 1" in html and "Grouped the grid." in html
+    assert "Old pattern" in html
+    import status_tools
+    text = status_tools.theorist_notes()
+    assert "tidied the cork board, moving 1 note(s)" in text and "Old pattern" in text

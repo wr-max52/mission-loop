@@ -840,6 +840,22 @@ def theorist_notes() -> str:
     if not last and not history:
         return ""
     parts = []
+    if last.get("kind") == "board":        # a board turn, then the turn before it that looked across the desk
+        if last.get("failed"):
+            parts.append(f'<p class="muted">Last turn {_when(last["at"])} was a <a href="/board">board</a> turn and '
+                         f'failed: {escape(last["failed"])}</p>')
+        else:
+            moved = last.get("moved", [])
+            sized = sum(1 for mv in moved if mv.get("size") is not None)
+            what = (f"moved {len(moved)} note{'s' * (len(moved) != 1)}" + (f", resizing {sized}" if sized else "")
+                    if moved else "left every note where it was")
+            parts.append(f'<p class="muted">Last turn {_when(last["at"])} tidied the <a href="/board">board</a>: '
+                         f'{what}. {escape(last.get("why", ""))}</p>')
+            if last.get("notes"):
+                parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+        last = last.get("ideas") or {}
+        if last:
+            parts.append('<p class="hint">The turn before that looked across the desk:</p>')
     if last.get("failed"):
         parts.append(f'<p class="muted">Last turn {_when(last["at"])} failed: {escape(last["failed"])}</p>')
     elif last:
@@ -1852,7 +1868,7 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
     or reject it."""
     active = store.all_epics("active")
-    theorist = {t.lower() for t in store.last_theory().get("epics", [])}
+    theorist = {t.lower() for t in store.last_ideas().get("epics", [])}
     epics = {e.slug: e for e in store.all_epics()}
     out = []
     for e in store.all_epics("proposed"):
