@@ -8,7 +8,7 @@ import settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       ChannelPost, SITE_FOLDERS, epic_title, slugify)
+                       ChannelPost, Combine, COMBINABLE, Link, SITE_FOLDERS, epic_title, is_open, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -245,9 +245,10 @@ def reject(m: Mission, notes: str, now) -> None:
     store.log_event(m.slug, now, before.value, m.state.value, "rejected by human")
 
 def auto_approve(now, busy: set[str] = frozenset()) -> int:
-    """Auto mode: approve every brief waiting for review and every proposed epic, as a human would. Articles are
-    left alone: publishing always waits for a human. An epic with a mission a worker is busy with waits for a later
-    sweep, so no worker saves over the move. Returns how many briefs were approved (epics move no mission on)."""
+    """Auto mode: approve every brief waiting for review, every proposed epic and every proposed combine, as a human
+    would. Articles are left alone: publishing always waits for a human. An epic or combine with a mission a worker
+    is busy with waits for a later sweep, so no worker saves over the move. Returns how many briefs were approved
+    and combined missions made (epics move no mission on)."""
     if not settings.auto_mode():
         return 0
     approved = 0
@@ -260,6 +261,13 @@ def auto_approve(now, busy: set[str] = frozenset()) -> int:
     for e in store.all_epics("proposed"):
         if not any(m.slug in busy for m in _in_epic(e.slug)):
             approve_epic(e.slug, "", now, by="auto mode")
+    for c in store.all_combines("proposed"):
+        if not set(c.members) & set(busy):
+            try:
+                approve_combine(c.slug, now, by="auto mode")
+                approved += 1
+            except ValueError as e:        # its missions moved on meanwhile: the proposal is dropped
+                print(f"combine {c.slug}: {e}", flush=True)
     return approved
 
 def parked_while_writing(m: Mission) -> bool:
@@ -336,7 +344,7 @@ def in_flow_order(missions: list[Mission]) -> list[Mission]:
 def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
     """Steps that need no model (start, outreach, the comment wait, publishing) run right away, in order."""
     changed = 0
-    while role(m) is None and m.state not in (State.DONE, State.PARKED) and not STOP_FLAG.exists():
+    while role(m) is None and m.state not in (State.DONE, State.PARKED, State.COMBINED) and not STOP_FLAG.exists():
         before = m.state
         try:
             note = step(m, now_fn())
@@ -533,9 +541,11 @@ THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless
 def desk_fingerprint() -> str:
     """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
     A mission merely moving through research doesn't count as news."""
-    missions = [(m.slug, m.epic, m.state == State.DONE) for m in store.all_missions()]
+    missions = [(m.slug, m.epic, m.state == State.DONE, m.state == State.COMBINED) for m in store.all_missions()]
     epics = [(e.slug, e.title, e.status) for e in store.all_epics()]
-    return hashlib.sha1(json.dumps([missions, epics]).encode()).hexdigest()
+    links = [(k.a, k.b, k.status) for k in store.all_links(None)]
+    combines = [(c.slug, c.status) for c in store.all_combines()]
+    return hashlib.sha1(json.dumps([missions, epics, links, combines]).encode()).hexdigest()
 
 def theorist_due(now) -> bool:
     """Its turn comes when it has a line to evolve and a desk to look at, the desk changed since its last
@@ -573,9 +583,10 @@ def think(now):
 
 def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
     """Make the Theorist's changes, on the main thread between tasks: the evolved line, its proposed epics (they
-    wait for the human like the finder's, and each mission moved keeps its old epic to go back to) and its one
-    new mission. A human edit to the line since the Theorist read it wins. Missions being worked on right now
-    stay where they are. Returns how many changes."""
+    wait for the human like the finder's, and each mission moved keeps its old epic to go back to), its one
+    new mission, its combine (proposed: it waits for the human too) and its links (made right away: they change
+    no mission, only what each one's research sees). A human edit to the line since the Theorist read it wins.
+    Missions being worked on right now stay where they are. Returns how many changes."""
     changed, notes = 0, list(theory.dropped)
     before = store.get_inspiration()
     if theory.inspiration != before:
@@ -618,11 +629,39 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
         store.log_event(slug, now, "", State.QUEUED.value, "proposed by the Theorist"
                         + (f": {theory.why}" if theory.why else ""))
         changed += 1
+
+    combine = ""
+    if theory.combine:
+        c, missions = theory.combine, store.all_missions()
+        state = {m.slug: m.state for m in missions}
+        late = [s for s in c.missions if state.get(s) not in COMBINABLE]
+        if late:
+            notes.append(f"combine dropped: {', '.join(late)} moved on while the Theorist was thinking")
+        else:
+            taken = {m.slug for m in missions} | {k.slug for k in store.all_combines()}
+            combine = _new_slug(c.topic, taken)
+            store.save_combine(Combine(slug=combine, topic=c.topic, objective=c.objective, members=c.missions,
+                                       epic=c.epic, why=c.why, at=now.isoformat()))
+            for s in c.missions:
+                store.log_event(s, now, state[s].value, state[s].value,
+                                f"the Theorist proposes combining it into: {c.topic}")
+            changed += 1
+
+    linked = []
+    for k in theory.links:
+        a, b = store.get_mission(k.mission), store.get_mission(k.to)
+        if not a or not b or State.COMBINED in (a.state, b.state) or not (is_open(a) or is_open(b)) \
+                or store.get_link(a.slug, b.slug):
+            notes.append(f"link dropped: {k.mission} <-> {k.to} changed while the Theorist was thinking")
+            continue
+        link(a.slug, b.slug, k.why, now, by="theorist")
+        linked.append([a.slug, b.slug])
+        changed += 1
     _drop_empty_proposals()
 
     store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
-                       "epics": epics, "mission": slug, "notes": notes})
+                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
 
@@ -885,6 +924,88 @@ def rename_epic(slug: str, title: str, now) -> None:
     epic.title = clean
     store.save_epic(epic)
     _refresh_pages(_in_epic(slug))
+
+# ---------- links and combines (the Theorist connects dots; a human can undo) ----------
+
+def link(a: str, b: str, why: str, now, by: str = "human") -> Link:
+    """Connect two missions while keeping them separate. At least one must be open; a published article only
+    shows the link once both are published (publisher.connected). A removed link made again is active again."""
+    ma, mb = store.get_mission(a), store.get_mission(b)
+    if not ma or not mb or a == b:
+        raise ValueError("pick two different missions")
+    if State.COMBINED in (ma.state, mb.state):
+        raise ValueError("a mission combined into another can't be linked; link the bigger one")
+    if not is_open(ma) and not is_open(mb):
+        raise ValueError("a link needs at least one mission that isn't published yet")
+    saved = store.save_link(Link(a=a, b=b, why=" ".join(why.split()), by=by, at=now.isoformat()))
+    who = "the Theorist" if by == "theorist" else by
+    for m, other in ((ma, mb), (mb, ma)):
+        store.log_event(m.slug, now, m.state.value, m.state.value,
+                        f"linked to {other.slug} by {who}" + (f": {saved.why}" if saved.why else ""))
+    return saved
+
+def unlink(a: str, b: str, now) -> None:
+    """A human removes a link. It is kept as removed, so the Theorist doesn't draw it again."""
+    found = store.get_link(a, b)
+    if not found or found.status != "active":
+        raise ValueError(f"{a} and {b} aren't linked")
+    found.status = "removed"
+    store.save_link(found)
+    missions = [m for m in (store.get_mission(a), store.get_mission(b)) if m]
+    for m in missions:
+        store.log_event(m.slug, now, m.state.value, m.state.value, f"link to {found.other(m.slug)} removed by human")
+    _refresh_pages(missions)               # two published articles stop pointing at each other
+
+def approve_combine(slug: str, now, by: str = "", busy: set[str] = frozenset()) -> Mission:
+    """Accept a proposed combine: the bigger mission is queued (its brief still needs review), each member stops
+    (State.COMBINED, pointing at it) and its links pass to the bigger mission. Members that moved on to writing
+    meanwhile stay as they are; with fewer than 2 left the proposal is dropped."""
+    c = store.get_combine(slug)
+    if not c or c.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed combine")
+    if set(c.members) & set(busy):
+        raise ValueError("a worker is busy with one of its missions; try again once that task ends")
+    members = [m for m in (store.get_mission(s) for s in c.members) if m and m.state in COMBINABLE]
+    if len(members) < 2:
+        store.delete_combine(slug)
+        raise ValueError("its missions have moved on, so there is nothing left to combine; the proposal is dropped")
+    taken = {m.slug for m in store.all_missions()}
+    new = c.slug if c.slug not in taken and c.slug not in SITE_FOLDERS else _new_slug(c.topic, taken)
+    epic = store.find_epic(c.epic) if c.epic else None
+    listed = "\n".join(f"- {m.slug}: {m.topic}" for m in members)
+    combined = Mission(slug=new, topic=c.topic, epic=epic.slug if epic else "", combines=[m.slug for m in members],
+                       objective=f"{c.objective}\n\nCombines these missions, proposed by the Theorist:\n{listed}")
+    store.save_mission(combined)
+    store.log_event(new, now, "", State.QUEUED.value, f"combined from {', '.join(combined.combines)}"
+                    + (f", approved by {by}" if by else "") + (f": {c.why}" if c.why else ""))
+    for m in members:
+        before = m.state
+        m.state, m.combined_into = State.COMBINED, new
+        store.save_mission(m)
+        store.log_event(m.slug, now, before.value, m.state.value, f"combined into {new}"
+                        + (f", approved by {by}" if by else ""))
+        for k in store.links_of(m.slug):
+            other = k.other(m.slug)
+            target = store.get_mission(other)
+            if other in combined.combines or not target or target.state == State.COMBINED \
+                    or store.get_link(new, other):
+                continue
+            store.save_link(Link(a=new, b=other, why=k.why, by=k.by, at=now.isoformat()))
+    c.slug, c.status = new, "approved"
+    store.delete_combine(slug)
+    store.save_combine(c)
+    return combined
+
+def reject_combine(slug: str, now) -> None:
+    """A human turns a combine down. It is kept as rejected, so the Theorist doesn't propose it again."""
+    c = store.get_combine(slug)
+    if not c or c.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed combine")
+    c.status = "rejected"
+    store.save_combine(c)
+    for m in (store.get_mission(s) for s in c.members):
+        if m:
+            store.log_event(m.slug, now, m.state.value, m.state.value, f"combine into {c.topic!r} rejected by human")
 
 def run_until_idle(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     """Work until nothing is left that the loop can do on its own: quick code steps first, then the

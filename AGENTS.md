@@ -17,8 +17,9 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 488 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+  combines approve-combine reject-combine link unlink`
+- Tests: `pytest -q` (expects 523 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -54,11 +55,12 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 ## Pipeline (v1)
 
 ```
-(Theorist: evolves the inspiration line, may propose epics and 1 mission; then the mission finder)
+(Theorist: evolves the inspiration line, may propose epics, 1 mission and 1 combine, links missions; then the finder)
 QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
           (validator,     (human:        (skipped while       (article     (human:
            3 attempts)     approve)       outreach is off)     check, 3     review)
-                                                               attempts)
+                                                                                                                              attempts)
+QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mission; out of the flow)
 ```
 
 - Order of work (`orchestrator.work`): there are no fixed passes. The loop works until nothing is left it
@@ -77,21 +79,48 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   `run.py loop` sends its notifications after every model task.
 - Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. One structured call on the
   Principal Investigator's model, no tools: it reads every epic with its latest missions, the missions in no epic,
-  the latest published articles with the possibilities they left open, and how the line got here
-  (`data/inspiration_log.jsonl`, every change with who made it and why). It looks for patterns inside an epic and
-  themes emerging across epics, and replies with those patterns, the line evolved, why, up to 2 new epics and at
-  most 1 new mission. Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
+  the latest published articles with the possibilities they left open, the links and combines so far (and the ones
+  a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
+  why). It looks for patterns inside an epic and themes emerging across epics, and replies with those patterns, the
+  line evolved, why, up to 2 new epics, at most 1 new mission, at most 1 combine and up to 3 links (see Connecting
+  dots below). Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
   ending in "?", at most 500 characters) and must keep at least half of the current line's meaningful words, so
   it evolves instead of being rewritten (one repair round, else the line stays); a new epic needs 2+ missions
-  (counting its new mission) and a name no epic has; the new mission must not repeat a topic. The orchestrator
+  (counting its new mission) and a name no epic has; the new mission must not repeat a topic; a combine and a link
+  follow the rules below (`theorist.settle_combine`, `settle_links`). The orchestrator
   applies it on the main thread between tasks (`orchestrator.apply_theory`), so no worker saves over it: a human
   edit to the line while it was thinking wins, its epics are *proposed* like the finder's (each mission moved
   keeps its old epic in `Mission.epic_fallback`; missions a worker is busy with stay put), and its mission is
-  queued like a found one (it still needs brief review). It runs when it has a line and missions, the desk changed
-  since its last turn (`desk_fingerprint`: missions, their epics, which are published, the epics) and 6 hours
+  queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
+  away. It runs when it has a line and missions, the desk changed
+  since its last turn (`desk_fingerprint`: missions, their epics, which are published or combined, the epics, links and combines) and 6 hours
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
+- Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
+  so a worker saving the mission it is busy with can't save over one.
+  - Links (`contracts.Link`, one row per pair, `a < b`): two missions kept separate but connected, with why: two open
+    missions, or an open mission and a published article (`contracts.is_open`: not DONE, not COMBINED). Never two
+    published ones, a mission and itself, a pair already linked, or one combined away. They are drawn right away
+    (`orchestrator.link`; they change no mission, only what research sees), at most 3 a turn. A human can link by
+    hand (a mission page's Connections, `run.py link`) or unlink (`orchestrator.unlink`, `run.py unlink`); an unlinked
+    pair stays as `removed`, so the Theorist never draws it again. Research gets each linked mission's topic and
+    brief so far, or a linked article's dek, open possibilities and cited pages, with why (`related.connections_block`,
+    before the similar published articles, which then leave out the linked ones). Once both are published, each
+    article's page lists the other under "Connected articles" (`publisher.connected`); publishing one redraws the
+    other, and unlinking redraws both.
+  - Combines (`contracts.Combine`): 2 to 4 missions not yet being written (`contracts.COMBINABLE`: queued,
+    researching, brief ready, parked) that are really one question, folded into one bigger mission with a topic,
+    an objective and an epic (one of its new epics, an active epic, else the one its members share). At most one a
+    turn, its topic new to the desk apart from its members, no member in another proposed combine, and never a set a
+    human has seen. It is *proposed*: it waits under Needs you on the home page (the strip counts it at the epic
+    review) or `run.py combines`, and auto mode approves it like an epic, waiting while a worker is busy with a member.
+    `orchestrator.approve_combine` queues the bigger mission (`Mission.combines`; its brief still needs review), sets
+    each member to `State.COMBINED` with `combined_into`, and passes the members' links on. Members that reached
+    writing meanwhile carry on; with fewer than 2 left the proposal is dropped. Rejecting keeps it as `rejected`, so it
+    is never proposed again. Research on the bigger mission gets each member's topic, objective and brief so far (or
+    its last failed brief). A COMBINED mission is out of the flow (no role, not in progress, left out of the
+    Theorist's desk) and its page links to the mission that took it over.
 - Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
@@ -265,9 +294,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     holds that wait and the last failure, which the UI and `status` show.
 - Auto mode: the switch at the top of every UI page (or `python run.py auto on|off`; `settings.auto_mode`, saved in
   `data/settings.json` only while on) approves everything except publishing. `orchestrator.auto_approve` approves
-  every brief waiting for review and every proposed epic (the Theorist's and the finder's), logged "by auto mode";
-  the loop runs it at the top of every sweep, so a new brief moves on within seconds, and an epic with a mission a
-  worker is busy with waits for a later sweep. Turning it on approves what already waits right away, and a brief
+  every brief waiting for review, every proposed epic (the Theorist's and the finder's) and every proposed combine,
+  logged "by auto mode"; the loop runs it at the top of every sweep, so a new brief moves on within seconds, and an
+  epic or combine with a mission a worker is busy with waits for a later sweep. Turning it on approves what already waits right away, and a brief
   pushed through while it is on is approved too. Articles are never touched: publishing always waits for
   `review`. No "brief ready" notification is sent while it is on. The flow chart draws the two reviews it takes over
   as green "Auto-approve epics" and "Auto-approve brief" steps; every code check and the article review stay as they are.
@@ -309,8 +338,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   short prompt that explains the app, at most 8 tool calls in 3 minutes, tool results cut to 2,500 characters (web
   pages and searches 4,000), only the last 4 messages the page sends back, no memory and nothing saved. Its tools
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
-  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`,
-  `theorist_notes`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
+  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`; `mission_status` names a mission's links and
+  combines, `theorist_notes` the Theorist's last combine and links), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
   panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
   `add_mission` and `set_mission_epic` only read the database, `data/activity.json`, the channels' state files, the
@@ -375,7 +404,8 @@ and each review shows how many missions wait on you. Researchers on the strip st
 titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
 the 2+ missions rule for an epic), which drop what fails and park nothing; the contact check, with Contacts, only
 while outreach is on; the source check and the article check. So is every human review: the epics both the Theorist
-and the finder propose (after the finder's check), the brief and the article. In auto mode exactly two of them,
+and the finder propose (after the finder's check; it also counts the Theorist's proposed combines), the brief and
+the article. In auto mode exactly two of them,
 the epic and brief reviews (`flowchart.AUTO_STEPS`), are drawn as automatic instead ("Auto-approve epics", "Auto-approve
 brief": green, a bolt, no count); every check and the article review stay as they are. The strip's `data-shape`
 marks the automatic ones, so an open page redraws the strip when the switch flips. The steps working right now are lit, one per
@@ -416,6 +446,8 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
 | Approve a proposed epic | the "New epic proposed" panel on the UI home page |
+| Approve or reject a proposed combine | its card under Needs you on the UI home page, or `python run.py combines`, then `approve-combine <slug>` / `reject-combine <slug>` |
+| Link two missions, or remove a link | Connections on a mission's page, or `python run.py link <a> <b> --why "..."` / `unlink <a> <b>` |
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
 | Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |

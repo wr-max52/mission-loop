@@ -19,7 +19,7 @@ from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
-from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
+from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
 from icons import icon, CSS as ICON_CSS
 import flowchart
@@ -32,6 +32,7 @@ LABELS = {
     State.QUEUED: "Queued", State.RESEARCHING: "Researching", State.BRIEF_READY: "Brief ready",
     State.AWAITING_COMMENTS: "Waiting for comments", State.WRITING: "Writing",
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
+    State.COMBINED: "Combined",
 }
 MESSAGES = {
     "approved": "Approved. The loop writes the article next.",
@@ -51,6 +52,10 @@ MESSAGES = {
     "epic_moved": "Missions moved to that epic.",
     "epic_rejected": "Proposed epic rejected. Its missions went back to the epics they were in before.",
     "epic_renamed": "Epic renamed. Published pages show the new name.",
+    "combined": "Combine approved. The bigger mission is queued; the missions it combines have stopped.",
+    "combine_rejected": "Combine rejected. The missions carry on separately, and the Theorist won't propose it again.",
+    "linked": "Linked. Each mission's research sees the other from its next search.",
+    "unlinked": "Link removed. The Theorist won't draw it again.",
     "site_url_saved": "Site address saved. The feeds use full links now.",
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
@@ -83,6 +88,8 @@ MESSAGES = {
     "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
 }
 ERRORS = {
+    "combine": "That combine can't go ahead now: a worker is busy with one of its missions, or they moved on.",
+    "link": "Those two can't be linked: pick another mission, at least one of them not published yet.",
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
     "chat_color": "That colour wasn't a #rrggbb colour.",
@@ -209,13 +216,14 @@ def next_step(m: Mission) -> str:
     return ""
 
 def in_progress(m: Mission) -> bool:
-    """On the Missions page: everything not published yet, and published articles a human asked to publish again."""
-    return not needs_you(m) and (m.state != State.DONE or bool(m.publish_requests))
+    """On the Missions page: everything not published yet, and published articles a human asked to publish again.
+    A mission combined into another is not: the bigger one carries its work on."""
+    return not needs_you(m) and m.state != State.COMBINED and (m.state != State.DONE or bool(m.publish_requests))
 
 def flow_rank(m: Mission) -> int:
     """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
     order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3,
-             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8}
+             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9}
     return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
 def _brief(slug: str) -> ResearchBrief | None:
@@ -509,6 +517,8 @@ a.back { font-weight:600; text-decoration:none; }
 .card.pub .topic { color:var(--fg); }
 ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
 ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
+li.link-row form.inline { display:inline-flex; margin:0 0 0 .4rem; vertical-align:middle; }
+p.objective { white-space:pre-line; }
 form.republish { display:flex; flex-wrap:wrap; gap:.3rem 1rem; align-items:center; margin:.6rem 0 0;
                  padding-top:.6rem; border-top:1px solid var(--rule); }
 form.republish button { margin-left:auto; }
@@ -747,7 +757,7 @@ def flow_state() -> dict:
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
                      "name": activity.AGENTS[e["agent"]]} for e in now],
-        "waiting": {"epic_review": len(store.all_epics("proposed")),
+        "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
@@ -822,6 +832,12 @@ def theorist_notes() -> str:
         m = store.get_mission(last["mission"]) if last.get("mission") else None
         if m:
             made.append(f'proposed the mission <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>')
+        c = store.get_combine(last["combine"]) if last.get("combine") else None
+        if c:
+            made.append(f"proposed combining {len(c.members)} missions into <strong>{escape(c.topic)}</strong>"
+                        + (" (waiting for you below)" if c.status == "proposed" else f" ({c.status})"))
+        for a, b in last.get("links", []):
+            made.append(f'linked {mission_link(a)} and {mission_link(b)}')
         if made:
             parts.append(f"<p>It {', and '.join(made)}.</p>")
         if last.get("notes"):
@@ -1616,7 +1632,8 @@ async def save_chat_color(request: Request) -> Response:
         return go("/settings", error="chat_color")
     return go("/settings", done="chat_color_saved")
 async def save_auto(request: Request) -> Response:
-    """The top bar's Auto switch. Turning it on approves what already waits (briefs, proposed epics) right away;
+    """The top bar's Auto switch. Turning it on approves what already waits (briefs, proposed epics and combines)
+    right away;
     the loop approves the rest as they come. Publishing always stays with the human."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -1624,7 +1641,7 @@ async def save_auto(request: Request) -> Response:
     on = form.get("auto") == "on"          # an unticked box sends nothing
     settings.set_auto_mode(on)
     if on:
-        orchestrator.auto_approve(clock.now())
+        orchestrator.auto_approve(clock.now(), {e["slug"] for e in running_now()})
     if loop_running():
         wake()
     return go(_back(form), done="auto_on" if on else "auto_off")
@@ -1841,6 +1858,66 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
             f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form>'))
     return out
 
+def mission_link(slug: str) -> str:
+    m = store.get_mission(slug)
+    return f'<a href="/m/{quote(slug)}">{escape(m.topic if m else slug)}</a>'
+
+def combine_proposals() -> list[str]:
+    """The Theorist's proposed combines, each waiting for the human to approve or reject it."""
+    out = []
+    for c in store.all_combines("proposed"):
+        items = "".join(f'<li>{mission_link(s)}'
+                        + (f' <span class="hint">· {escape(label(m))}</span>' if (m := store.get_mission(s)) else "")
+                        + "</li>" for s in c.members)
+        epic = f" It goes in the epic {escape(c.epic)}." if c.epic else ""
+        why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
+        out.append(ask(
+            "propose", c.topic, "Combine missions",
+            f'<div class="sub">The Theorist proposes combining these {len(c.members)} missions into one bigger '
+            f'mission. Approving queues it (its brief still comes to you) and stops these; any that reached writing '
+            f'meanwhile carry on.{epic}</div>{why}<ul>{items}</ul>'
+            f'<details><summary>Objective</summary><p>{escape(c.objective)}</p></details>',
+            f'<form method="post" action="/combines/{quote(c.slug)}/approve"><button class="primary">Combine them</button></form>'
+            f'<form method="post" action="/combines/{quote(c.slug)}/reject"><button>Keep them separate</button></form>'))
+    return out
+
+def connections(m: Mission) -> str:
+    """The mission page's Connections: what it was combined from or into, and its links, each with why and a way
+    to remove it, plus a form to link it to another mission by hand."""
+    slug, rows = quote(m.slug), []
+    if m.combined_into:
+        rows.append(f"<li>Combined into {mission_link(m.combined_into)}, which carries its work on.</li>")
+    if m.combines:
+        rows.append("<li>Combines " + ", ".join(mission_link(s) for s in m.combines) + ".</li>")
+    for k in store.links_of(m.slug):
+        other = store.get_mission(k.other(m.slug))
+        state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
+        who = "the Theorist" if k.by == "theorist" else "you" if k.by == "human" else k.by
+        why = f": {escape(k.why)}" if k.why else ""
+        rows.append(f'<li class="link-row">Linked to {mission_link(k.other(m.slug))}{state} '
+                    f'<span class="hint">by {escape(who)}</span>{why}'
+                    f'<form method="post" action="/m/{slug}/unlink" class="inline">'
+                    f'<input type="hidden" name="other" value="{escape(k.other(m.slug), quote=True)}">'
+                    f'<button>Unlink</button></form></li>')
+    form = ""
+    if m.state != State.COMBINED:
+        options = "".join(f'<option value="{escape(o.slug, quote=True)}">{escape(o.topic)}</option>'
+                          for o in store.all_missions() if o.slug != m.slug and o.state != State.COMBINED
+                          and (is_open(m) or is_open(o)) and not store.get_link(m.slug, o.slug))
+        if options:
+            form = (f'<details><summary>Link it to another mission</summary>'
+                    f'<form method="post" action="/m/{slug}/link" class="actions">'
+                    f'<label for="link-to" style="margin-top:0">Mission <span class="hint">an open mission, or a '
+                    f'published article</span></label><select id="link-to" name="to">{options}</select>'
+                    f'<label for="link-why">Why <span class="hint">the shared thread; research sees it</span></label>'
+                    f'<input type="text" id="link-why" name="why" maxlength="300">'
+                    f'<p><button>Link</button></p></form></details>')
+    if not rows and not form:
+        return ""
+    body = f'<ul class="places">{"".join(rows)}</ul>' if rows else \
+        '<p class="hint">Not connected to any other mission yet.</p>'
+    return heading("link", "Connections", len(rows) or None, cls="sec") + body + form
+
 def epic_list(missions: list[Mission]) -> str:
     active = store.all_epics("active")
     if not active:
@@ -1942,7 +2019,7 @@ async def home(request: Request) -> HTMLResponse:
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
-    asks += [(6, a) for a in epic_proposals(missions)]
+    asks += [(6, a) for a in epic_proposals(missions) + combine_proposals()]
     body.append(heading("touch", "Needs you", len(asks), "needs-you"))
     body.append("".join(a for _, a in sorted(asks, key=lambda a: a[0]))
                 or '<p class="muted empty">Nothing is waiting on you.</p>')
@@ -2139,7 +2216,7 @@ async def mission(request: Request) -> Response:
             f'<span class="muted">{escape(m.slug)}</span></p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
-        body.append(f'<p class="muted">{escape(m.objective)}</p>')
+        body.append(f'<p class="muted objective">{escape(m.objective)}</p>')
     step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
@@ -2153,6 +2230,7 @@ async def mission(request: Request) -> Response:
                 f'<input type="text" id="epic" name="epic" list="epic-names" maxlength="48" '
                 f'value="{escape(current.title if current else "", quote=True)}" placeholder="none">'
                 f'<button>Save epic</button></form>')
+    body.append(connections(m))
 
     if m.validator_notes:
         title = "Why it was parked" if m.state == State.PARKED else \
@@ -2533,6 +2611,16 @@ async def act(request: Request) -> Response:
             return go(back, done="republish_off")
         wake()
         return go(back, done="republish")
+    elif action in ("link", "unlink"):
+        other = str(form.get("to" if action == "link" else "other") or "")
+        try:
+            if action == "link":
+                orchestrator.link(m.slug, other, str(form.get("why") or "")[:300], now)
+            else:
+                orchestrator.unlink(m.slug, other, now)
+        except ValueError:
+            return go(here, error="link" if action == "link" else "state")
+        return go(here, done=action + "ed")  # read from the next search on; nothing for the loop to wake for
     elif action == "epic":
         name = str(form.get("epic") or "")
         if name.strip() and not epic_title(name):
@@ -2619,6 +2707,26 @@ async def epic_action(request: Request) -> Response:
                   "epic_target" if action == "merge" else "state")
     return go("/", done=done)
 
+async def combine_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    slug, action = request.path_params["slug"], request.path_params["action"]
+    if not store.get_combine(slug):
+        return PlainTextResponse("No such combine.", status_code=404)
+    now = clock.now()
+    try:
+        if action == "approve":
+            made = orchestrator.approve_combine(slug, now, busy={e["slug"] for e in running_now()})
+            if loop_running():
+                wake()
+            return go(f"/m/{quote(made.slug)}", done="combined")
+        if action == "reject":
+            orchestrator.reject_combine(slug, now)
+            return go("/", done="combine_rejected")
+    except ValueError:
+        return go("/", error="combine")
+    return PlainTextResponse("Unknown action.", status_code=404)
+
 async def loop_action(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -2671,6 +2779,7 @@ app = Starlette(routes=[
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
     Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
+    Route("/combines/{slug}/{action}", combine_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),
