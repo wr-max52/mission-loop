@@ -1,10 +1,11 @@
 """Chat assistant: answers a human's questions about what the loop is doing. It is not one of the workers.
 
-Small on purpose: a short prompt, a few tools (all read-only but add_mission), a handful of tool calls, short tool results
+Small on purpose: a short prompt, a few tools (all read-only but add_mission and set_mission_epic), a handful of tool calls, short tool results
 and only the last couple of turns the page sends back. It keeps no memory and saves nothing.
 
 Every tool comes from MCP servers in mcp.json ("loop" = status_tools.py, plus "search" when a Brave key is set),
-so nothing here can change an existing mission; add_mission only queues a new one. By default it runs on the Research Assistant's model with the loop's
+so nothing here can change an existing mission's work: add_mission only queues a new one and set_mission_epic
+only moves a mission between epics. By default it runs on the Research Assistant's model with the loop's
 options (settings.chat_model; config, never a name in code), so Ollama uses the copy already loaded instead of
 reloading the model under a running agent. The human may pick another
 installed model; that one is loaded beside it.
@@ -43,10 +44,11 @@ The mission finder adds up to 3 missions a pass from the human's inspiration lin
 short themes. Claims are facts (what the record shows) or possibilities (labelled, not verified). The human
 works in the UI: approve, send back, publish, requeue and settings are buttons there, not your tools.
 Use your tools before you answer: loop_status, list_missions (open ones by default), mission_status,
-agent_steps, search_missions, publication_status. Call add_mission only when the human asks for a new
-mission; search first so you don't add a duplicate, then say its brief still needs their approval. You
-cannot approve, publish, change, start or stop anything; say so if asked. Answer in a few plain sentences,
-use mission topics rather than slugs, and say when you don't know."""
+agent_steps, search_missions, publication_status, list_epics (all epics, or the missions in one). Call
+add_mission only when the human asks for a new mission; search first so you don't add a duplicate, then say
+its brief still needs their approval. Call set_mission_epic only when the human asks to move a mission
+(any stage) to an epic; prefer an existing epic. You cannot approve, publish, start or stop anything; say so
+if asked. Answer briefly; Markdown (**bold**, lists) renders. Use topics, not slugs; say when you don't know."""
 
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
 

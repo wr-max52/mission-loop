@@ -320,7 +320,7 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 @media (prefers-reduced-motion: reduce) {
   .flow .step.on, .flow .check.on, .flow .check.on::after, .flow .human.arrived, .status .dot.on { animation:none; }
 }
-.card[data-lab] { position:relative; padding-bottom:4rem;
+.card[data-lab], .card.lab-host { position:relative; padding-bottom:4rem;
                   background-image:linear-gradient(var(--rule), var(--rule));
                   background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
                   background-repeat:no-repeat; }
@@ -358,6 +358,14 @@ canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-renderi
 .chat-log .user { align-self:flex-end; background:var(--accent); color:var(--bg); }
 .chat-log .assistant { align-self:flex-start; background:var(--quote); }
 .chat-log .assistant.wait { color:var(--muted); font-style:italic; }
+.chat-log .md { white-space:normal; }
+.chat-log .md > :first-child { margin-top:0; }
+.chat-log .md > :last-child { margin-bottom:0; }
+.chat-log .md p, .chat-log .md ul, .chat-log .md ol { margin:.45rem 0; }
+.chat-log .md ul, .chat-log .md ol { padding-left:1.3rem; }
+.chat-log .md li + li { margin-top:.2rem; }
+.chat-log .md code { font-size:.88em; padding:0 .25em; border-radius:4px; background:var(--bg); }
+.chat-log .md a { color:var(--accent); }
 .chat-log .model-tag { display:block; margin-top:.3rem; font-size:.75rem; color:var(--muted); }
 .suggest { display:flex; gap:.4rem; flex-wrap:wrap; }
 .suggest[hidden] { display:none; }
@@ -535,8 +543,8 @@ def flow_state() -> dict:
     writing = sum(orchestrator.parked_while_writing(m) for m in parked)
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
-        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"])}
-                    for e in now],
+        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"]),
+                     "name": activity.AGENTS[e["agent"]]} for e in now],
         "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
@@ -1158,10 +1166,10 @@ def epic_list(missions: list[Mission]) -> str:
 def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
-    working = working_on(m, now)
-    sub = working or next_step(m)
+    working, idle = working_on(m, now), next_step(m)
     if m.state == State.DONE and m.published_at:
-        sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+        working, idle = "", f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+    sub = working or idle
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
     stage = ""
@@ -1169,7 +1177,8 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
         stage = ' data-lab="busy"' + (f' data-worker="{live["worker"]}"' if live["worker"] in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
+            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
+            f'{" · " + escape(sub) if sub else ""}</span></div></a>')
 
 # ---------- pages ----------
 
@@ -1194,7 +1203,9 @@ async def home(request: Request) -> HTMLResponse:
                 body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{github_status()}</p>'
                             f'<p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
-            body.append("".join(card(m, now, epics, lab) for m in ms))
+            cards = "".join(card(m, now, epics, lab) for m in ms)
+            # assets/flow.js relights cards in place; researchers may only visit the ones in a data-lab-ok group
+            body.append(f'<div class="cards"{" data-lab-ok" if lab else ""}>{cards}</div>')
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
@@ -1370,9 +1381,40 @@ CHAT_JS = """<script>
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false;
 
+  // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
+  // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
+  const esc = s => s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]);
+  function inline(s) {
+    const codes = [];
+    s = esc(s).replace(/`([^`\\n]+)`/g, (_, c) => `\\u0000${codes.push(c) - 1}\\u0000`);
+    s = s.replace(/\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+         .replace(/\\*\\*(?=\\S)(.+?)\\*\\*/g, "<strong>$1</strong>").replace(/__(?=\\S)(.+?)__/g, "<strong>$1</strong>")
+         .replace(/(^|[^*\\w])\\*(?=\\S)([^*\\n]+?)\\*(?!\\w)/g, "$1<em>$2</em>")
+         .replace(/(^|[^_\\w])_(?=\\S)([^_\\n]+?)_(?!\\w)/g, "$1<em>$2</em>");
+    return s.replace(/\\u0000(\\d+)\\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+  }
+  function markdown(text) {
+    const out = []; let list = null, para = [];
+    const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; };
+    const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; };
+    for (const line of text.split("\\n")) {
+      const bullet = line.match(/^\\s*[-*+]\\s+(.*)$/), num = line.match(/^\\s*\\d+[.)]\\s+(.*)$/), head = line.match(/^\\s*#{1,6}\\s+(.*)$/);
+      if (bullet || num) {
+        const tag = bullet ? "ul" : "ol";
+        flushPara(); if (list && list.tag !== tag) flushList();
+        list = list || {tag, items: []}; list.items.push((bullet || num)[1]);
+      } else if (head) { flushPara(); flushList(); out.push(`<p class="md-head"><strong>${inline(head[1])}</strong></p>`); }
+      else if (!line.trim()) { flushPara(); flushList(); }
+      else { flushList(); para.push(line); }
+    }
+    flushPara(); flushList();
+    return out.join("");
+  }
   function show(role, text, model, cls = "") {
     const div = document.createElement("div");
-    div.className = `msg ${role} ${cls}`; div.textContent = text;
+    div.className = `msg ${role} ${cls}`;
+    if (role === "assistant" && !cls) { div.classList.add("md"); div.innerHTML = markdown(text || ""); }
+    else div.textContent = text;
     if (model) { const tag = document.createElement("span"); tag.className = "model-tag"; tag.textContent = model; div.appendChild(tag); }
     log.appendChild(div); log.scrollTop = log.scrollHeight; return div;
   }
@@ -1435,7 +1477,7 @@ def chat_widget() -> str:
 <header><strong>Ask the loop</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
  <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
 <label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
-<p class="hint" id="chat-hint">It only reads, so it can't change anything, and it works with the loop off.</p>
+<p class="hint" id="chat-hint">It reads what the loop is doing, can add a mission or move one to an epic, and works with the loop off.</p>
 <div class="chat-log" id="chat-log" aria-live="polite"></div>
 <div class="suggest" id="chat-suggest">{chips}</div>
 <form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"

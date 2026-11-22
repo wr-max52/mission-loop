@@ -1,8 +1,9 @@
 """Local MCP server that lets the chat assistant see what the loop is doing, without touching it.
 
-Every tool but one only reads: the database, data/activity.json, the agents' trails (trail.py), the channels'
-state files and the loop log. The exception is add_mission, which queues a new mission exactly like the UI's
-Add mission box (it still waits for human brief review) and never changes an existing one. No tool takes the
+Every tool but two only reads: the database, data/activity.json, the agents' trails (trail.py), the channels'
+state files and the loop log. add_mission queues a new mission exactly like the UI's Add mission box (it still
+waits for human brief review) and set_mission_epic puts a mission in an epic like the Epic field on its page;
+neither changes a mission's stage or work. No tool takes the
 loop's lock or talks to a model, so asking never slows or redirects the work. Answers are short on purpose:
 the assistant has a small context.
 The chat assistant starts this through the "loop" entry in mcp.json; any other MCP client can too.
@@ -64,6 +65,9 @@ def _label(m) -> str:
         return "approved, publishing next"
     return LABELS[m.state]
 
+def _epic(m, titles: dict[str, str]) -> str:
+    return f" | epic: {titles[m.epic]}" if m.epic in titles else ""
+
 def _needs_human(m) -> bool:
     return ((m.state == State.BRIEF_READY and not m.approved) or (m.state == State.ARTICLE_READY and not m.reviewed)
             or m.state == State.PARKED)
@@ -122,14 +126,14 @@ def list_missions(stage: str = "active") -> str:
                     or LABELS[m.state].startswith(stage)]
     if not missions:
         return f"No missions match '{stage}'."
-    now = _working()
+    now, titles = _working(), store.epic_titles()
     lines = []
     for m in missions[-MAX_LIST:]:
         events = store.events(m.slug)
         changed = _since(events[-1]["at"]) if events else "?"
         e = _on(m.slug, now)
         busy = f" [{activity.AGENTS[e['agent']]} working on it now]" if e else ""
-        lines.append(f"- {m.slug} | {_label(m)} | {m.topic[:90]} | changed {changed}{busy}")
+        lines.append(f"- {m.slug} | {_label(m)} | {m.topic[:90]}{_epic(m, titles)} | changed {changed}{busy}")
     more = f"\n({len(missions) - MAX_LIST} older not shown)" if len(missions) > MAX_LIST else ""
     return "\n".join(lines) + more
 
@@ -141,6 +145,9 @@ def mission_status(slug: str) -> str:
     if not m:
         return f"No mission '{slug}'. Use search_missions to find its slug."
     lines = [f"{m.slug}: {m.topic}", f"Stage: {_label(m)}"]
+    epic = store.get_epic(m.epic) if m.epic else None
+    lines.append(f"Epic: {epic.title}" + (" (proposed, waiting for the human)" if epic.status == "proposed" else "")
+                 if epic else "Epic: none")
     if m.state in (State.RESEARCHING, State.QUEUED) or m.attempts:
         lines.append(f"Research attempts: {m.attempts} of {m.max_attempts}")
     if m.state == State.WRITING or m.write_attempts:
@@ -189,7 +196,8 @@ def search_missions(query: str) -> str:
     if not scored:
         return f"No mission matches '{query}'."
     scored.sort(key=lambda x: -x[0])
-    return "\n".join(f"- {m.slug} | {_label(m)} | {m.topic[:90]}" for _, m in scored[:8])
+    titles = store.epic_titles()
+    return "\n".join(f"- {m.slug} | {_label(m)} | {m.topic[:90]}{_epic(m, titles)}" for _, m in scored[:8])
 
 @server.tool()
 def publication_status() -> str:
@@ -244,6 +252,53 @@ def add_mission(topic: str, objective: str = "", epic: str = "") -> str:
         orchestrator.WAKE_FLAG.touch()
     return f"Queued {slug}: {topic}. " + ("The loop will pick it up now." if orchestrator.loop_running()
                                           else "The loop is off; it starts when the loop runs.")
+
+@server.tool()
+def list_epics(epic: str = "") -> str:
+    """Epics are short themes that group missions. With no epic given: every epic with its status and how many
+    missions it holds, plus how many missions have none. With an epic's title: every mission in it (any stage,
+    published included), with slug, stage and topic."""
+    missions = store.all_missions()
+    if epic.strip():
+        e = store.find_epic(epic)
+        if not e:
+            return f"No epic '{epic}'. Call list_epics with no epic to see them all."
+        inside = [m for m in missions if m.epic == e.slug]
+        head = f"{e.title}{' (proposed, waiting for the human)' if e.status == 'proposed' else ''}: {len(inside)} mission(s)"
+        more = f"\n({len(inside) - MAX_LIST} more not shown)" if len(inside) > MAX_LIST else ""
+        return "\n".join([head] + [f"- {m.slug} | {_label(m)} | {m.topic[:90]}" for m in inside[:MAX_LIST]]) + more
+    epics = store.all_epics()
+    if not epics:
+        return "No epics yet."
+    lines = []
+    for e in epics:
+        inside = [m for m in missions if m.epic == e.slug]
+        done = sum(m.state == State.DONE for m in inside)
+        status = " (proposed, waiting for the human)" if e.status == "proposed" else ""
+        lines.append(f"- {e.title}{status}: {len(inside)} mission(s), {done} published")
+    loose = sum(not m.epic for m in missions)
+    if loose:
+        lines.append(f"- (no epic): {loose} mission(s)")
+    return "\n".join(lines)
+
+@server.tool()
+def set_mission_epic(slug: str, epic: str) -> str:
+    """Put a mission (any stage, published included) in an epic, like the Epic field on its page. epic is an
+    existing epic's title, or a new 1 to 4 word title, which makes a new epic; "none" takes the mission out of
+    its epic. Published pages are redrawn with the new label. Nothing else about the mission changes. Only
+    call this when the human asks to move a mission; find its slug with search_missions first."""
+    m = store.get_mission(slug.strip())
+    if not m:
+        return f"No mission '{slug}'. Use search_missions to find its slug."
+    name = "" if epic.strip().lower() in ("", "none", "no epic") else epic
+    if name and not epic_title(name):
+        return "An epic title is 1 to 4 words."
+    new = not name or not store.find_epic(name)
+    orchestrator.assign_epic(m, name, datetime.now(timezone.utc))
+    if not name:
+        return f"{m.topic[:80]} [{m.slug}] is no longer in an epic."
+    title = store.get_epic(store.get_mission(m.slug).epic).title
+    return f"{m.topic[:80]} [{m.slug}] is now in the epic {title}" + (" (a new epic)." if new else ".")
 
 if __name__ == "__main__":
     server.run()

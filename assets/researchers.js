@@ -1,8 +1,10 @@
 /* Pixel researchers: a cast of small outlined researchers who drop in on the dashboard while missions
  * are in progress. The card of each mission a model is working on right now gets its own random schedule: the first visitor turns up after a
  * random wait, walks in from a side, stays 15-30 seconds doing comic researcher things, walks off, and
- * after a random 10-20 second gap the next one comes. Never more than two are on the page at once, and
- * arrivals come one at a time, a random 4-15 seconds apart; stages that have waited longest go first.
+ * after a random 10-20 second gap the next one comes. Never more than four are on the page at once (one on
+ * each busy worker's lit step and one on each busy card), and every arrival, the strip's included, comes one
+ * at a time, a random 12-20 seconds apart, so a full house takes about a minute to fill: the strip first, then
+ * the stages that have waited longest. A card nobody works on any more sees its visitor walk off.
  * Visitors are drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every
  * character belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones
  * to the Principal Investigator), and a card tagged with data-worker mostly gets visitors from that crew
@@ -13,7 +15,8 @@
  * busy worker's lit step gets one researcher from that worker's crew, doing that step's kind of work.
  * When the worker's mission moves on (sources -> brief -> check), they run after it. When the work ends,
  * moves to another mission, or passes to the other worker, they say a closing line and walk off, and a new
- * one walks in for whatever started. assets/flow.js says when that happens with a "flowchange" event.
+ * one walks in for whatever started, at least 10 seconds after (GAP_MIN) and in its turn among the page's
+ * arrivals. assets/flow.js says when that happens with a "flowchange" event.
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -24,8 +27,8 @@ window.__researchers = true;
 const LIFE_MIN = 15, LIFE_MAX = 30;          // seconds on stage
 const GAP_MIN = 10, GAP_MAX = 20;            // seconds between visitors on one stage
 const FIRST_MIN = 2, FIRST_MAX = 15;         // the first visitor's random wait, so stages never start in step
-const ENTRY_MIN = 4, ENTRY_MAX = 15;         // seconds between any two arrivals on the page, so they stagger
-const MAX_ON_STAGE = 2;                      // researchers on the whole page at once
+const ENTRY_MIN = 12, ENTRY_MAX = 20;        // seconds between any two arrivals on the page, so they stagger
+const MAX_ON_STAGE = 4;                      // researchers on the whole page at once: two lit steps, two busy cards
 const FAVOR = 0.8;                           // share of a working stage's visitors from its own worker's crew
 const EDGE = 40;                             // how far off-stage they start and finish their walk
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -66,6 +69,7 @@ function shuffle(list, r = Math.random) {
 const memory = {
   get(k) { try { return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } },
   set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
+  delete(k) { try { sessionStorage.removeItem(k); } catch (e) { /* private mode */ } },
 };
 
 // ---------- the cast ----------
@@ -1856,6 +1860,7 @@ class Stage {
     this.canvas.className = "lab-stage";
     this.canvas.setAttribute("aria-hidden", "true");
     host.appendChild(this.canvas);
+    host.classList.add("lab-host");              // keeps the card's stage room while a visitor walks off an idle card
     this.ctx = this.canvas.getContext("2d");
     this.off = this.layer(); this.ink = this.layer(); this.comp = this.layer();
     this.fx = []; this.marks = [];
@@ -1871,7 +1876,7 @@ class Stage {
   adopt(host) {
     if (this.ro) { this.ro.unobserve(this.host); this.ro.observe(host); }
     this.host.removeEventListener("mouseenter", this.poke);
-    this.host = host; host.appendChild(this.canvas);
+    this.host = host; host.appendChild(this.canvas); host.classList.add("lab-host");
     host.addEventListener("mouseenter", this.poke);
     if (this.kind === "card") {                  // the fresh copy may name a new worker running it
       this.mood = host.dataset.lab || "busy"; this.worker = host.dataset.worker || null;
@@ -1879,7 +1884,19 @@ class Stage {
     }
     this.layout();
   }
-  kill() { if (this.ro) this.ro.disconnect(); this.canvas.remove(); }
+  kill() { if (this.ro) this.ro.disconnect(); this.canvas.remove(); this.host.classList.remove("lab-host"); }
+  // Nobody works on this card any more: its visitor walks off, nobody new comes, and the stage goes.
+  retire() {
+    this.retired = true; this.nextAt = null;
+    memory.delete(this.key);
+    if (!this.resident) this.dead = true;
+    else if (!this.resident.leaving) this.resident.leave();
+  }
+  revive() {                                       // the card is busy again before its stage went
+    this.retired = this.dead = false;
+    this.mood = this.host.dataset.lab || "busy"; this.worker = this.host.dataset.worker || null;
+    if (!this.resident) this.nextAt = now() + GAP_MIN;
+  }
   cast() { return this.resident ? [this.resident] : []; }
   size(cssW, cssH, ground) {
     const dpr = window.devicePixelRatio || 1;
@@ -1942,7 +1959,10 @@ class Stage {
     if (r) {
       if (!r.leaving && t >= this.rec.born + this.rec.life) r.leave();
       r.update(dt);
-      if (r.gone) { this.resident = null; this.nextAt = t + between(Math.random, GAP_MIN, GAP_MAX); this.fx.length = 0; }
+      if (r.gone) {
+        this.resident = null; this.fx.length = 0;
+        if (this.retired) this.dead = true; else this.nextAt = t + between(Math.random, GAP_MIN, GAP_MAX);
+      }
     }
     this.tick(dt);
   }
@@ -2169,9 +2189,8 @@ class FlowStage extends Stage {
     c.rec = Object.assign({}, rec, { step: c.step, slug: c.slug });
     c.r = new Researcher(c.slot, c.rec, resume ? rec : null);
     c.pending = null;
-    if (!resume) entered();
     if (REDUCE) return;
-    // Still at most two on the page: the card visitors who have stayed longest head off to make room.
+    // Still at most MAX_ON_STAGE on the page: the card visitors who have stayed longest head off to make room.
     const cards = stages.filter(s => s.kind === "card" && s.resident && !s.resident.leaving).sort((a, b) => a.rec.born - b.rec.born);
     let over = this.cast().filter(r => !r.leaving).length + cards.length - MAX_ON_STAGE;
     for (const s of cards) if (over-- > 0) s.resident.leave();
@@ -2194,7 +2213,7 @@ class FlowStage extends Stage {
       if (REDUCE) r.x = cur.slot.spawnX(r.rand); else r.chase();
     } else {
       if (r) this.dismiss(r, closer(c));
-      this.crew[w] = this.slot(c.to.step, c.to.slug, now() + (r ? 1.5 : 0.2));   // a beat behind the one leaving
+      this.crew[w] = this.slot(c.to.step, c.to.slug, now() + (r ? GAP_MIN : 0.2));   // the spot rests after the one leaving
     }
     if (REDUCE) still();
   }
@@ -2203,10 +2222,18 @@ class FlowStage extends Stage {
     this.leavers.push(r);
     r.leave(text);
   }
-  update(dt) {
+  // admit() asks when it is someone's turn to walk in: the lit step that has waited longest gets them.
+  admit(t) {
+    let next = null;
     for (const [w, c] of Object.entries(this.crew)) {
-      if (c.pending && now() >= c.pending && !c.r) { if (c.slot.home) this.spawn(w); else c.pending = null; }
+      if (!c.pending || c.r || t < c.pending) continue;
+      if (!c.slot.home) { c.pending = null; continue; }
+      if (!next || c.pending < this.crew[next].pending) next = w;
     }
+    if (next) this.spawn(next);
+    return !!next;
+  }
+  update(dt) {
     for (const r of this.cast()) r.update(dt);
     for (const c of Object.values(this.crew)) if (c.r && c.r.gone) c.r = null;
     this.leavers = this.leavers.filter(r => !r.gone);
@@ -2275,15 +2302,18 @@ function wrapText(ctx, text, max) {
 
 // ---------- start ----------
 
-// Let waiting card stages in, longest-waiting first, while fewer than MAX_ON_STAGE researchers are out.
-// The strip's researcher never waits for a turn, but counts against the cards' share.
-// Arrivals come one at a time, a random 4-15 s apart, so two never walk in together.
+// Let waiting stages in while fewer than MAX_ON_STAGE researchers are out: a lit step on the strip first,
+// then the card stages, longest-waiting first. Arrivals come one at a time, a random 12-20 s apart, so two
+// never walk in together and a full page fills up over about a minute.
 let nextEntry = 0;
 function entered() { nextEntry = Math.max(nextEntry, now() + between(Math.random, ENTRY_MIN, ENTRY_MAX)); }
 function admit() {
   const t = now();
   if (t < nextEntry || stages.reduce((n, s) => n + s.cast().length, 0) >= MAX_ON_STAGE) return;
-  const ready = stages.filter(s => s.kind === "card" && !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
+  const flow = stages.find(s => s.kind === "flow");
+  if (flow && flow.admit(t)) { entered(); return; }
+  const ready = stages.filter(s => s.kind === "card" && !s.resident && !s.retired && s.nextAt && t >= s.nextAt)
+    .sort((a, b) => a.nextAt - b.nextAt);
   if (ready.length) { ready[0].spawn(); entered(); }
 }
 
@@ -2298,18 +2328,24 @@ function still() {
 }
 
 // Find the stages on the page. After the page swaps in fresh HTML, a stage whose card (or strip) came
-// back keeps its researcher on the new copy; one whose card went away saves where it was and goes.
+// back keeps its researcher on the new copy; one whose card went away saves where it was and goes. A card
+// that lost its data-lab (assets/flow.js takes it off when nobody works on it) sends its visitor off.
 // A worker's crew on the Settings page is its own kind of stage (Crew), found here too.
 const crews = [];
 function rescan() {
   for (const s of stages.slice()) {
-    if (s.host.isConnected) continue;
-    const sel = s.kind === "flow" ? ".flow-track[data-lab]"
-      : `.card[data-lab][href="${CSS.escape(s.host.getAttribute("href"))}"]`;
-    const next = document.querySelector(sel);
-    if (next && !stages.some(o => o.host === next)) { s.adopt(next); continue; }
-    s.save(); s.kill(); stages.splice(stages.indexOf(s), 1);
+    if (!s.host.isConnected) {
+      const sel = s.kind === "flow" ? ".flow-track[data-lab]" : `.card[href="${CSS.escape(s.host.getAttribute("href"))}"]`;
+      const next = document.querySelector(sel);
+      if (!next || stages.some(o => o.host === next)) { s.save(); s.kill(); stages.splice(stages.indexOf(s), 1); continue; }
+      s.adopt(next);
+    }
+    if (s.kind !== "card") continue;
+    if (!s.host.dataset.lab) { if (!s.retired) s.retire(); }
+    else if (s.retired) s.revive();
+    else s.worker = s.host.dataset.worker || null;   // the card changed hands: its next visitor is from that crew
   }
+  for (let i = stages.length - 1; i >= 0; i--) if (stages[i].dead) { stages[i].kill(); stages.splice(i, 1); }
   document.querySelectorAll(".card[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
   const track = document.querySelector(".flow-track[data-lab]");
   if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
@@ -2320,6 +2356,7 @@ function rescan() {
 function tick(dt) {
   admit();
   for (const s of stages) { s.update(dt); s.draw(); }
+  for (let i = stages.length - 1; i >= 0; i--) if (stages[i].dead) { stages[i].kill(); stages.splice(i, 1); }
   for (const c of crews) { c.update(dt); c.draw(); }
 }
 let started = false;
