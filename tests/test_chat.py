@@ -104,7 +104,7 @@ def test_tools_never_change_anything():
     for tool in (status_tools.loop_status, status_tools.list_missions):
         tool()
     status_tools.mission_status("grid"); status_tools.agent_steps("grid"); status_tools.search_missions("grid")
-    status_tools.publication_status()
+    status_tools.publication_status(); status_tools.list_epics(); status_tools.list_epics("nope")
     assert (store.get_mission("grid").model_dump_json(), len(store.events("grid"))) == before
     assert not orchestrator.loop_running()                          # it only tests the lock, never keeps it
 
@@ -132,13 +132,44 @@ def test_add_mission_queues_a_new_mission_only():
     assert store.events(m.slug)[-1]["note"] == "added by the chat assistant"
     assert not orchestrator.WAKE_FLAG.exists()                      # no loop to wake
 
+def test_epics_show_in_listings_and_list_epics():
+    water = store.create_epic("Water rights")
+    store.create_epic("Grid power", status="proposed")
+    store.save_mission(Mission(slug="dam", topic="Who owns the dam", epic=water.slug, state=State.DONE))
+    store.save_mission(Mission(slug="grid", topic="Why the grid failed", epic="grid-power"))
+    store.save_mission(Mission(slug="loose", topic="A loose story"))
+    out = status_tools.list_epics()
+    assert "- Water rights: 1 mission(s), 1 published" in out
+    assert "- Grid power (proposed, waiting for the human): 1 mission(s)" in out and "(no epic): 1" in out
+    one = status_tools.list_epics("water RIGHTS")
+    assert one.startswith("Water rights: 1 mission(s)") and "dam | published | Who owns the dam" in one
+    assert "No epic 'volcanoes'" in status_tools.list_epics("volcanoes")
+    assert "| epic: Grid power" in status_tools.list_missions()
+    assert "| epic: Water rights" in status_tools.search_missions("owns the dam")
+    assert "Epic: Water rights" in status_tools.mission_status("dam")
+    assert "Epic: none" in status_tools.mission_status("loose")
+
+def test_set_mission_epic_moves_past_and_present_missions():
+    store.create_epic("Water rights")
+    store.save_mission(Mission(slug="dam", topic="Who owns the dam", state=State.DONE))
+    store.save_mission(Mission(slug="grid", topic="Why the grid failed", state=State.RESEARCHING, attempts=1))
+    assert "now in the epic Water rights." in status_tools.set_mission_epic("dam", "water rights")
+    assert store.get_epic(store.get_mission("dam").epic).title == "Water rights"
+    assert "(a new epic)" in status_tools.set_mission_epic("grid", "Grid power")
+    grid = store.get_mission("grid")
+    assert store.get_epic(grid.epic).status == "active" and grid.state == State.RESEARCHING and grid.attempts == 1
+    assert "no longer in an epic" in status_tools.set_mission_epic("grid", "none") and not store.get_mission("grid").epic
+    assert "1 to 4 words" in status_tools.set_mission_epic("grid", "a b c d e")
+    assert "No mission" in status_tools.set_mission_epic("nope", "Water rights")
+    assert store.events("dam")[-1]["note"] == "epic set to Water rights"
+
 async def test_loop_server_runs_over_mcp_from_any_folder():
     """mcp.json names status_tools.py relative to itself; the server reads the working folder's data."""
     store.save_mission(Mission(slug="grid", topic="Why the grid failed"))
     async with Toolbox(["loop"], config_path=assistant.CONFIG) as tb:
         assert {t["function"]["name"] for t in tb.tools} == {
             "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions",
-            "publication_status", "add_mission"}
+            "publication_status", "add_mission", "list_epics", "set_mission_epic"}
         assert "Why the grid failed" in await tb.call("mission_status", {"slug": "grid"})
 
 # ---------- the assistant ----------

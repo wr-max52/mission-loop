@@ -350,6 +350,14 @@ canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-renderi
 .chat-log .user { align-self:flex-end; background:var(--accent); color:var(--bg); }
 .chat-log .assistant { align-self:flex-start; background:var(--quote); }
 .chat-log .assistant.wait { color:var(--muted); font-style:italic; }
+.chat-log .md { white-space:normal; }
+.chat-log .md > :first-child { margin-top:0; }
+.chat-log .md > :last-child { margin-bottom:0; }
+.chat-log .md p, .chat-log .md ul, .chat-log .md ol { margin:.45rem 0; }
+.chat-log .md ul, .chat-log .md ol { padding-left:1.3rem; }
+.chat-log .md li + li { margin-top:.2rem; }
+.chat-log .md code { font-size:.88em; padding:0 .25em; border-radius:4px; background:var(--bg); }
+.chat-log .md a { color:var(--accent); }
 .chat-log .model-tag { display:block; margin-top:.3rem; font-size:.75rem; color:var(--muted); }
 .suggest { display:flex; gap:.4rem; flex-wrap:wrap; }
 .suggest[hidden] { display:none; }
@@ -1193,9 +1201,40 @@ CHAT_JS = """<script>
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false;
 
+  // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
+  // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
+  const esc = s => s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]);
+  function inline(s) {
+    const codes = [];
+    s = esc(s).replace(/`([^`\\n]+)`/g, (_, c) => `\\u0000${codes.push(c) - 1}\\u0000`);
+    s = s.replace(/\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+         .replace(/\\*\\*(?=\\S)(.+?)\\*\\*/g, "<strong>$1</strong>").replace(/__(?=\\S)(.+?)__/g, "<strong>$1</strong>")
+         .replace(/(^|[^*\\w])\\*(?=\\S)([^*\\n]+?)\\*(?!\\w)/g, "$1<em>$2</em>")
+         .replace(/(^|[^_\\w])_(?=\\S)([^_\\n]+?)_(?!\\w)/g, "$1<em>$2</em>");
+    return s.replace(/\\u0000(\\d+)\\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+  }
+  function markdown(text) {
+    const out = []; let list = null, para = [];
+    const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; };
+    const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; };
+    for (const line of text.split("\\n")) {
+      const bullet = line.match(/^\\s*[-*+]\\s+(.*)$/), num = line.match(/^\\s*\\d+[.)]\\s+(.*)$/), head = line.match(/^\\s*#{1,6}\\s+(.*)$/);
+      if (bullet || num) {
+        const tag = bullet ? "ul" : "ol";
+        flushPara(); if (list && list.tag !== tag) flushList();
+        list = list || {tag, items: []}; list.items.push((bullet || num)[1]);
+      } else if (head) { flushPara(); flushList(); out.push(`<p class="md-head"><strong>${inline(head[1])}</strong></p>`); }
+      else if (!line.trim()) { flushPara(); flushList(); }
+      else { flushList(); para.push(line); }
+    }
+    flushPara(); flushList();
+    return out.join("");
+  }
   function show(role, text, model, cls = "") {
     const div = document.createElement("div");
-    div.className = `msg ${role} ${cls}`; div.textContent = text;
+    div.className = `msg ${role} ${cls}`;
+    if (role === "assistant" && !cls) { div.classList.add("md"); div.innerHTML = markdown(text || ""); }
+    else div.textContent = text;
     if (model) { const tag = document.createElement("span"); tag.className = "model-tag"; tag.textContent = model; div.appendChild(tag); }
     log.appendChild(div); log.scrollTop = log.scrollHeight; return div;
   }
@@ -1258,7 +1297,7 @@ def chat_widget() -> str:
 <header><strong>Ask the loop</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
  <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
 <label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
-<p class="hint" id="chat-hint">It only reads, so it can't change anything, and it works with the loop off.</p>
+<p class="hint" id="chat-hint">It reads what the loop is doing, can add a mission or move one to an epic, and works with the loop off.</p>
 <div class="chat-log" id="chat-log" aria-live="polite"></div>
 <div class="suggest" id="chat-suggest">{chips}</div>
 <form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"
