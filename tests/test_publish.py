@@ -129,6 +129,14 @@ def test_brief_lists_facts_and_possibilities_separately():
         assert text.index(FACTS_HEADING) < text.index("Stub claim") < text.index(POSSIBILITIES_HEADING) \
             < text.index("a vendor was shared")
 
+def test_counterpoint_without_a_contradicting_source_is_marked_unsourced():
+    from render import brief_html, brief_markdown, UNSOURCED
+    brief = stubs.research(Mission(slug="x", topic="x"))
+    assert UNSOURCED not in brief_markdown("x", brief)       # the stub cites a contradicting source
+    for s in brief.sources:
+        s.stance = "supports"
+    assert UNSOURCED in brief_markdown("x", brief) and UNSOURCED in brief_html(brief)
+
 def test_briefs_saved_before_kinds_existed_still_load_as_facts():
     from contracts import ResearchBrief
     data = stubs.research(Mission(slug="x", topic="x")).model_dump()

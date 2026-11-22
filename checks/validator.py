@@ -144,15 +144,12 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     if len(domains) < MIN_SUPPORT_DOMAINS:
         problems.append(f"Only {len(domains)} verified supporting domain(s); need {MIN_SUPPORT_DOMAINS}")
 
-    # 5. At least 1 verified contradicting source on a website no supporting source uses, and a counterpoint
-    against = {_domain(s.url) for s in brief.sources if s.stance == "contradicts" and s.id in verified}
-    if not against:
-        problems.append("No verified source contradicts the thesis")
-    elif not against - {_domain(s.url) for s in brief.sources if s.stance == "supports"}:
-        problems.append("Every source that contradicts the thesis is on the same website as a supporting "
-                        "source; find the opposing view on a different website")
+    # 5. A counterpoint. Research must look for the case against the thesis, but a broad thesis often has no
+    #    source that answers it, so a contradicting source is optional: any it cites is checked like the rest
+    #    (above), and without one the counterpoint is shown as unsourced.
     if not brief.counterpoint.strip():
-        problems.append("Counterpoint is empty")
+        problems.append("Counterpoint is empty; give the strongest case against the thesis, from a source "
+                        "if you found one, else as the objection a skeptic would raise")
 
     # 6. Outreach only: 3+ POCs, and every POC's name and email appear on their contact page
     if settings.OUTREACH and len(brief.pocs) < MIN_POCS:

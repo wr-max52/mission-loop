@@ -63,11 +63,21 @@ def test_too_few_domains_fails():
     ok, notes = validator.validate(M, b)
     assert not ok and "supporting domain" in notes
 
-def test_missing_contradiction_fails():
+def test_counterpoint_without_a_contradicting_source_passes():
     b = brief()
-    b.sources[3].stance = "supports"
+    b.sources[3].stance = "supports"      # a broad thesis may have no source that answers it
     ok, notes = validator.validate(M, b)
-    assert not ok and "contradicts" in notes
+    assert ok, notes
+
+def test_empty_counterpoint_fails():
+    ok, notes = validator.validate(M, brief(counterpoint="  "))
+    assert not ok and "Counterpoint is empty" in notes
+
+def test_unverified_contradicting_source_still_fails():
+    b = brief()
+    b.sources[3].quote = "Critics say heat pumps never work in any cold climate at all."
+    ok, notes = validator.validate(M, b)
+    assert not ok and "s4: quote not found" in notes
 
 def test_unknown_source_id_fails():
     ok, notes = validator.validate(M, brief(claims=[Claim(text="x", source_ids=["s9"])]))
@@ -108,13 +118,6 @@ def test_blocked_domain_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(validator, "BLOCKED_FILE", blocked)
     ok, notes = validator.validate(M, brief())
     assert not ok and "s2: b.org is on the blocked list" in notes
-
-def test_contradiction_on_a_supporting_site_fails():
-    b = brief()
-    b.sources[3].url = "https://a.com/1"
-    b.sources[3].quote = Q
-    ok, notes = validator.validate(M, b)
-    assert not ok and "different website" in notes
 
 def test_failed_quote_note_shows_the_real_sentence():
     b = brief()
