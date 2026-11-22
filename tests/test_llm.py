@@ -80,3 +80,26 @@ async def test_the_prompt_sent_is_cut_to_fit(monkeypatch):
     page = "p" * room(llm.REPLY_TOKENS) * 2
     await llm.chat([{"role": "user", "content": "go"}, {"role": "tool", "content": page}], format={})
     assert FakeClient.sent[0]["messages"][1]["content"].endswith("[cut to fit]")
+
+def test_compact_cuts_deep_once_so_later_turns_only_append():
+    page = room(llm.TURN_TOKENS) // 3
+    messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "Begin."}]
+    for n in range(4):                                                 # four big pages, each read before the next
+        messages += [Message(role="assistant", content="", thinking="t" * 10), {"role": "tool", "content": str(n) * page}]
+    messages.append(Message(role="assistant", content=""))
+    out = llm.compact(messages, llm.TURN_TOKENS)
+    assert out is not messages and all(m["content"].endswith("[cut to fit]") for m in out if isinstance(m, dict) and m["role"] == "tool")
+    grown = out + [{"role": "tool", "content": "x" * (page // 10)}]   # the next turn's result fits in the headroom
+    assert llm.compact(grown, llm.TURN_TOKENS) is grown
+
+def test_compact_keeps_results_the_model_has_not_read_whole():
+    page = room(llm.TURN_TOKENS) // 2
+    messages = [{"role": "system", "content": "rules"}, {"role": "tool", "content": "a" * page},
+                Message(role="assistant", content=""), {"role": "tool", "content": "b" * page}]
+    out = llm.compact(messages, llm.TURN_TOKENS)
+    assert out[3]["content"] == "b" * page and out[1]["content"].endswith("[cut to fit]")
+
+def test_fit_counts_thinking():
+    messages = [{"role": "system", "content": "rules"}, {"role": "tool", "content": "a" * 1000},
+                Message(role="assistant", content="", thinking="t" * room(llm.REPLY_TOKENS))]
+    assert llm.fit(messages, llm.REPLY_TOKENS)[1]["content"].endswith("[cut to fit]")

@@ -29,21 +29,55 @@ class Overrun(Exception):
         super().__init__(why)
         self.text = text
 
+def invalid(e) -> str:
+    """The repair request for a reply that failed its schema: one short line per problem (pydantic's own
+    text repeats the whole input and adds links, which only confuse a small model)."""
+    lines = [f"- {'.'.join(map(str, err['loc'])) or 'reply'}: {err['msg']}" for err in e.errors()[:10]]
+    return "That JSON was invalid:\n" + "\n".join(lines) + "\nReturn corrected JSON only."
+
+COMPACT_TO = 0.7                           # share of the room a compaction leaves used, so the next turns only append
+
 def fit(messages: list, reply_tokens: int) -> list:
     """The messages, cut to fit the context with room for the reply. Prompts that overflow get cut
     from the front by Ollama, which loses the instructions, or not at all, which lets the model run
     on forever. Only tool results are shortened: the longest ones lose their ends first, so short
     results (searches, quoted sentences) stay whole. The list passed in is not changed."""
     room = (CONTEXT - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
-    tools = [i for i, m in enumerate(messages) if _get(m, "role") == "tool"]
-    fixed = sum(len(_get(m, "content") or "") for i, m in enumerate(messages) if i not in tools)
-    sizes = [len(_get(messages[i], "content") or "") for i in tools]
-    left = room - fixed
-    if sum(sizes) <= left:
+    return _cut(messages, room, room, _tool_results(messages))
+
+def compact(messages: list, reply_tokens: int) -> list:
+    """fit, for a transcript that keeps growing (the search loop). Ollama reuses its cache for the
+    unchanged start of a prompt, but once a transcript is full fit recuts every long result on every
+    turn, so the whole prompt is read again each turn. compact cuts deeper (to COMPACT_TO of the
+    room), so the next few turns only append. Results the model hasn't read yet, after its last
+    reply, stay whole when the room allows."""
+    room = (CONTEXT - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
+    tools = _tool_results(messages)
+    last = max((i for i, m in enumerate(messages) if _get(m, "role") == "assistant"), default=-1)
+    seen = [i for i in tools if i < last]
+    target = int(room * COMPACT_TO)
+    fixed = sum(_size(m) for i, m in enumerate(messages) if i not in seen)
+    return _cut(messages, room, target, seen if fixed <= target else tools)
+
+def _tool_results(messages: list) -> list[int]:
+    return [i for i, m in enumerate(messages) if _get(m, "role") == "tool"]
+
+def _size(m) -> int:
+    """Characters a message adds to the prompt: its text, thinking and tool calls."""
+    calls = _get(m, "tool_calls")
+    return len(_get(m, "content") or "") + len(_get(m, "thinking") or "") + (len(str(calls)) if calls else 0)
+
+def _cut(messages: list, room: int, target: int, cuttable: list[int]) -> list:
+    """messages unchanged if they fit in room, else with the cuttable results cut so all fit in target."""
+    if sum(_size(m) for m in messages) <= room:
         return messages
-    cap = _cap(sizes, max(left, 0))
+    fixed = sum(_size(m) for i, m in enumerate(messages) if i not in cuttable)
+    sizes = [_size(messages[i]) for i in cuttable]
+    if not sizes:
+        return messages
+    cap = _cap(sizes, max(target - fixed, 0))
     out = list(messages)
-    for i, size in zip(tools, sizes):
+    for i, size in zip(cuttable, sizes):
         if size > cap:
             out[i] = {**_as_dict(messages[i]), "content": _get(messages[i], "content")[:cap] + "\n[cut to fit]"}
     return out

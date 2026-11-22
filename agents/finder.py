@@ -144,7 +144,7 @@ async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[
         except ValidationError as e:
             error = e
             messages.append({"role": "assistant", "content": msg.content})
-            messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})
+            messages.append({"role": "user", "content": llm.invalid(e)})
     raise FinderFailed(f"model could not produce valid missions: {error}")
 
 def find_missions(inspiration: str, topics: list[str], now=None,

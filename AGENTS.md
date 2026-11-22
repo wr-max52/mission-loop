@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 312 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 318 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
@@ -94,11 +94,14 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 - Every model call goes through `agents/llm.py`, which keeps it bounded. Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
   request stay whole), because Ollama otherwise drops the start of the prompt or, on the MLX runner,
-  lets the model run on forever. Replies are capped at `REPLY_TOKENS` (8192; a brief is about 4k) or
+  lets the model run on forever. The search loop cuts deeper (`llm.compact`, to 70% of the room) and keeps
+  its transcript cut, so the next turns only append and Ollama reuses its prompt cache instead of rereading
+  ~25k tokens every turn; results the model hasn't read yet stay whole. The brief writer gets the transcript
+  without the small model's thinking, failed tool calls cut to one line and repeated results dropped. Replies are capped at `REPLY_TOKENS` (8192; a brief is about 4k) or
   `TURN_TOKENS` (2048) for tool turns, and at `REPLY_TIME_LIMIT` (10 minutes; a brief takes about 2).
   A reply that hits either limit raises `llm.Overrun`: a stuck search turn ends the search, and a stuck
   brief, article or finder reply keeps whatever valid JSON it wrote before (checked as usual), else the
-  attempt fails.
+  attempt fails. A writing retry after a failed article check sees its failed draft and revises it.
 - Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
   - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
     text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)

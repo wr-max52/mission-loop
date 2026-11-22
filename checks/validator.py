@@ -15,6 +15,7 @@ MAX_TEXT_CHARS = 300_000
 BLOCKED_FILE = Path("blocked_domains.txt")  # one domain per line; subdomains are blocked too
 HEADERS = {"User-Agent": "Mozilla/5.0 (MissionLoop source validator)"}
 _cache: dict[str, tuple[str, str]] = {}    # successful fetches only; failures may be transient
+CACHE_PAGES = 50                           # the loop runs for days: keep only the latest pages
 
 def blocked_domains(path: Path | None = None) -> set[str]:
     path = path or BLOCKED_FILE
@@ -40,6 +41,8 @@ def fetch(url: str) -> tuple[str, str] | None:
     if r.status_code != 200:
         return None
     page = (r.text, readable_text(r.text))
+    if len(_cache) >= CACHE_PAGES:
+        del _cache[next(iter(_cache))]     # oldest first
     _cache[url] = page
     return page
 

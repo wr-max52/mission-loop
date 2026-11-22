@@ -223,3 +223,11 @@ async def test_a_stuck_search_turn_ends_the_search_not_the_research(monkeypatch)
     script(monkeypatch, [tool_call("search", query="x"), llm.Overrun("tool turn ran past 2048 tokens"), text(BRIEF_JSON)])
     brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
     assert brief.thesis.startswith("Stub thesis") and FakeToolbox.calls == [("search", {"query": "x"})]
+
+def test_brief_writer_sees_failed_and_repeated_tool_results_shortened():
+    from agents.researcher import _for_brief
+    out = _for_brief([{"role": "assistant", "content": "", "thinking": "long"},
+                      {"role": "tool", "content": "ERROR: fetch failed\n" + "trace " * 500},
+                      {"role": "tool", "content": "page"}, {"role": "tool", "content": "page"}])
+    assert "thinking" not in out[0] and out[1]["content"] == "ERROR: fetch failed"
+    assert out[2]["content"] == "page" and out[3]["content"] == "(same result as an earlier call)"

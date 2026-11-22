@@ -43,3 +43,13 @@ async def test_prompt_has_notes_and_no_contact_emails(monkeypatch):
     await writer.run_writer(m, BRIEF, [])
     assert "paragraph 2 has no citation" in seen[0]["system"]
     assert "poc1@example.com" not in seen[0]["system"]                  # POC emails never reach the article
+
+def test_a_retry_after_a_failed_check_revises_the_draft_it_failed():
+    from contracts import RejectedArticle
+    draft = stub_article(M, BRIEF, [])
+    m = M.model_copy(update={"validator_notes": "'Intro' paragraph 2 has no citation",
+                             "rejected_article": RejectedArticle(article=draft, notes="'Intro' paragraph 2 has no citation")})
+    system = writer.prompt(m, BRIEF, [])
+    assert "Revise it" in system and draft.title in system
+    human = M.model_copy(update={"validator_notes": "Human reviewer feedback: shorter"})
+    assert "Revise it" not in writer.prompt(human, BRIEF, [])

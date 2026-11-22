@@ -175,3 +175,12 @@ def test_poc_name_not_on_page_fails(monkeypatch):
     b.pocs[0].name = "Zed Quux"
     ok, notes = validator.validate(M, b)
     assert not ok and "POC Zed Quux: name not found" in notes
+
+def test_validator_page_cache_stays_small(monkeypatch):
+    class R:
+        status_code, text = 200, "<p>x</p>"
+    monkeypatch.setattr(validator.httpx, "get", lambda *a, **k: R())
+    monkeypatch.setattr(validator, "_cache", {})
+    for n in range(validator.CACHE_PAGES + 5):
+        REAL_FETCH(f"https://example.com/{n}")
+    assert len(validator._cache) == validator.CACHE_PAGES and "https://example.com/0" not in validator._cache
