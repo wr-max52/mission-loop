@@ -53,3 +53,17 @@ def check_article(m: Mission, brief: ResearchBrief, article: Article, records=No
     if "BADARTICLE" in m.topic:
         return False, "stub: forced article failure"
     return True, ""
+
+def chat_models() -> list[str]:
+    return ["stub"]
+
+def chat(question: str, history: list[dict] | None = None, model: str | None = None) -> str:
+    """No model: asks the real loop MCP server for its status, so stub runs still go through MCP."""
+    import asyncio
+    from agents.assistant import CONFIG
+    from agents.toolbox import Toolbox
+
+    async def ask() -> str:
+        async with Toolbox(["loop"], config_path=CONFIG) as tb:
+            return await tb.call("loop_status", {})
+    return f"Stub answer to: {question}\n" + asyncio.run(ask())

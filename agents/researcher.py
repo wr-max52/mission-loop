@@ -1,7 +1,7 @@
 """Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
 import asyncio
 from pydantic import BaseModel, ValidationError
-import activity, related, settings, stopping
+import activity, related, settings, stopping, trail
 from contracts import Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
@@ -175,11 +175,13 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                         break
                     calls += 1
                     result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
+                    trail.record("tool_result", f"{tc.function.name}: {result}")
                     messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
     except TimeoutError:
         if not limit.expired():            # some other timeout inside the call: a real failure
             raise
         print(f"search stopped at its {time_limit / 60:g}-minute limit; continuing with what it found", flush=True)
+        trail.record("note", f"search stopped at its {time_limit / 60:g}-minute limit")
     return messages
 
 async def find_contacts(m: Mission, tb) -> list[POC]:
