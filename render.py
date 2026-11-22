@@ -441,11 +441,17 @@ AGENT_NOTES = [
 # Researchers on the About page drop by for a short visit and always say hello (assets/researchers.js).
 ABOUT_PACE = '<script>window.RESEARCHERS_PACE = {life: [7, 13], gap: [4, 9], first: [1, 4], entry: [3, 7], greet: 1};</script>'
 
+def english_track() -> str:
+    """The strip as the UI draws it, but always in English: the published site isn't translated."""
+    import i18n
+    with i18n.english():
+        return flowchart.track({}, {}, {})
+
 def about_html() -> str:
     """site/about/index.html: the pipeline strip playing a made-up run (assets/about.js drives it through
     assets/flow.js), what each agent does, and a floor where a researcher or two drops by."""
     strip = (f'<section id="flow" class="flow" data-demo data-working="[]" aria-label="The pipeline, playing an example run">'
-             f'<div class="flow-scroll"><div class="flow-track">{flowchart.track({}, {}, {})}</div></div>'
+             f'<div class="flow-scroll"><div class="flow-track">{english_track()}</div></div>'
              f'<div class="now"></div></section>')
     agents = "".join(f"<dt>{escape(name)}<small>{escape(who)}</small></dt><dd>{escape(text)}</dd>"
                      for name, who, text in AGENT_NOTES)

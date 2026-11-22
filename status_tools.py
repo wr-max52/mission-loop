@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, agents, board, doctor, orchestrator, settings, store, trail
+import activity, agents, board, doctor, i18n, orchestrator, settings, store, trail
 from agents import bluesky, f916, github, theorist
 from contracts import Mission, State, epic_title, words
 
@@ -373,7 +373,8 @@ def setup_status() -> str:
     """This machine's setup, as the Settings page's Setup section shows it: a model for each worker and whether it
     answers, the web search key, npx and uvx for the research tools, and something to work on. Each item not done
     says how to fix it. Call this when the human asks how to set up, or why nothing is happening."""
-    found = doctor.checks()
+    with i18n.english():
+        found = doctor.checks()
     lines = [("done: " if c.ok else "TO DO: ") + f"{c.title}: {c.detail}" + (f" Fix: {c.fix}" if c.fix else "")
              for c in found]
     waiting = doctor.waiting() if orchestrator.loop_running() else None

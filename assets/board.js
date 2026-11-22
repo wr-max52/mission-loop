@@ -9,6 +9,7 @@
   const pop = root.querySelector(".board-pop"), crumb = root.querySelector(".board-crumb");
   const zoomLabel = root.querySelector(".board-zoom");
   const NS = "http://www.w3.org/2000/svg";
+  const tr = s => (window.I18N || {})[s] || s;     // the UI's language (ui.JS_STRINGS)
   const BASE = 160, MIN_Z = 0.12, MAX_Z = 2.6, GLIDE_MS = 520, CLICK_PX = 5;
   let data = JSON.parse(document.getElementById("board-data").textContent);
   const view = { x: 0, y: 0, z: 1 };             // screen = world * z + (x, y)
@@ -84,14 +85,14 @@
     if (n.kind === "epic")
       return `<div class="souvenir" style="--h:${hue(n.slug)}"><svg class="horseshoe" viewBox="0 0 40 30" aria-hidden="true">`
         + `<path d="M6 2v12a14 14 0 0 0 28 0V2h-8v12a6 6 0 0 1-12 0V2z"/><path class="tip" d="M6 2h8v5H6zM26 2h8v5h-8z"/></svg>`
-        + `<div class="k">${n.proposed ? "Proposed epic" : "Epic"}</div><div class="t">${esc(n.title)}</div>`
+        + `<div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div><div class="t">${esc(n.title)}</div>`
         + `<div class="n">${esc(n.count_text)}</div></div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
-    const live = n.live ? `<span class="now">working now</span>` : "", grip = `<span class="grip" title="Resize"></span>`;
+    const live = n.live ? `<span class="now">${tr("working now")}</span>` : "", grip = `<span class="grip" title="${tr("Resize")}"></span>`;
     if (n.paper === "done" || n.paper === "publish") {
-      const mark = n.paper === "done" ? "Published" : "Article ready";
-      return `<div class="postcard"><div class="photo" style="--h:${hue(n.epic || n.slug)}"><span class="greet">Greetings from</span>`
-        + `<span class="place">${esc(n.epic || "the desk")}</span></div><div class="back"><div class="t">${esc(n.short)}</div>`
+      const mark = n.paper === "done" ? tr("Published") : tr("Article ready");
+      return `<div class="postcard"><div class="photo" style="--h:${hue(n.epic || n.slug)}"><span class="greet">${tr("Greetings from")}</span>`
+        + `<span class="place">${esc(n.epic || tr("the desk"))}</span></div><div class="back"><div class="t">${esc(n.short)}</div>`
         + `<span class="stampbox"></span><span class="postmark">${mark}</span></div></div>${live}${grip}`;
     }
     if (n.paper === "queued" && !n.faded || n.paper === "research") {
@@ -101,19 +102,19 @@
     }
     const words = String(n.short).split(/\s+/).slice(0, 10);
     const tiles = words.map((w, i) => `<i style="--r:${((i * 53) % 7) - 3}deg">${esc(w)}</i>`).join("");
-    const tag = n.paper === "parked" ? "parked" : n.faded ? "combined" : n.stage;
+    const tag = n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;
     return `<div class="tiles">${tiles}<i class="tag">${esc(tag)}</i></div>${live}${grip}`;
   }
   function noteHtml(n) {
     if (data.style && data.style.cards === "magnets") return magnetHtml(n);
     if (n.kind === "epic")
-      return `<span class="pin"></span><div class="k">${n.proposed ? "Proposed epic" : "Epic"}</div>`
+      return `<span class="pin"></span><div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div>`
         + `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
-    const stamp = n.paper === "done" ? "Published" : n.paper === "parked" ? "Parked" : n.faded ? "Combined" : "";
+    const stamp = n.paper === "done" ? tr("Published") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : "";
     return `<span class="pin"></span><div class="t">${esc(n.short)}</div>`
       + (stamp ? `<span class="stamp">${stamp}</span>` : `<div class="stage">${esc(n.stage)}</div>`)
-      + (n.live ? `<span class="now">working now</span>` : "") + `<span class="grip" title="Resize"></span>`;
+      + (n.live ? `<span class="now">${tr("working now")}</span>` : "") + `<span class="grip" title="${tr("Resize")}"></span>`;
   }
   function render() {
     const seen = new Set();
@@ -233,14 +234,15 @@
     if (!keep) { crumb.hidden = true; return keep; }
     const n = byId(picked);
     crumb.hidden = false;
-    crumb.innerHTML = `<span class="x">Board</span> › <b>${esc(n.title)}</b><span class="x">${esc(n.count_text)}</span>`
-      + `<span class="x">· show up to</span>${degrees()}`
-      + `<span class="x">${keep.size - 1} note${keep.size === 2 ? "" : "s"} shown</span>`
-      + `<button type="button" class="clear" title="Show the whole board" aria-label="Show the whole board">✕</button>`;
+    const shown = (keep.size === 2 ? tr("{n} note shown") : tr("{n} notes shown")).replace("{n}", keep.size - 1);
+    crumb.innerHTML = `<span class="x">${tr("Board")}</span> › <b>${esc(n.title)}</b><span class="x">${esc(n.count_text)}</span>`
+      + `<span class="x">· ${tr("Show up to")}</span>${degrees()}`
+      + `<span class="x">${shown}</span>`
+      + `<button type="button" class="clear" title="${tr("Show the whole board")}" aria-label="${tr("Show the whole board")}">✕</button>`;
     return keep;
   }
   const degrees = () => `<span class="deg">${[1, 2, 3, Infinity].map(d =>
-    `<button type="button" data-degree="${d}" class="${d === degree ? "on" : ""}">${d === Infinity ? "All" : d}</button>`).join("")}</span>`;
+    `<button type="button" data-degree="${d}" class="${d === degree ? "on" : ""}">${d === Infinity ? tr("All") : d}</button>`).join("")}</span>`;
   function pick(id, d = degree) {
     picked = id; degree = d;
     const keep = shade();
@@ -260,10 +262,10 @@
         + `<div class="pop-row"><span class="meta">${esc(n.meta)}</span>`
         + `<a class="open" href="${esc(n.url)}">${esc(n.open)} ↗</a></div>`;
     } else {
-      pop.innerHTML = `<div class="pop-row"><span class="tag">${n.kind === "epic" ? (n.proposed ? "Proposed epic" : "Epic") : "No epic"}</span></div>`
+      pop.innerHTML = `<div class="pop-row"><span class="tag">${n.kind === "epic" ? (n.proposed ? tr("Proposed epic") : tr("Epic")) : tr("No epic")}</span></div>`
         + `<h3>${esc(n.title)}</h3><p class="meta">${esc(n.count_text)}</p>`
-        + `<div class="lbl">Show missions up to</div>${degrees()}`
-        + `<p class="meta">1 is this epic's own missions; each step adds what is one more string away.</p>`;
+        + `<div class="lbl">${tr("Show missions up to")}</div>${degrees()}`
+        + `<p class="meta">${tr("1: this epic's missions. Each step adds one more string away.")}</p>`;
     }
     pop.hidden = false;
     placePop();

@@ -12,10 +12,13 @@
 "use strict";
 const R = window.Researchers, root = document.getElementById("studio");
 if (!root) return;
+const tr = s => (window.I18N || {})[s] || s;     // the UI's language (ui.script_strings)
+const who = k => ((window.RESEARCHER_LINES || {}).names || {})[k] || R.ROSTER[k].name;   // the name in the UI's language
+const fill = (s, o) => s.replace(/\{(\w+)\}/g, (m, k) => (k in o ? o[k] : m));
 if (!R || !R.renderSprite) {                    // the drawing script didn't load, or the browser kept an old copy of it
   const p = document.createElement("p");
   p.className = "error";
-  p.textContent = "The studio's drawing code didn't load. Reload the page; if it stays like this, hold Shift while you reload.";
+  p.textContent = tr("Drawing code didn't load. Reload the page (hold Shift if it persists).");
   root.appendChild(p);
   return;
 }
@@ -37,7 +40,7 @@ function h(tag, attrs = {}, ...kids) {
 async function post(url, body) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `The studio couldn't reach the app (${res.status}).`);
+  if (!res.ok) throw new Error(data.error || fill(tr("Can't reach the app ({status})."), { status: res.status }));
   return data;
 }
 const clone = o => JSON.parse(JSON.stringify(o));
@@ -50,21 +53,21 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 // ---------- the pieces ----------
 
 const NAMES = {
-  style: { short: "Short", tousled: "Tousled", receding: "Receding", bob: "Bob", bigcurly: "Big curls", long: "Long", crop: "Crop", neat: "Side part", spiky: "Spiky" },
-  head: { null: "None", hijab: "Hijab", cap: "Cap", beanie: "Beanie", hardhat: "Hard hat", deerstalker: "Deerstalker", propeller: "Propeller" },
-  outfit: { labcoat: "Lab coat", suit: "Suit", hoodie: "Hoodie", sweater: "Sweater", cardigan: "Cardigan", vest: "Hi-vis", overalls: "Overalls",
-            jacket: "Jacket", abaya: "Abaya", trench: "Trench", tshirt: "T-shirt" },
-  legs: { pants: "Trousers", skirt: "Skirt" },
-  face: { null: "None", round: "Round", browline: "Browline", halfmoon: "Half-moon" },
-  facial: { null: "None", walrus: "Walrus", mustache: "Mustache" },
-  brow: { flat: "Calm", raise: "Curious", stern: "Stern", worry: "Worried", skeptic: "Skeptical" },
-  mouth: { none: "Neutral", smile: "Smile", grin: "Grin", o: "Surprised", flat: "Unimpressed", smirk: "Smirk" },
-  prop: { null: "Nothing", tablet: "Tablet", laptop: "Laptop", phone: "Phone", book: "Book", briefcase: "Briefcase", camera: "Camera",
-          magnifier: "Magnifier", mug: "Mug" },
-  worker: { assistant: "Young crew", pi: "Tenured crew" },
+  style: { short: tr("Short"), tousled: tr("Tousled"), receding: tr("Receding"), bob: tr("Bob"), bigcurly: tr("Big curls"), long: tr("Long"), crop: tr("Crop"), neat: tr("Side part"), spiky: tr("Spiky") },
+  head: { null: tr("None"), hijab: tr("Hijab"), cap: tr("Cap"), beanie: tr("Beanie"), hardhat: tr("Hard hat"), deerstalker: tr("Deerstalker"), propeller: tr("Propeller") },
+  outfit: { labcoat: tr("Lab coat"), suit: tr("Suit"), hoodie: tr("Hoodie"), sweater: tr("Sweater"), cardigan: tr("Cardigan"), vest: tr("Hi-vis"), overalls: tr("Overalls"),
+            jacket: tr("Jacket"), abaya: tr("Abaya"), trench: tr("Trench"), tshirt: tr("T-shirt") },
+  legs: { pants: tr("Trousers"), skirt: tr("Skirt") },
+  face: { null: tr("None"), round: tr("Round"), browline: tr("Browline"), halfmoon: tr("Half-moon") },
+  facial: { null: tr("None"), walrus: tr("Walrus"), mustache: tr("Mustache") },
+  brow: { flat: tr("Calm"), raise: tr("Curious"), stern: tr("Stern"), worry: tr("Worried"), skeptic: tr("Skeptical") },
+  mouth: { none: tr("Neutral"), smile: tr("Smile"), grin: tr("Grin"), o: tr("Surprised"), flat: tr("Unimpressed"), smirk: tr("Smirk") },
+  prop: { null: tr("Nothing"), tablet: tr("Tablet"), laptop: tr("Laptop"), phone: tr("Phone"), book: tr("Book"), briefcase: tr("Briefcase"), camera: tr("Camera"),
+          magnifier: tr("Magnifier"), mug: tr("Mug") },
+  worker: { assistant: tr("Young crew"), pi: tr("Tenured crew") },
 };
-const FLAGS = { ahoge: "Stray strand", bushy: "Bushy brows", lash: "Lashes", lids: "Sleepy lids", freckles: "Freckles", grin: "Fang grin",
-                rolled: "Rolled sleeves", pencil: "Pencil on ear" };
+const FLAGS = { ahoge: tr("Stray strand"), bushy: tr("Bushy brows"), lash: tr("Lashes"), lids: tr("Sleepy lids"), freckles: tr("Freckles"), grin: tr("Fang grin"),
+                rolled: tr("Rolled sleeves"), pencil: tr("Pencil on ear") };
 const HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", "#e1c27f", "#c9572d", "#a3a3a3", "#e4e4e4",
               "#f2f0f7", "#ff8fc7", "#b197fc", "#74c0fc", "#63e6be", "#e03131"];
 const CLOTH = ["#f4f4f0", "#e8e4da", "#2b2b30", "#3a3a40", "#7d8691", "#22346b", "#3d6a9e", "#74c0fc", "#218c74", "#5f7f6b",
@@ -72,33 +75,40 @@ const CLOTH = ["#f4f4f0", "#e8e4da", "#2b2b30", "#3a3a40", "#7d8691", "#22346b",
 // Bits that make good favourites: the vibe tab weights these up.
 const VIBES = ["read", "search", "notes", "dig", "typing", "coffee", "telescope", "eureka", "beaker", "rocket", "microscope", "chalkboard",
                "corkboard", "chart", "stamp", "duck", "globe", "juggle", "pizza", "dance", "cat", "bird", "flower", "sneeze", "plane", "sleep"];
+const VIBE_NAMES = { read: tr("read"), search: tr("search"), notes: tr("notes"), dig: tr("dig"), typing: tr("typing"),
+  coffee: tr("coffee"), telescope: tr("telescope"), eureka: tr("eureka"), beaker: tr("beaker"), rocket: tr("rocket"),
+  microscope: tr("microscope"), chalkboard: tr("chalkboard"), corkboard: tr("corkboard"), chart: tr("chart"), stamp: tr("stamp"),
+  duck: tr("duck"), globe: tr("globe"), juggle: tr("juggle"), pizza: tr("pizza"), dance: tr("dance"), cat: tr("cat"), bird: tr("bird"),
+  flower: tr("flower"), sneeze: tr("sneeze"), plane: tr("plane"), sleep: tr("sleep") };
+const ACT_NAMES = { rest: tr("idle"), walk: tr("walk"), wave: tr("wave"), quirk: tr("quirk"), read: tr("read"), coffee: tr("coffee"),
+  eureka: tr("eureka"), typing: tr("typing") };
 const SHOW = [["rest", 2.4], ["walk", 2.4], ["wave", 1.5], ["quirk", 0], ["read", 3], ["coffee", 3.2], ["eureka", 1.8], ["typing", 3]];
 
 // Which colors a tab offers depends on what the avatar wears.
 const colorsFor = (tab, look) => ({
   body: [],
-  hair: look.head === "hijab" ? [] : [["hair", "Hair", HAIR]],
-  face: look.face ? [["frame", "Frames", CLOTH]] : [],
-  clothes: [["top", "Top", CLOTH], ["shirt", "Shirt", CLOTH], ["pants", "Trousers", CLOTH], ["shoes", "Shoes", CLOTH]]
-    .concat(look.legs === "skirt" ? [["skirt", "Skirt", CLOTH]] : [])
-    .concat(look.outfit === "suit" || look.tie ? [["tie", "Tie", CLOTH]] : [])
-    .concat(look.outfit === "labcoat" ? [["bow", "Bow tie", CLOTH]] : []),
-  hat: ({ cap: [["cap", "Cap", CLOTH]], beanie: [["beanie", "Beanie", CLOTH], ["pom", "Pom-pom", CLOTH]], hijab: [["hijab", "Hijab", CLOTH]] })[look.head] || [],
-  prop: look.pack ? [["pack", "Backpack", CLOTH]] : [],
+  hair: look.head === "hijab" ? [] : [["hair", tr("Hair"), HAIR]],
+  face: look.face ? [["frame", tr("Frames"), CLOTH]] : [],
+  clothes: [["top", tr("Top"), CLOTH], ["shirt", tr("Shirt"), CLOTH], ["pants", tr("Trousers"), CLOTH], ["shoes", tr("Shoes"), CLOTH]]
+    .concat(look.legs === "skirt" ? [["skirt", tr("Skirt"), CLOTH]] : [])
+    .concat(look.outfit === "suit" || look.tie ? [["tie", tr("Tie"), CLOTH]] : [])
+    .concat(look.outfit === "labcoat" ? [["bow", tr("Bow tie"), CLOTH]] : []),
+  hat: ({ cap: [["cap", tr("Cap"), CLOTH]], beanie: [["beanie", tr("Beanie"), CLOTH], ["pom", tr("Pom-pom"), CLOTH]], hijab: [["hijab", tr("Hijab"), CLOTH]] })[look.head] || [],
+  prop: look.pack ? [["pack", tr("Backpack"), CLOTH]] : [],
 }[tab] || []);
 
 const TABS = [
-  { id: "body", label: "Body", groups: [{ title: "Start from", kind: "base" }, { title: "Skin", kind: "skin" }, { title: "Crew", kind: "enum", field: "worker", chips: true }] },
-  { id: "hair", label: "Hair", groups: [{ title: "Style", kind: "enum", field: "style", crop: "head" }, { title: "Extras", kind: "flags", fields: ["ahoge"] }] },
-  { id: "face", label: "Face", groups: [{ title: "Glasses", kind: "enum", field: "face", crop: "head" }, { title: "Mustache", kind: "enum", field: "facial", crop: "head" },
-      { title: "Resting brows", kind: "enum", field: "brow", crop: "head" }, { title: "Resting mouth", kind: "enum", field: "mouth", crop: "head" },
-      { title: "Details", kind: "flags", fields: ["lash", "lids", "freckles", "grin", "bushy"] }] },
-  { id: "clothes", label: "Clothes", groups: [{ title: "Outfit", kind: "enum", field: "outfit", crop: "bust" }, { title: "Legs", kind: "enum", field: "legs", crop: "full" },
-      { title: "Details", kind: "flags", fields: ["rolled", "pencil"] }] },
-  { id: "hat", label: "Hat", groups: [{ title: "Headwear", kind: "enum", field: "head", crop: "head" }] },
-  { id: "prop", label: "Prop", groups: [{ title: "Signature prop", kind: "enum", field: "prop", crop: "full" }] },
-  { id: "vibe", label: "Vibe", groups: [{ title: "Favourite things to do", kind: "vibes" }, { title: "Their quirk", kind: "quirk" }] },
-  { id: "extras", label: "Drawn", groups: [{ title: "Drawn by a model", kind: "extras" }] },
+  { id: "body", label: tr("Body"), groups: [{ title: tr("Start from"), kind: "base" }, { title: tr("Skin"), kind: "skin" }, { title: tr("Crew"), kind: "enum", field: "worker", chips: true }] },
+  { id: "hair", label: tr("Hair"), groups: [{ title: tr("Style"), kind: "enum", field: "style", crop: "head" }, { title: tr("Extras"), kind: "flags", fields: ["ahoge"] }] },
+  { id: "face", label: tr("Face"), groups: [{ title: tr("Glasses"), kind: "enum", field: "face", crop: "head" }, { title: tr("Mustache"), kind: "enum", field: "facial", crop: "head" },
+      { title: tr("Resting brows"), kind: "enum", field: "brow", crop: "head" }, { title: tr("Resting mouth"), kind: "enum", field: "mouth", crop: "head" },
+      { title: tr("Details"), kind: "flags", fields: ["lash", "lids", "freckles", "grin", "bushy"] }] },
+  { id: "clothes", label: tr("Clothes"), groups: [{ title: tr("Outfit"), kind: "enum", field: "outfit", crop: "bust" }, { title: tr("Legs"), kind: "enum", field: "legs", crop: "full" },
+      { title: tr("Details"), kind: "flags", fields: ["rolled", "pencil"] }] },
+  { id: "hat", label: tr("Hat"), groups: [{ title: tr("Headwear"), kind: "enum", field: "head", crop: "head" }] },
+  { id: "prop", label: tr("Prop"), groups: [{ title: tr("Signature prop"), kind: "enum", field: "prop", crop: "full" }] },
+  { id: "vibe", label: tr("Vibe"), groups: [{ title: tr("Favourite things to do"), kind: "vibes" }, { title: tr("Their quirk"), kind: "quirk" }] },
+  { id: "extras", label: tr("Drawn"), groups: [{ title: tr("Drawn by a model"), kind: "extras" }] },
 ];
 
 // ---------- state ----------
@@ -166,38 +176,39 @@ function tile(spec, crop, scale) {               // a canvas showing the avatar 
 
 // ---------- the layout ----------
 
-const stageCanvas = h("canvas", { class: "px stage-canvas", role: "img", "aria-label": "Your avatar, moving" });
+const stageCanvas = h("canvas", { class: "px stage-canvas", role: "img", "aria-label": tr("Your avatar") });
 const nowLabel = h("span", { class: "now-doing" });
 const status = h("p", { class: "av-status", "aria-live": "polite" });
-const nameIn = h("input", { type: "text", maxlength: 24, "aria-label": "Name", oninput: e => { const n = clone(state.spec); n.name = e.target.value; state.spec = n; state.dirty = true; keyHint(); check(); } });
-const keyIn = h("input", { type: "text", maxlength: 32, spellcheck: "false", "aria-label": "Saved as", oninput: () => keyHint() });
+const nameIn = h("input", { type: "text", maxlength: 24, "aria-label": tr("Name"), oninput: e => { const n = clone(state.spec); n.name = e.target.value; state.spec = n; state.dirty = true; keyHint(); check(); } });
+const keyIn = h("input", { type: "text", maxlength: 32, spellcheck: "false", "aria-label": tr("Saved as"), oninput: () => keyHint() });
 const keyNote = h("span", { class: "hint" });
-const undoBtn = h("button", { type: "button", onclick: () => undo(), title: "Undo" }, "Undo");
-const redoBtn = h("button", { type: "button", onclick: () => redo(), title: "Redo" }, "Redo");
-const saveBtn = h("button", { type: "button", class: "primary", onclick: () => save() }, "Save avatar");
-const tabBar = h("div", { class: "av-tabs", role: "tablist", "aria-label": "Pieces" });
+const undoBtn = h("button", { type: "button", onclick: () => undo(), title: tr("Undo") }, tr("Undo"));
+const redoBtn = h("button", { type: "button", onclick: () => redo(), title: tr("Redo") }, tr("Redo"));
+const saveBtn = h("button", { type: "button", class: "primary", onclick: () => save() }, tr("Save avatar"));
+const tabBar = h("div", { class: "av-tabs", role: "tablist", "aria-label": tr("Pieces") });
 const panel = h("div", { class: "av-panel", role: "tabpanel" });
 const actions = h("div", { class: "av-acts" });
 const castHost = h("div", { class: "av-cast" });
 const log = h("div", { class: "av-log", "aria-live": "polite" });
-const modelSel = h("select", { "aria-label": "Model", onchange: e => { state.model = e.target.value; flag(); } });
-const askIn = h("textarea", { rows: 2, maxlength: 1000, placeholder: "Give them cat ears and a purple scarf", "aria-label": "What to change" });
+const modelSel = h("select", { "aria-label": tr("Model"), onchange: e => { state.model = e.target.value; flag(); } });
+const askIn = h("textarea", { rows: 2, maxlength: 1000, placeholder: tr("Give them cat ears and a purple scarf"), "aria-label": tr("What to change") });
 const fileIn = h("input", { type: "file", accept: "image/*", hidden: true, onchange: e => attach(e.target.files[0]) });
-const attachBtn = h("button", { type: "button", class: "attach", title: "Attach a picture to go by", onclick: () => fileIn.click() }, "📎 Picture");
+const attachBtn = h("button", { type: "button", class: "attach", title: tr("Attach a picture"), onclick: () => fileIn.click() }, "📎 " + tr("Picture"));
 const thumb = h("span", { class: "av-thumb", hidden: true });
 const flagEl = h("p", { class: "av-flag", hidden: true, role: "note" });
-const askBtn = h("button", { class: "primary" }, "Ask");
+const askBtn = h("button", { class: "primary" }, tr("Ask"));
 
 function layout() {
   for (const [i, [name]] of SHOW.entries())
-    actions.append(h("button", { type: "button", "data-i": i, onclick: () => { state.show = i; state.t = 0; state.auto = false; markAct(); } }, name === "rest" ? "idle" : name));
-  actions.append(h("button", { type: "button", class: "auto", onclick: () => { state.auto = !state.auto; markAct(); }, title: "Play them all in turn" }, "↻ all"));
+    actions.append(h("button", { type: "button", "data-i": i, onclick: () => { state.show = i; state.t = 0; state.auto = false; markAct(); } }, ACT_NAMES[name] || name));
+  actions.append(h("button", { type: "button", class: "auto", onclick: () => { state.auto = !state.auto; markAct(); }, title: tr("Play them all in turn") }, "↻ " + tr("all")));
   for (const t of TABS)
     tabBar.append(h("button", { type: "button", role: "tab", id: `tab-${t.id}`, "aria-controls": "av-panel", onclick: () => { state.tab = t.id; render(); } }, t.label));
   panel.id = "av-panel";
-  const suggestions = ["Give them cat ears", "A cozy wizard vibe", "Make the outfit forest green", "Grumpy but lovable", "Match my picture"];
+  const MATCH = tr("Match my picture");
+  const suggestions = [tr("Give them cat ears"), tr("A cozy wizard vibe"), tr("Make the outfit forest green"), tr("Grumpy but lovable"), MATCH];
   const form = h("form", { class: "av-ask", onsubmit: e => { e.preventDefault(); ask(); } },
-    h("div", { class: "row" }, h("label", { class: "model" }, "Model ", modelSel), attachBtn, fileIn, thumb),
+    h("div", { class: "row" }, h("label", { class: "model" }, tr("Model") + " ", modelSel), attachBtn, fileIn, thumb),
     flagEl,
     h("div", { class: "row grow" }, askIn, askBtn));
   askIn.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } });
@@ -207,20 +218,20 @@ function layout() {
         h("div", { class: "av-room" }, stageCanvas, nowLabel),
         actions,
         h("div", { class: "av-fields" },
-          h("label", {}, "Name", nameIn),
-          h("label", {}, "Saved as", keyIn, keyNote)),
+          h("label", {}, tr("Name"), nameIn),
+          h("label", {}, tr("Saved as"), keyIn, keyNote)),
         h("div", { class: "av-buttons" }, saveBtn, undoBtn, redoBtn,
-          h("button", { type: "button", onclick: () => randomize(), title: "Dress them at random" }, "🎲 Surprise me"),
-          h("button", { type: "button", onclick: () => { state.face *= -1; }, title: "Turn around" }, "⇄ Turn"),
-          h("button", { type: "button", onclick: () => { state.seed = 1 + Math.floor(Math.random() * 9999); render(); }, title: "Height, build and colours vary a little per visit" }, "Another visit")),
+          h("button", { type: "button", onclick: () => randomize(), title: tr("Random outfit") }, "🎲 " + tr("Surprise me")),
+          h("button", { type: "button", onclick: () => { state.face *= -1; }, title: tr("Turn around") }, "⇄ " + tr("Turn")),
+          h("button", { type: "button", onclick: () => { state.seed = 1 + Math.floor(Math.random() * 9999); render(); }, title: tr("Height, build and colours vary per visit") }, tr("Another visit"))),
         status),
       h("div", { class: "av-right" }, tabBar, panel)),
-    h("h2", { class: "group" }, h("span", { text: "Ask a model" })),
-    h("p", { class: "hint" }, "Say what you want, or attach a picture. The model picks pieces that exist and draws small extras only when nothing fits; every change is checked against the rules (SPRITES.md) before it lands, and Undo takes it back. Small models follow words well; bigger ones read pictures better."),
+    h("h2", { class: "group" }, h("span", { text: tr("Ask a model") })),
+    h("p", { class: "hint" }, tr("Describe a change or attach a picture. Every change is checked against SPRITES.md; Undo takes it back.")),
     h("div", { class: "av-chat" }, log, h("div", { class: "suggest" },
-      suggestions.map(s => h("button", { type: "button", onclick: () => { if (s.startsWith("Match")) fileIn.click(); else { askIn.value = s; ask(); } } }, s))), form),
-    h("h2", { class: "group" }, h("span", { text: "Who visits" })),
-    h("p", { class: "hint" }, "Switch anyone off and they stay home. A crew always keeps someone: if all of one crew is off, they all still come."),
+      suggestions.map(s => h("button", { type: "button", onclick: () => { if (s === MATCH) fileIn.click(); else { askIn.value = s; ask(); } } }, s))), form),
+    h("h2", { class: "group" }, h("span", { text: tr("Who visits") })),
+    h("p", { class: "hint" }, tr("Switch anyone off to keep them home. A crew with everyone off still comes.")),
     castHost);
 }
 
@@ -243,15 +254,15 @@ function group(g, lk) {
   if (g.kind === "base") {
     for (const k of R.BUILT_IN) {
       const on = state.spec.base === k;
-      grid.append(h("button", { type: "button", class: "tile" + (on ? " on" : ""), "aria-pressed": String(on), title: `Start from ${R.ROSTER[k].name}`,
+      grid.append(h("button", { type: "button", class: "tile" + (on ? " on" : ""), "aria-pressed": String(on), title: fill(tr("Start from {name}"), { name: who(k) }),
         onclick: () => { if (!on) change(rebase(k), { show: "wave" }); } }, tile({ base: k, name: "x" }, "full", 4), h("span", { text: R.ROSTER[k].name.replace(/^(Dr\.|Prof\.|Det\.|Intern) /, "") })));
     }
   } else if (g.kind === "skin") {
     const cur = (state.spec.skin || R.ROSTER[state.spec.base].skin || [0])[0];
-    R.SKIN.forEach((c, i) => grid.append(h("button", { type: "button", class: "swatch" + (cur === i && state.spec.skin ? " on" : ""), style: `--c:${c}`, title: `Skin tone ${i + 1}`,
-      "aria-label": `Skin tone ${i + 1}`, onclick: () => change(set("skin", [i])) })));
+    R.SKIN.forEach((c, i) => grid.append(h("button", { type: "button", class: "swatch" + (cur === i && state.spec.skin ? " on" : ""), style: `--c:${c}`, title: fill(tr("Skin tone {n}"), { n: i + 1 }),
+      "aria-label": fill(tr("Skin tone {n}"), { n: i + 1 }), onclick: () => change(set("skin", [i])) })));
     grid.className = "swatches";
-    grid.append(h("button", { type: "button", class: "chip" + (state.spec.skin ? "" : " on"), onclick: () => { const n = clone(state.spec); delete n.skin; change(n); } }, "Like the original"));
+    grid.append(h("button", { type: "button", class: "chip" + (state.spec.skin ? "" : " on"), onclick: () => { const n = clone(state.spec); delete n.skin; change(n); } }, tr("Like the original")));
   } else if (g.kind === "enum") {
     const cur = valueOf(state.spec, g.field);
     for (const v of R.PARTS[g.field]) {
@@ -270,38 +281,38 @@ function group(g, lk) {
     }
   } else if (g.kind === "vibes") {
     const fav = state.spec.fav || {};
-    body.append(h("p", { class: "hint", text: "Pick a few: they'll do these more often." }));
+    body.append(h("p", { class: "hint", text: tr("Pick a few. They do these more often.") }));
     for (const v of VIBES) {
       const on = (fav[v] || 0) >= 2;
       grid.append(h("button", { type: "button", class: "chip" + (on ? " on" : ""), "aria-pressed": String(on), onclick: () => {
         const next = clone(state.spec), f = Object.assign({}, next.fav || R.ROSTER[next.base].fav || {});
         if (on) delete f[v]; else f[v] = 2.5;
         next.fav = f; change(next, { show: R.ACTIONS[v] ? null : null });
-      } }, v));
+      } }, VIBE_NAMES[v] || v));
     }
   } else if (g.kind === "quirk") {
     const own = !!state.spec.quirk;
-    body.append(h("p", { class: "hint", text: own ? "Their own quirk, drawn by a model." : `Like ${R.ROSTER[state.spec.base].name}'s: every researcher has a habit between bits. Ask a model for a new one.` }),
+    body.append(h("p", { class: "hint", text: own ? tr("Their own quirk, drawn by a model.") : fill(tr("Same as {name}'s. Ask a model for a new one."), { name: who(state.spec.base) }) }),
       h("div", { class: "chips" },
-        h("button", { type: "button", class: "chip", onclick: () => { state.show = SHOW.findIndex(s => s[0] === "quirk"); state.t = 0; state.auto = false; markAct(); } }, "▶ Play it"),
-        own ? h("button", { type: "button", class: "chip", onclick: () => { const n = clone(state.spec); delete n.quirk; change(n); } }, "Use the original") : null));
+        h("button", { type: "button", class: "chip", onclick: () => { state.show = SHOW.findIndex(s => s[0] === "quirk"); state.t = 0; state.auto = false; markAct(); } }, "▶ " + tr("Play it")),
+        own ? h("button", { type: "button", class: "chip", onclick: () => { const n = clone(state.spec); delete n.quirk; change(n); } }, tr("Use the original")) : null));
     grid.remove();
   } else if (g.kind === "extras") {
     grid.remove();
     const maps = state.spec.maps || [];
     if (!maps.length && !state.spec.propMap && !state.spec.quirk)
-      body.append(h("p", { class: "hint", text: "Nothing yet. Ask a model for something no piece has (cat ears, a scarf, a tail) and it draws it here." }));
-    maps.forEach((m, i) => body.append(h("div", { class: "extra" }, mini(m), h("span", { text: `${m.layer === "back" ? "Behind" : m.layer === "body" ? "On the clothes" : m.layer === "behindHead" ? "Behind the head" : "On the head"}${m.frames ? ` · moves (${m.frames.length} frames)` : ""}` }),
-      h("button", { type: "button", onclick: () => { const n = clone(state.spec); n.maps.splice(i, 1); if (!n.maps.length) delete n.maps; change(n); } }, "Remove"))));
-    if (state.spec.propMap) body.append(h("div", { class: "extra" }, mini(state.spec.propMap), h("span", { text: "Their own prop" }),
-      h("button", { type: "button", onclick: () => { const n = clone(state.spec); delete n.propMap; change(n); } }, "Remove")));
-    const json = h("textarea", { class: "av-json", rows: 10, spellcheck: "false", "aria-label": "The spec as JSON" });
+      body.append(h("p", { class: "hint", text: tr("Nothing yet. Ask a model for something no piece has, like cat ears or a tail.") }));
+    maps.forEach((m, i) => body.append(h("div", { class: "extra" }, mini(m), h("span", { text: (m.layer === "back" ? tr("Behind") : m.layer === "body" ? tr("On the clothes") : m.layer === "behindHead" ? tr("Behind the head") : tr("On the head")) + (m.frames ? " · " + fill(tr("{n} frames"), { n: m.frames.length }) : "") }),
+      h("button", { type: "button", onclick: () => { const n = clone(state.spec); n.maps.splice(i, 1); if (!n.maps.length) delete n.maps; change(n); } }, tr("Remove")))));
+    if (state.spec.propMap) body.append(h("div", { class: "extra" }, mini(state.spec.propMap), h("span", { text: tr("Their own prop") }),
+      h("button", { type: "button", onclick: () => { const n = clone(state.spec); delete n.propMap; change(n); } }, tr("Remove"))));
+    const json = h("textarea", { class: "av-json", rows: 10, spellcheck: "false", "aria-label": tr("Spec (JSON)") });
     json.value = JSON.stringify(state.spec, null, 2);
-    body.append(h("details", {}, h("summary", { text: "The spec (JSON)" }), json,
+    body.append(h("details", {}, h("summary", { text: tr("Spec (JSON)") }), json,
       h("button", { type: "button", onclick: () => {
         try { const n = JSON.parse(json.value); const v = R.validateSprite(n); if (!v.ok) throw new Error(v.errors.join("; ")); change(n); }
         catch (e) { note(e.message, true); }
-      } }, "Apply")));
+      } }, tr("Apply"))));
   }
   return body;
 }
@@ -324,10 +335,10 @@ function swatchRows(tab, lk) {
     const row = h("div", { class: "swatches" });
     for (const c of palette) row.append(h("button", { type: "button", class: "swatch" + (cur === c ? " on" : ""), style: `--c:${c}`, title: c, "aria-label": `${title} ${c}`,
       onclick: () => change(set(field, c)) }));
-    const own = h("input", { type: "color", value: /^#[0-9a-f]{6}$/i.test(cur || "") ? cur : "#888888", "aria-label": `${title}: any colour`, title: "Any colour",
+    const own = h("input", { type: "color", value: /^#[0-9a-f]{6}$/i.test(cur || "") ? cur : "#888888", "aria-label": `${title}: ${tr("any colour")}`, title: tr("Any colour"),
       onchange: e => change(set(field, e.target.value.toLowerCase())) });
     row.append(h("label", { class: "swatch own" }, own));
-    return h("div", { class: "av-group" }, h("h3", { text: `${title} colour` }), row);
+    return h("div", { class: "av-group" }, h("h3", { text: fill(tr("{part} colour"), { part: title }) }), row);
   });
 }
 
@@ -357,13 +368,13 @@ function redo() { if (!state.future.length) return; state.history.push(clone(sta
 function keyHint() {
   const k = keyIn.value.trim();
   const taken = k !== state.original && (R.BUILT_IN.includes(k) || k in saved);
-  keyNote.textContent = !KEY.test(k) ? "lowercase letters, digits and dashes" : taken ? "that name is taken" : state.original && k !== state.original ? `renames ${state.original}` : "";
+  keyNote.textContent = !KEY.test(k) ? tr("lowercase letters, digits and dashes") : taken ? tr("name taken") : state.original && k !== state.original ? fill(tr("renames {key}"), { key: state.original }) : "";
   keyNote.classList.toggle("bad", !KEY.test(k) || taken);
 }
 function check() {
   const v = R.validateSprite(state.spec);
   status.className = "av-status" + (v.ok ? " ok" : " bad");
-  status.textContent = v.ok ? (state.dirty ? "Follows the rules. Not saved yet." : "Follows the rules.") : v.errors.slice(0, 3).join(" · ");
+  status.textContent = v.ok ? (state.dirty ? tr("Valid. Not saved.") : tr("Valid.")) : v.errors.slice(0, 3).join(" · ");
   saveBtn.disabled = !v.ok;
   return v;
 }
@@ -378,7 +389,7 @@ async function save() {
     R.registerSprite(key, state.spec); R.setSpriteEnabled(key, true);
     state.key = state.original = key; state.dirty = false;
     history.replaceState(null, "", `/avatars?edit=${encodeURIComponent(key)}`);
-    note(`Saved as ${key}. ${state.spec.name} will drop by with the ${look().worker === "pi" ? "tenured" : "young"} crew.`);
+    note(fill(look().worker === "pi" ? tr("Saved as {key}. {name} joins the tenured crew.") : tr("Saved as {key}. {name} joins the young crew."), { key, name: state.spec.name }));
     state.show = SHOW.findIndex(s => s[0] === "wave"); state.t = 0;
     cast();
   } catch (e) { note(e.message, true); }
@@ -397,7 +408,7 @@ function frame(now) {
   state.t += dt;
   if (state.t > dur + 0.6) { state.t = 0; if (state.auto) state.show = (state.show + 1) % SHOW.length; markAct(); }
   R.renderSprite(stageCanvas, state.spec, { action, t: Math.min(state.t, dur), scale: 4, seed: state.seed, face: state.face, width: 76, height: 66, effects: true });
-  nowLabel.textContent = action === "rest" ? "" : action;
+  nowLabel.textContent = action === "rest" ? "" : ACT_NAMES[action] || action;
   if (pending) R.renderSprite(pending, state.spec, { action: "typing", t: 0.3 + (now / 1000) % 2.5, scale: 2, seed: state.seed, width: 40, height: 40 });
   if (!reduce) requestAnimationFrame(frame);
 }
@@ -414,10 +425,10 @@ function flag() {
   const m = state.models.find(x => x.name === state.model);
   const vision = m ? m.vision : null;
   attachBtn.classList.toggle("sees", vision === true);
-  attachBtn.title = vision === true ? "This model can see pictures" : "Attach a picture to go by";
+  attachBtn.title = vision === true ? tr("This model sees pictures") : tr("Attach a picture");
   flagEl.hidden = !state.image || vision === true;
-  flagEl.textContent = vision === false ? "⚠ This model can't see pictures. It will go by your words; pick a model marked “sees pictures” to use it."
-    : "⚠ Not sure this model can see pictures. It may go by your words alone.";
+  flagEl.textContent = "⚠ " + (vision === false ? tr("This model can't see pictures. Pick one marked “sees pictures”.")
+    : tr("This model may not see pictures."));
 }
 function attach(file) {
   if (!file) return;
@@ -427,10 +438,10 @@ function attach(file) {
     c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
     c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
     state.image = c.toDataURL("image/png");
-    thumb.replaceChildren(h("img", { src: state.image, alt: "Your picture" }), h("button", { type: "button", "aria-label": "Remove the picture", onclick: () => { state.image = null; thumb.hidden = true; flag(); } }, "×"));
+    thumb.replaceChildren(h("img", { src: state.image, alt: tr("Your picture") }), h("button", { type: "button", "aria-label": tr("Remove picture"), onclick: () => { state.image = null; thumb.hidden = true; flag(); } }, "×"));
     thumb.hidden = false; URL.revokeObjectURL(url); flag();
   };
-  img.onerror = () => note("That file isn't a picture the browser can read.", true);
+  img.onerror = () => note(tr("Not a picture this browser can read."), true);
   img.src = url; fileIn.value = "";
 }
 
@@ -449,10 +460,10 @@ async function ask() {
   const message = askIn.value.trim();
   if (state.busy || (!message && !state.image)) return;
   state.busy = true; askBtn.disabled = true;
-  bubble("me", message || "(a picture)", state.image ? h("img", { src: state.image, alt: "" }) : null);
+  bubble("me", message || tr("(a picture)"), state.image ? h("img", { src: state.image, alt: "" }) : null);
   askIn.value = "";
   pending = h("canvas", { class: "px", "aria-hidden": "true" }); pending.style.width = "40px";
-  const wait = bubble("them pending", "Sketching…", pending);
+  const wait = bubble("them pending", tr("Sketching…"), pending);
   const before = clone(state.spec), image = state.image;
   const catalog = Object.assign({}, R.PARTS, { flags: R.FLAG_KEYS, colors: R.COLOR_KEYS });   // what the model may pick from
   let body = { message, spec: before, look: lookNow(), model: state.model, image, catalog }, reply = null;
@@ -463,24 +474,24 @@ async function ask() {
       const v = R.validateSprite(reply.spec);
       if (v.ok) break;
       if (round === 2) break;
-      wait.querySelector("p").textContent = `Fixing ${v.errors.length} thing${v.errors.length === 1 ? "" : "s"} the rules caught…`;
+      wait.querySelector("p").textContent = fill(v.errors.length === 1 ? tr("Fixing {n} rule break…") : tr("Fixing {n} rule breaks…"), { n: v.errors.length });
       body = { message, spec: reply.spec, look: lookNow(), model: state.model, image, catalog, errors: v.errors };
     }
     wait.remove(); pending = null;
     if (reply.refused) { bubble("them refused", reply.reply); return; }
-    let next = reply.spec, text = reply.reply || "Done.", extra = "";
+    let next = reply.spec, text = reply.reply || tr("Done."), extra = "";
     if (!R.validateSprite(next).ok) {
       const s = salvage(before, next), drawn = s.dropped.some(k => k === "maps" || k === "propMap");
       next = s.spec;
-      if (!s.kept.length) text = drawn ? "That one needed drawing, and the drawing kept breaking the rules, so I left it out. Bigger models draw better; pieces always work."
-        : "I couldn't make that follow the rules, so nothing changed.";
-      else extra = ` (Left out ${s.dropped.join(", ")}: it broke the rules.)`;
+      if (!s.kept.length) text = drawn ? tr("The drawing kept breaking the rules, so it was left out. Bigger models draw better.")
+        : tr("Couldn't make that follow the rules. Nothing changed.");
+      else extra = " " + fill(tr("(Left out {fields}: broke the rules.)"), { fields: s.dropped.join(", ") });
     }
     next.base = next.base || before.base;
     if (same(next, before)) { bubble("them", text); return; }
     change(next, { show: "wave" });
     const msg = bubble("them", text + extra);
-    msg.append(h("button", { type: "button", class: "link", onclick: e => { if (same(state.spec, next)) { undo(); e.target.textContent = "Undone"; e.target.disabled = true; } } }, "Undo"));
+    msg.append(h("button", { type: "button", class: "link", onclick: e => { if (same(state.spec, next)) { undo(); e.target.textContent = tr("Undone"); e.target.disabled = true; } } }, tr("Undo")));
     state.image = null; thumb.hidden = true; flag();
   } catch (e) {
     wait.remove(); pending = null;
@@ -493,8 +504,8 @@ async function models() {
     const data = await (await fetch("/avatars/models")).json();
     state.models = data.models || [];
   } catch (e) { state.models = []; }
-  if (!state.models.length) { modelSel.append(h("option", { value: "" }, "No model found: start Ollama or add a provider")); askBtn.disabled = true; return; }
-  for (const m of state.models) modelSel.append(h("option", { value: m.name }, m.name + (m.vision ? " · sees pictures" : "")));
+  if (!state.models.length) { modelSel.append(h("option", { value: "" }, tr("No model. Start Ollama or add a provider."))); askBtn.disabled = true; return; }
+  for (const m of state.models) modelSel.append(h("option", { value: m.name }, m.name + (m.vision ? " · " + tr("sees pictures") : "")));
   state.model = state.models[0].name; flag();
 }
 
@@ -503,31 +514,31 @@ async function models() {
 function cast() {
   const off = new Set((window.RESEARCHER_SPRITES && window.RESEARCHER_SPRITES.off) || []);
   castHost.replaceChildren();
-  for (const [worker, title] of [["assistant", "Young crew · the Research Assistant's"], ["pi", "Tenured crew · the Principal Investigator's"]]) {
+  for (const [worker, title] of [["assistant", tr("Young crew · Research Assistant")], ["pi", tr("Tenured crew · Principal Investigator")]]) {
     const row = h("div", { class: "crew-row" });
     for (const k of R.CAST.filter(k => R.ROSTER[k].worker === worker && !k.startsWith("__"))) {
       const custom = !R.BUILT_IN.includes(k), on = !off.has(k);
-      const sw = h("input", { type: "checkbox", role: "switch", checked: on, "aria-label": `${R.ROSTER[k].name} visits`, onchange: async e => {
+      const sw = h("input", { type: "checkbox", role: "switch", checked: on, "aria-label": fill(tr("{name} visits"), { name: who(k) }), onchange: async e => {
         try { await post(`/avatars/${encodeURIComponent(k)}/${e.target.checked ? "on" : "off"}`, {}); }
         catch (err) { e.target.checked = !e.target.checked; return note(err.message, true); }
         if (e.target.checked) off.delete(k); else off.add(k);
         (window.RESEARCHER_SPRITES = window.RESEARCHER_SPRITES || {}).off = [...off];
         R.setSpriteEnabled(k, e.target.checked); card.classList.toggle("off", !e.target.checked);
       } });
-      const go = (url) => { if (!state.dirty || confirm("Leave without saving this avatar?")) { state.dirty = false; location.href = url; } };
+      const go = (url) => { if (!state.dirty || confirm(tr("Leave without saving?"))) { state.dirty = false; location.href = url; } };
       const card = h("div", { class: "visitor" + (on ? "" : " off") + (k === state.original ? " editing" : "") },
         tile(k === state.original ? state.spec : custom ? saved[k] : { base: k, name: "x" }, "full", 3),
-        h("strong", { text: R.ROSTER[k].name }), h("small", { text: custom ? k : "built-in" }),
-        h("label", { class: "switch" }, sw, on ? "Visits" : "Stays home"),
+        h("strong", { text: who(k) }), h("small", { text: custom ? k : tr("built-in") }),
+        h("label", { class: "switch" }, sw, on ? tr("Visits") : tr("Stays home")),
         h("div", { class: "visitor-acts" },
-          custom ? h("button", { type: "button", onclick: () => go(`/avatars?edit=${encodeURIComponent(k)}`) }, "Edit")
-                 : h("button", { type: "button", onclick: () => go(`/avatars?base=${k}`) }, "Remix"),
+          custom ? h("button", { type: "button", onclick: () => go(`/avatars?edit=${encodeURIComponent(k)}`) }, tr("Edit"))
+                 : h("button", { type: "button", onclick: () => go(`/avatars?base=${k}`) }, tr("Remix")),
           custom ? h("button", { type: "button", class: "danger", onclick: async () => {
-            if (!confirm(`Delete ${R.ROSTER[k].name} (${k})? This can't be undone.`)) return;
+            if (!confirm(fill(tr("Delete {name} ({key})? This can't be undone."), { name: who(k), key: k }))) return;
             try { await post(`/avatars/${encodeURIComponent(k)}/delete`, {}); state.dirty = false; location.href = k === state.original ? "/avatars" : location.href; }
             catch (err) { note(err.message, true); }
-          } }, "Delete") : null));
-      sw.addEventListener("change", () => { sw.parentNode.lastChild.textContent = sw.checked ? "Visits" : "Stays home"; });
+          } }, tr("Delete")) : null));
+      sw.addEventListener("change", () => { sw.parentNode.lastChild.textContent = sw.checked ? tr("Visits") : tr("Stays home"); });
       row.append(card);
     }
     castHost.append(h("h3", { text: title }), row);

@@ -300,7 +300,9 @@ def mcp_cmd(port: int = typer.Option(0, help="Port (default: the one on the Sett
 @app.command("doctor")
 def doctor_cmd():
     """Check this machine's setup: models, their connection, web search, the tools research needs."""
-    found = doctor.checks(deep=True)
+    import i18n
+    with i18n.english():                   # the terminal speaks English, whatever the UI's language
+        found = doctor.checks(deep=True)
     print(doctor.report(found))
     if any(c.blocks_loop and not c.ok for c in found):
         raise typer.Exit(1)

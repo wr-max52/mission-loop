@@ -380,7 +380,7 @@ def test_the_notes_say_what_a_board_turn_moved(client):
                        "moved": [{"id": "m:b", "x": 1, "y": 2, "size": 1.2}], "notes": [],
                        "ideas": {"at": "2026-11-01T09:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["Old pattern"]}})
     html = client.get("/").text
-    assert "tidied the" in html and "moved 1 note, resizing 1" in html and "Grouped the grid." in html
+    assert "tidied the" in html and "moved 1 note, resized 1" in html and "Grouped the grid." in html
     assert "Old pattern" in html
     import status_tools
     text = status_tools.theorist_notes()

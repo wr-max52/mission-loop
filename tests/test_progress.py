@@ -94,7 +94,7 @@ def test_the_loop_carries_on_a_stopped_search_as_the_same_attempt(monkeypatch):
     assert m.state == State.RESEARCHING and m.attempts == 1 and not m.gathered and m.search_paused
     assert "carries on" in store.events("r")[-1]["note"]
     import ui
-    assert ui.next_step(m) == "Carrying on the paused search."      # still attempt 1, not "attempt 2"
+    assert ui.next_step(m) == "Resuming search"      # still attempt 1, not "attempt 2"
 
     orchestrator.STOP_FLAG.unlink()
     got = []
@@ -228,7 +228,7 @@ def test_the_mission_card_says_how_far_saved_work_got():
     import ui
     m = Mission(slug="u", topic="t", state=State.WRITING, write_attempts=1,
                 article_draft=ArticleDraft(plan=PLAN, sections=[Section(heading="A", paragraphs=["x [s1]."])]))
-    assert ui.next_step(m) == "Writing attempt 2 of 3. 1 of 3 sections written."
+    assert ui.next_step(m) == "Writing · attempt 2 of 3 · 1 of 3 sections"
     brief = Mission(slug="v", topic="t", state=State.RESEARCHING, attempts=1, gathered=True,
                     brief_sources=SourcePick(thesis="t", sources=BRIEF.sources))
-    assert ui.next_step(brief) == "Writing the brief's claims from its checked sources."
+    assert ui.next_step(brief) == "Writing claims"

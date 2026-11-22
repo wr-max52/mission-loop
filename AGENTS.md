@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 709 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 721 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -140,7 +140,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
   away. It runs when it has a line and missions, the desk changed
   since its last turn (`desk_fingerprint`: missions, their epics, which are published or combined, the epics, links and combines) and 6 hours
-  have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
+  have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Run Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
   Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
@@ -526,7 +526,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (`activity.fail(e)` from the orchestrator's excepts, an `Interrupted` counting as stopped; `activity.outcome` for a
   failed source or article check or a paused search; the first outcome given stands). Under the pipeline strip
   (`ui.flow_status`, served in `/api/flow`'s `now`) the agents at work come first, then the last `RECENT_STEPS` (3)
-  finished steps with how long each took and when (`activity.recent` reads only the log's end), then Full log, which
+  finished steps, each "Agent · mission · took 4m 12s · 3m ago" (`activity.recent` reads only the log's end), then Full log, which
   opens `/log` (`ui.log_page`): every step newest first, `LOG_PAGE` (200) a page, the ones at work on top, `?m=<slug>`
   for one mission (a mission page's History links to it). Display-only, like the activity file.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
@@ -605,7 +605,7 @@ most bits pass without a word. They work through about 40 bits weighted by mood 
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
-The Settings page's Display section also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
+The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Page scripts get theirs as `window.I18N`: the shared few in `ui.JS_STRINGS`, and the board's and avatar studio's from every string literal inside their `tr(...)` calls (`ui.script_strings`, so no list to keep). The setup checks (`doctor.py`) are wrapped too; `run.py doctor` and Researcher Chat's `setup_status` read them in English. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
 when not System) and the chat colour (the app's red, seven pastels in `settings.CHAT_COLORS`, or any colour picked;
 `settings.chat_color()`). Both go on the UI's `<html>` from the server (`ui.html_attrs`: `data-theme` and the
 `--chat`/`--chat-ink` variables, the ink picked for contrast by `settings.ink_on`), so there is no theme switch in the
@@ -630,7 +630,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
 | Search what the desk has found (the library) | `python run.py library "<words>" [--epic "<title>"] [--mission <slug>]`; no words indexes it; or ask Researcher Chat |
 | Pick the library's embedding model or top N | Settings → Library (provider, model, passages per search) |
-| Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
+| Have the Theorist look across the desk now | Run Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
 | Stop | `python run.py stop` (the piece in flight finishes or is cut at the grace; everything finished is already saved) |

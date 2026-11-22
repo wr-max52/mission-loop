@@ -182,7 +182,7 @@ def test_connecting_a_provider_checks_the_key_and_lists_its_models(client, monke
         assert f'name="provider" value="{p}"' in html
     serve(monkeypatch, lambda r: httpx.Response(401, json={"error": {"message": "invalid x-api-key"}}))
     r = client.post("/settings/provider", data={"do": "connect", "provider": "anthropic", "key": "bad"})
-    assert "Anthropic was not connected" in r.text and "invalid x-api-key" in r.text
+    assert "Anthropic not connected" in r.text and "invalid x-api-key" in r.text
     assert not settings.provider_on("anthropic")
     serve(monkeypatch, lambda r: httpx.Response(200, json=ANTHROPIC_MODELS))
     r = client.post("/settings/provider", data={"do": "connect", "provider": "anthropic", "key": "sk-ant-good"},

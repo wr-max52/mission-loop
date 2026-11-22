@@ -12,6 +12,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import httpx
 import settings, store
+from i18n import _, _n
 from agents import llm, toolbox
 
 WAITING = Path("data/waiting.json")
@@ -32,69 +33,72 @@ class Check:
 def _models(conn: dict) -> list[Check]:
     missing = settings.missing_models()
     if missing:
-        who = " and ".join(settings.WORKERS[w] for w in missing)
+        who = _(" and ").join(_(settings.WORKERS[w]) for w in missing)
         if conn["ok"] and conn["models"]:
-            fix = "Press Connect Ollama to give each worker one of your installed models, or pick them on Settings."
+            fix = _("Press Connect Ollama, or pick models under Settings → Workers.")
         elif conn["ok"]:
-            fix = "Ollama has no models yet: run ollama pull with a model name, or add a cloud provider's key."
+            fix = _("Ollama has no models. Run ollama pull <model>, or add a cloud provider's key.")
         else:
-            fix = "Install and open Ollama (free, runs here), or add a cloud provider's API key on Settings."
-        return [Check("models", "A model for each worker", False, f"No model chosen for the {who}.", fix,
+            fix = _("Install and open Ollama, or add a cloud provider's API key in Settings.")
+        return [Check("models", _("A model for each worker"), False, _("No model for: {who}.").format(who=who), fix,
                       "/settings#workers", True)]
-    names = ", ".join(f"{settings.WORKERS[w]}: {settings.worker_model(w)}" for w in settings.WORKERS
+    names = ", ".join(f"{_(settings.WORKERS[w])}: {settings.worker_model(w)}" for w in settings.WORKERS
                       if settings.worker_on(w))
-    return [Check("models", "A model for each worker", True, names)]
+    return [Check("models", _("A model for each worker"), True, names)]
 
 def _connection(conn: dict, deep: bool) -> list[Check]:
     if settings.missing_models():
         return []
     if deep:
         ok, why = llm.ready()
-        return [Check("connection", "The models answer", ok, why if ok else f"{why}.",
-                      "" if ok else "Fix it on Settings → Model providers, then press play again.",
+        return [Check("connection", _("Models answer"), ok, why if ok else f"{why}.",
+                      "" if ok else _("Fix it in Settings → Model providers, then press play."),
                       "" if ok else "/settings#providers", not ok)]
     installed = {m["name"] for m in conn["models"]}
     for w in settings.WORKERS:
         if not settings.worker_on(w):
             continue
         provider, name = settings.split_model(settings.worker_model(w))
-        who = settings.WORKERS[w]
+        who = _(settings.WORKERS[w])
         if provider == settings.LOCAL and not conn["ok"]:
-            return [Check("connection", "The models answer", False,
-                          f"Ollama isn't answering at {conn['host']}, and the {who} uses it.",
-                          "Open the Ollama app, or point Settings at the right address.", "/settings#providers", True)]
+            return [Check("connection", _("Models answer"), False,
+                          _("Ollama not answering at {host} ({who} uses it).").format(host=conn["host"], who=who),
+                          _("Open Ollama, or fix its address in Settings."), "/settings#providers", True)]
         if provider == settings.LOCAL and name not in installed:
-            return [Check("connection", "The models answer", False, f"{name} ({who}) isn't installed in Ollama.",
-                          f"Run: ollama pull {name}", "/settings#workers", True)]
+            return [Check("connection", _("Models answer"), False,
+                          _("{model} ({who}) not installed in Ollama.").format(model=name, who=who),
+                          _("Run: ollama pull {model}").format(model=name), "/settings#workers", True)]
         if provider != settings.LOCAL and not settings.provider_on(provider):
-            return [Check("connection", "The models answer", False,
-                          f"The {who} uses {provider}, which has no API key here.",
-                          "Add its key on Settings → Model providers.", "/settings#providers", True)]
-    return [Check("connection", "The models answer", True, "Every working model's provider is connected.")]
+            return [Check("connection", _("Models answer"), False,
+                          _("{who} uses {provider}, which has no API key.").format(who=who, provider=provider),
+                          _("Add its key in Settings → Model providers."), "/settings#providers", True)]
+    return [Check("connection", _("Models answer"), True, _("Every model's provider is connected."))]
 
 def _tools() -> list[Check]:
     status = toolbox.server_status(["search", "fetch"])
     out = []
     key = settings.search_key()
-    out.append(Check("search", "Web search key", bool(key),
-                     "A Brave Search key is set." if key else "No Brave Search key, so research can't search the web.",
-                     "" if key else "Get a free key from Brave Search and paste it under Web search.",
+    out.append(Check("search", _("Web search key"), bool(key),
+                     _("Brave Search key set.") if key else _("No Brave Search key. Research can't search the web."),
+                     "" if key else _("Get a free key from Brave and paste it under Web search."),
                      "" if key else BRAVE_KEYS))
-    for command, server, what in (("npx", "search", "web search"), ("uvx", "fetch", "reading pages")):
+    for command, server, what in (("npx", "search", _("web search")), ("uvx", "fetch", _("reading pages"))):
         missing = "not installed" in status.get(server, "")
-        out.append(Check(command, f"{command} for {what}", not missing,
-                         f"{command} is not installed, so {what} is off." if missing else f"{command} is installed.",
-                         f"Install it: brew install {'node' if command == 'npx' else 'uv'}" if missing else ""))
+        out.append(Check(command, _("{command} for {what}").format(command=command, what=what), not missing,
+                         _("{command} not installed: {what} is off.").format(command=command, what=what) if missing
+                         else _("{command} installed.").format(command=command),
+                         _("Install it: brew install {package}").format(package="node" if command == "npx" else "uv")
+                         if missing else ""))
     return out
 
 def _work() -> list[Check]:
     line = store.get_inspiration()
     missions = len(store.all_missions())
     ok = bool(line or missions)
-    detail = (f"{missions} mission{'' if missions == 1 else 's'}" + (", and an inspiration line" if line else "")
-              if missions else "An inspiration line is set." if line else "No missions and no inspiration line yet.")
-    return [Check("work", "Something to work on", ok, detail,
-                  "" if ok else "Add a mission, or give the mission finder a line of inspiration.")]
+    detail = ((_n("{n} mission", "{n} missions", missions) + (_(", and an inspiration line") if line else ""))
+              if missions else _("Inspiration line set.") if line else _("No missions and no inspiration line."))
+    return [Check("work", _("Something to work on"), ok, detail,
+                  "" if ok else _("Add a mission, or give the mission finder an inspiration line."))]
 
 def stubs() -> bool:
     return os.environ.get("MISSION_LOOP_STUBS") == "1"
@@ -102,7 +106,7 @@ def stubs() -> bool:
 def checks(deep: bool = False, conn: dict | None = None) -> list[Check]:
     """Everything, in setup order. Never raises."""
     if stubs():                            # MISSION_LOOP_STUBS=1 needs no model, so play already works
-        return [Check("models", "A model for each worker", True, "Running on stubs (MISSION_LOOP_STUBS=1), no model needed")] \
+        return [Check("models", _("A model for each worker"), True, _("Running on stubs (MISSION_LOOP_STUBS=1), no model needed"))] \
             + _tools() + _work()
     conn = conn or llm.connection()
     return _models(conn) + _connection(conn, deep) + _tools() + _work()

@@ -340,7 +340,7 @@ def test_lookups_show_in_the_notes():
     assert store.last_theory()["lookups"] == [LINE, "bank donations"]
     assert "Searched the library for: bank donations" in status_tools.theorist_notes()
     html = TestClient(ui.app).get("/").text
-    assert "It searched the library for:" in html and "<li>bank donations</li>" in html
+    assert "Library searches:" in html and "<li>bank donations</li>" in html
 
 def test_theorize_opens_the_library(monkeypatch):
     store.set_inspiration(LINE)
@@ -373,7 +373,7 @@ def test_chat_changes_the_line_and_asks_the_theorist():
     assert "would not have written it" in status_tools.set_inspiration("Follow the money.")
     assert "at most 500" in status_tools.set_inspiration("x" * 600)
     assert "Asked." in status_tools.ask_theorist() and orchestrator.THINK_FLAG.exists()
-    assert "the chat assistant:</span> Follow the money." in TestClient(ui.app).get("/").text
+    assert "Researcher Chat:</span> Follow the money." in TestClient(ui.app).get("/").text
 
 def test_chat_proposes_an_epic_through_the_theorists_checks():
     desk()
@@ -431,7 +431,7 @@ def test_settings_page_has_the_library(client):
     desk()
     library.sync()
     html = client.get("/settings").text
-    assert 'id="library"' in html and "passages from 3 missions; ranked by words only" in html
+    assert 'id="library"' in html and "passages from 3 missions · ranked by words only" in html
     assert '<option value="none" selected>' in html and '<option value="5" selected>5</option>' in html
     assert "Anthropic" not in html.split('id="embed_provider"')[1].split("</select>")[0]
 
@@ -459,7 +459,7 @@ def test_settings_refuses_a_model_that_fails_its_check(client, monkeypatch):
     use(monkeypatch, Embedder(fail=True))
     html = client.post("/settings/library", data={"do": "save", "provider": "ollama", "model": "nope",
                                                   "top_n": "5"}).text
-    assert "The embedding model was not saved: Ollama refused the embedding model nope" in html
+    assert "Embedding model not saved: Ollama refused the embedding model nope" in html
     assert settings.embed_model() == ""
     assert "pick a provider" in client.post("/settings/library", data={"do": "save", "provider": "zzz",
                                                                       "model": "m", "top_n": "5"}).text
