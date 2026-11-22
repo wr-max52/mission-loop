@@ -17,6 +17,14 @@ CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"   # the project's, 
 MAX_TOOL_CHARS = 12_000                    # keeps one big page from flooding the context
 WHICH = shutil.which                       # tests swap in their own machine
 
+def room(server: str) -> int:
+    """How much of a tool's answer is kept: MAX_TOOL_CHARS, or enough for the Top N passages picked on the
+    Settings page when it is the library."""
+    if server == "library":
+        import library
+        return max(MAX_TOOL_CHARS, settings.library_top_n() * library.PASSAGE_ROOM)
+    return MAX_TOOL_CHARS
+
 def _value(name: str) -> str:
     """An environment variable, except the Brave key, which may also be saved on the Settings page."""
     return settings.search_key() if name == settings.SEARCH_ENV else os.environ.get(name, "")
@@ -97,4 +105,4 @@ class Toolbox:
             return f"ERROR: {name} failed: {e}"
         text = "\n".join(c.text for c in getattr(result, "content", []) if getattr(c, "type", "") == "text")
         prefix = "ERROR: " if getattr(result, "is_error", False) else ""
-        return prefix + text[:MAX_TOOL_CHARS]
+        return prefix + text[:room(self.server.get(name, ""))]

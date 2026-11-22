@@ -515,3 +515,16 @@ def test_top_n_passages_get_room_in_chat_and_in_the_findings():
     settings.set_library_top_n(3)
     assert assistant._limit(Box(), "search_library") == assistant.MAX_WEB_CHARS
     assert theorist.findings_room() == theorist.FINDINGS_CHARS
+
+async def test_the_toolbox_keeps_the_top_n_passages_whole(monkeypatch):
+    from agents import toolbox
+    class Session:
+        async def call_tool(self, name, args):
+            return type("R", (), {"content": [type("C", (), {"type": "text", "text": "x" * 30_000})()]})()
+    tb = Toolbox.__new__(Toolbox)
+    tb._owner, tb.server = {"search_library": Session(), "fetch": Session()}, {"search_library": "library", "fetch": "fetch"}
+    settings.set_library_top_n(20)
+    assert len(await tb.call("search_library", {"query": "q"})) == 20 * library.PASSAGE_ROOM
+    assert len(await tb.call("fetch", {"url": "u"})) == toolbox.MAX_TOOL_CHARS
+    settings.set_library_top_n(5)
+    assert len(await tb.call("search_library", {"query": "q"})) == toolbox.MAX_TOOL_CHARS
