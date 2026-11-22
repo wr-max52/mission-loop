@@ -1,9 +1,15 @@
 /* Pixel researchers: a cast of small outlined researchers who drop in on the dashboard while missions
- * are in progress. Each in-progress card, and the green pill of the agent working right now, gets its own
- * random schedule: the first visitor turns up after a random wait, walks in from a side, stays 15-30
- * seconds doing comic researcher things, walks off, and after a random 10-20 second gap the next one comes.
- * Never more than two are on the page at once; stages that have waited longest go first. Visitors are
- * drawn from a shuffled roster, so every character gets a turn before anyone repeats.
+ * are in progress. Each in-progress card gets its own random schedule: the first visitor turns up after a
+ * random wait, walks in from a side, stays 15-30 seconds doing comic researcher things, walks off, and
+ * after a random 10-20 second gap the next one comes. Never more than two are on the page at once; stages
+ * that have waited longest go first. Visitors are drawn from a shuffled roster, so every character gets a
+ * turn before anyone repeats.
+ *
+ * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). While a
+ * step is lit, one researcher stays with it doing that step's kind of work. When the same mission moves on
+ * (sources -> brief -> check), they run after it. When the work ends or moves to another mission (say a
+ * brief passed its check and went to your review), they say a closing line and walk off, and a new one
+ * walks in for whatever started. assets/flow.js says when that happens with a "flowchange" event.
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -604,32 +610,57 @@ const readTime = text => clamp(1.6 + text.length * 0.055, 1.8, 5);
 const ACTIONS = {
   spawn: {                                       // walk in from one side
     init(r) {
-      const [lo, hi] = r.stage.range(), side = r.rand() < 0.5 ? -1 : 1;
+      const [lo, hi] = r.stage.range();
+      let side = r.rand() < 0.5 ? -1 : 1, tx;
+      if (r.stage.kind === "flow") {             // straight to the lit step, from the nearer end of the strip
+        tx = r.stage.spawnX(r.rand);
+        side = tx - lo < hi - tx ? -1 : 1;
+      } else tx = side < 0 ? lo + between(r.rand, 10, 140) : hi - between(r.rand, 10, 140);
       r.x = side < 0 ? lo - EDGE : hi + EDGE;
-      const tx = r.stage.kind === "pill" ? r.stage.spawnX(r.rand)
-        : side < 0 ? lo + between(r.rand, 10, 140) : hi - between(r.rand, 10, 140);
       return { tx: clamp(tx, lo, hi) };
     },
     run(r, s, dt) {
       r.alpha = r.stage.edgeFade(r.x); r.y = r.stage.hop(r.x);
-      if (stepToward(r, s, s.tx, dt, r.a.speed)) {
+      if (stepToward(r, s, s.tx, dt, r.a.speed * (r.stage.kind === "flow" ? 1.5 : 1))) {
         r.alpha = 1; r.y = 0; s.done = true;
-        if (r.rand() < 0.45) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
+        if (r.stage.kind === "flow") r.arrive();
+        else if (r.rand() < 0.45) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
         return stand({ carry: true });
       }
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
     },
   },
   despawn: {                                     // and walk off the nearer side
-    init(r) {
+    init(r, o) {
       const [lo, hi] = r.stage.range();
-      if (r.rand() < 0.5) r.say(pick(r.rand, ["Bye!", "Off to the archives!", "Lunch break!", "brb, library",
+      if (!(o && o.quiet) && r.rand() < 0.5) r.say(pick(r.rand, ["Bye!", "Off to the archives!", "Lunch break!", "brb, library",
         "Exit, pursued by a deadline.", "To the stacks!", "My work here is cited.", "Fin."]));
       return { tx: r.x - lo < hi - r.x ? lo - EDGE : hi + EDGE };
     },
     run(r, s, dt) {
       r.alpha = r.stage.edgeFade(r.x); r.y = r.stage.hop(r.x);
       if (stepToward(r, s, s.tx, dt, r.a.speed * 1.2) || r.alpha <= 0) r.gone = true;
+      return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
+    },
+  },
+  farewell: {                                    // a closing line and a wave before walking off
+    init(r, o) {
+      r.say(o.text, Math.max(2.6, readTime(o.text) + 1.2));
+      return { dur: clamp(readTime(o.text) * 0.5, 0.9, 1.6) };
+    },
+    run(r, s) {
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: ["up", Math.floor(s.t * 5) % 2 ? 2 : 0], mouth: "smile" });
+    },
+  },
+  chase: {                                       // the mission moved on to the next step: run after it
+    init(r) {
+      if (r.rand() < 0.5) r.say(pick(r.rand, ["Next!", "Onward!", "Wait for me!", "Coming!", "Follow that mission!"]), 1.4);
+      return { tx: r.stage.spawnX(r.rand) };
+    },
+    run(r, s, dt) {
+      r.y = r.stage.hop(r.x);
+      if (stepToward(r, s, s.tx, dt, r.a.speed * 2.2)) { r.y = 0; s.done = true; r.arrive(); return stand({ carry: true }); }
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
     },
   },
@@ -673,7 +704,7 @@ const ACTIONS = {
     init(r) {
       roomAhead(r, 40);
       const sniff = r.rand() < 0.3;
-      const tx = r.stage.kind === "pill" ? r.x : r.x + r.face * between(r.rand, 16, 36);  // pills are too short to roam
+      const tx = r.stage.kind === "flow" ? r.x : r.x + r.face * between(r.rand, 16, 36);  // pills are too short to roam
       return { dur: between(r.rand, 3.5, 6), sniff, tx, found: r.rand() < 0.55 };
     },
     run(r, s, dt) {
@@ -872,6 +903,53 @@ const MOODS = {
   idle: { idle: 2, sleep: 4, coffee: 2, read: 1, confused: 0.6, telescope: 0.4 },
 };
 
+// On the pipeline strip the mood is the lit step, so the researcher does that step's kind of work.
+Object.assign(MOODS, {
+  finder: { telescope: 4, search: 3, read: 1, eureka: 1.5, notes: 1, idle: 0.5 },
+  sources: { search: 3, dig: 3, typing: 2, read: 2, scroll: 1.5, telescope: 1, confused: 1, coffee: 0.6 },
+  contacts: { typing: 3, notes: 2, search: 2, read: 1, idle: 0.6 },
+  brief: { notes: 3, typing: 3, read: 1.5, eureka: 1.2, coffee: 1, papers: 1, stack: 0.8 },
+  source_check: { search: 3, citation: 3, read: 2, confused: 1.5, notes: 1.2 },
+  writer: { typing: 3.5, notes: 2, coffee: 1.5, scroll: 1, eureka: 1, papers: 0.8 },
+  article_check: { citation: 3, read: 2.5, search: 2, confused: 1.5, notes: 1 },
+  publisher: { papers: 3, stack: 2, eureka: 1.5, typing: 1 },
+  "1f916": { typing: 3, idle: 1, eureka: 1 },
+  bluesky: { typing: 3, idle: 1, eureka: 1 },
+});
+const STEP_LINES = {                             // said on reaching a step
+  finder: ["Scanning the horizon.", "Any new leads?", "Mission hunting."],
+  sources: ["To the sources!", "Let's dig.", "Who funded this?", "Opening 47 tabs."],
+  contacts: ["Who can we ask?", "Finding the experts."],
+  brief: ["Writing it up.", "Brief time.", "Facts first."],
+  source_check: ["Every quote, checked.", "Show me the source.", "Ctrl+F time."],
+  writer: ["Drafting!", "Once upon a fact...", "Words, assemble!"],
+  article_check: ["Checking the draft.", "Possibility or fact?", "Red pen out."],
+  publisher: ["Stop the presses!", "Going to print!"],
+  "1f916": ["Posting to 1F916.", "One post a day!"],
+  bluesky: ["Posting to Bluesky.", "Telling the timeline."],
+};
+// The closing line when a step's work ends: where the mission went (its state now), or why nobody is
+// working any more. Human reviews get named, since that's where the work waits.
+const CLOSERS = {
+  BRIEF_READY: ["Brief's on your desk!", "Over to you: review the brief.", "Brief filed. Your call, boss."],
+  ARTICLE_READY: ["Article's ready for your red pen!", "Draft's on your desk!", "Over to you: publish it?"],
+  PARKED: ["Three strikes. Parked it for you.", "Stuck. Needs a human.", "Parked. Sorry!"],
+  DONE: ["Published! Next!", "Hot off the press!", "Out the door!"],
+  RESEARCHING: ["Didn't pass. Back to the sources next pass.", "Check said no. Another try soon."],
+  WRITING: ["Didn't pass. Rewrite next pass.", "Check said no. New draft soon."],
+  AWAITING_COMMENTS: ["Now we wait for replies."],
+  finder: ["New missions on the board!", "Leads found. Go get 'em!", "That's the hunt done."],
+  posted: ["Posted!", "Out in the world!", "Told the world."],
+  off: ["Clocking out.", "Loop's off. Nap time.", "Shift's over!"],
+  other: ["Done here!", "That's a wrap.", "My work here is cited.", "Fin."],
+};
+function closer(c) {
+  const key = !c.running ? "off" : c.from.step === "finder" ? "finder"
+    : (c.from.step === "1f916" || c.from.step === "bluesky") && c.outcome === "DONE" ? "posted"
+    : CLOSERS[c.outcome] ? c.outcome : "other";
+  return pick(Math.random, CLOSERS[key]);
+}
+
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
 const BAG = "researcher:bag";
@@ -919,10 +997,21 @@ class Researcher {
     delete table[after];
     this.begin(weighted(this.rand, table));
   }
-  leave() {
+  settle() { this.tilt = 0; this.y = 0; this.squash = 1; this.badge = null; this.caffeine = 0; this.next = null; }
+  leave(text) {
     if (this.leaving) return;
-    this.leaving = true; this.tilt = 0; this.y = 0; this.badge = null; this.caffeine = 0;
-    this.begin("despawn");
+    this.leaving = true; this.settle();
+    if (text && !REDUCE) { this.next = ["despawn", { quiet: true }]; this.begin("farewell", { text }); }
+    else this.begin("despawn");
+  }
+  chase() {                                      // the mission moved on: follow it to its next step
+    if (this.leaving) return;
+    this.settle(); this.mood = this.stage.mood;
+    this.begin("chase");
+  }
+  arrive() {
+    const lines = STEP_LINES[this.stage.mood];
+    if (lines && this.rand() < 0.7) this.say(pick(this.rand, lines));
   }
   poke() {
     if (this.leaving || ["spawn", "trip", "wave", "despawn", "sleep"].includes(this.act.name)) return;
@@ -951,17 +1040,16 @@ class Researcher {
   }
 }
 
-// ---------- stages: a canvas laid over a card or the agent pills ----------
+// ---------- stages: a canvas laid over a card or the pipeline strip ----------
 
-const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;
-const PILL_HEADROOM = 84;   // the offscreen sprite canvas and the feet's place in it
+const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;   // the offscreen sprite canvas and the feet's place in it
 const stages = [];
 
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "pill" ? "pill" : host.getAttribute("href"));
-    this.mood = kind === "pill" ? "busy" : host.dataset.lab || "busy";
+    this.key = "researcher:" + (kind === "flow" ? "flow" : host.getAttribute("href"));
+    this.mood = host.dataset.lab || "busy";
     this.canvas = document.createElement("canvas");
     this.canvas.className = "lab-stage";
     this.canvas.setAttribute("aria-hidden", "true");
@@ -970,71 +1058,56 @@ class Stage {
     this.off = this.layer(); this.ink = this.layer(); this.comp = this.layer();
     this.fx = []; this.marks = [];
     this.layout();
-    if ("ResizeObserver" in window) new ResizeObserver(() => this.layout()).observe(host);
-    host.addEventListener("mouseenter", () => this.resident && this.resident.poke());
+    this.ro = "ResizeObserver" in window ? new ResizeObserver(() => this.layout()) : null;
+    if (this.ro) this.ro.observe(host);
+    this.poke = () => this.resident && this.resident.poke();
+    host.addEventListener("mouseenter", this.poke);
     this.schedule();
   }
   layer() { const c = document.createElement("canvas"); c.width = OFF_W; c.height = OFF_H; return c.getContext("2d"); }
-  layout() {
+  // The page swapped in a fresh copy of this stage's card: move the canvas and whoever is on it across.
+  adopt(host) {
+    if (this.ro) { this.ro.unobserve(this.host); this.ro.observe(host); }
+    this.host.removeEventListener("mouseenter", this.poke);
+    this.host = host; host.appendChild(this.canvas);
+    host.addEventListener("mouseenter", this.poke);
+    if (this.kind === "card") { this.mood = host.dataset.lab || "busy"; if (this.resident) this.resident.mood = this.mood; }
+    this.layout();
+  }
+  kill() { if (this.ro) this.ro.disconnect(); this.canvas.remove(); }
+  cast() { return this.resident ? [this.resident] : []; }
+  size(cssW, cssH, ground) {
     const dpr = window.devicePixelRatio || 1;
-    if (!this.host.isConnected || !this.host.clientWidth) return;   // detached or hidden: keep the last layout
-    if (this.kind === "pill") {
-      const pills = [...this.host.querySelectorAll(".agent")];
-      const on = this.host.querySelector(".agent.on") || pills[0];
-      if (!on) return;
-      const row = pills.filter(p => Math.abs(p.offsetTop - on.offsetTop) < 4);
-      this.canvas.style.top = -PILL_HEADROOM + "px";           // room above for speech bubbles
-      this.canvas.style.height = on.offsetTop + PILL_HEADROOM + "px";
-      this.cssW = this.host.clientWidth; this.cssH = on.offsetTop + PILL_HEADROOM;
-      this.platforms = row.map(p => [p.offsetLeft, p.offsetLeft + p.offsetWidth]);
-      this.home = [on.offsetLeft, on.offsetLeft + on.offsetWidth];
-    } else {
-      this.cssW = this.host.clientWidth; this.cssH = this.canvas.clientHeight || 100;
-    }
-    this.W = Math.floor(this.cssW); this.H = Math.floor(this.cssH);
-    this.ground = this.kind === "pill" ? this.H - 1 : this.H - 9;     // the row the soles stand on
-    this.canvas.width = Math.round(this.cssW * dpr); this.canvas.height = Math.round(this.cssH * dpr);
+    this.cssW = cssW; this.cssH = cssH;
+    this.W = Math.floor(cssW); this.H = Math.floor(cssH);
+    this.ground = ground;                                            // the row the soles stand on
+    this.canvas.width = Math.round(cssW * dpr); this.canvas.height = Math.round(cssH * dpr);
     this.dpr = dpr;
-    if (this.resident) { const [lo, hi] = this.range(); this.resident.x = clamp(this.resident.x, lo - 40, hi + 40); }
+    const [lo, hi] = this.range();
+    for (const r of this.cast()) if (!r.leaving) r.x = clamp(r.x, lo - 40, hi + 40);
     if (REDUCE) this.draw();
   }
-  range() {
-    if (this.kind === "pill") {
-      const p = this.platforms || [[8, this.W - 8]];
-      return [p[0][0] + 6, p[p.length - 1][1] - 6];
-    }
-    return [20, this.W - 20];
+  layout() {
+    if (!this.host.isConnected || !this.host.clientWidth) return;   // detached or hidden: keep the last layout
+    const h = this.canvas.clientHeight || 100;
+    this.size(this.host.clientWidth, h, Math.floor(h) - 9);
   }
+  range() { return [20, this.W - 20]; }
   edgeFade(x) {                                  // fade in and out over the last stretch off-stage
     const [lo, hi] = this.range();
     return clamp(Math.min(x - (lo - EDGE), hi + EDGE - x) / 26, 0, 1);
   }
   spawnX(r) {
-    if (this.kind === "pill" && this.home) return between(r, this.home[0] + 8, this.home[1] - 8);
     const [lo, hi] = this.range();
     return between(r, lo + 20, hi - 20);
   }
   pickTarget(r, max = 220) {
-    if (this.kind === "pill") {                   // somewhere on a nearby pill, never in the gap between two
-      const near = (this.platforms || []).map(p => [Math.max(p[0] + 6, r.x - max), Math.min(p[1] - 6, r.x + max)])
-        .filter(([a, b]) => b > a);
-      const home = this.home && [this.home[0] + 6, this.home[1] - 6];
-      const [a, b] = home && (r.rand() < 0.65 || !near.length) ? home : pick(r.rand, near);
-      return between(r.rand, a, b);
-    }
     const [lo, hi] = this.range();
     let x = between(r.rand, lo, hi);
     if (Math.abs(x - r.x) < 24) x = r.x + (r.rand() < 0.5 ? -1 : 1) * between(r.rand, 36, 100);
     return clamp(clamp(x, r.x - max, r.x + max), lo, hi);   // a stroll, not a cross-country hike
   }
-  hop(x) {                                         // jump over the gaps between pills
-    if (this.kind !== "pill" || !this.platforms) return 0;
-    for (let i = 0; i + 1 < this.platforms.length; i++) {
-      const a = this.platforms[i][1] - 2, b = this.platforms[i + 1][0] + 2;
-      if (x > a && x < b) return Math.sin((x - a) / (b - a) * Math.PI) * 12;
-    }
-    return 0;
-  }
+  hop() { return 0; }                              // cards are flat
   schedule() {
     const t = now();
     let rec = memory.get(this.key);
@@ -1065,6 +1138,9 @@ class Stage {
       r.update(dt);
       if (r.gone) { this.resident = null; this.nextAt = t + between(Math.random, GAP_MIN, GAP_MAX); this.fx.length = 0; }
     }
+    this.tick(dt);
+  }
+  tick(dt) {
     for (const p of this.fx) {
       p.life -= dt; p.vy -= (p.g || 0) * dt;
       p.x += p.vx * dt + (p.sway ? Math.sin(p.life * p.sway) * 0.6 : 0); p.y += p.vy * dt;
@@ -1100,10 +1176,10 @@ class Stage {
     for (const m of this.marks) {
       if (m.kind === "hole") { ctx.fillStyle = "rgba(60,40,25,.55)"; ctx.fillRect(Math.round(m.x - m.n), G - 1, m.n * 2 + 1, 3); }
     }
-    const r = this.resident;
-    if (r && r.pose) this.drawResearcher(ctx, r);
+    const cast = this.cast();
+    for (const r of cast) if (r.pose) this.drawResearcher(ctx, r);
     for (const p of this.fx) this.drawFx(ctx, p);
-    if (r) this.drawOverlay(ctx, r);
+    for (const r of cast) this.drawOverlay(ctx, r);
   }
   drawResearcher(ctx, r) {
     const { off, ink, comp } = this, p = r.pose;
@@ -1196,6 +1272,97 @@ class Stage {
   }
 }
 
+// The pipeline strip. Its researcher follows the lit step rather than a timer: it stays as long as the
+// step is lit, runs after its mission when the mission moves on, and hands off to a newcomer (a closing
+// line, a walk off the nearer end) when the work ends or another mission's work starts.
+class FlowStage extends Stage {
+  constructor(host) { super(host, "flow"); }
+  lit() { const f = this.host.closest("#flow"); return { step: (f && f.dataset.step) || null, slug: (f && f.dataset.slug) || "" }; }
+  layout() {
+    if (!this.host.isConnected || !this.host.clientWidth) return;
+    const nodes = [...this.host.querySelectorAll(".step, .check")];
+    if (!nodes.length) return;
+    const on = this.host.querySelector(".step.on, .check.on");
+    this.platforms = nodes.map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]);
+    this.home = on ? this.span(on) : null;
+    this.mood = on ? on.dataset.step : "busy";
+    this.size(this.host.clientWidth, this.host.clientHeight, nodes[0].offsetTop - 1);
+  }
+  span(el) {                                     // where a researcher can stand on a step; a check is just a post
+    const a = el.offsetLeft, b = a + el.offsetWidth, c = (a + b) / 2;
+    return el.classList.contains("check") ? [c - 3, c + 3] : [a + 8, Math.max(a + 9, b - 8)];
+  }
+  range() {
+    const p = this.platforms || [[8, (this.W || 200) - 8]];
+    return [p[0][0] + 6, p[p.length - 1][1] - 6];
+  }
+  spawnX(r) { return this.home ? between(r, this.home[0], this.home[1]) : super.spawnX(r); }
+  pickTarget(r) { return this.home ? between(r.rand, this.home[0], this.home[1]) : r.x; }   // stay with the work
+  hop(x) {                                       // jump the gaps between steps, higher over a wide one
+    const p = this.platforms;
+    if (!p) return 0;
+    for (let i = 0; i + 1 < p.length; i++) {
+      const a = p[i][1] - 2, b = p[i + 1][0] + 2;
+      if (x > a && x < b) return Math.sin((x - a) / (b - a) * Math.PI) * clamp((b - a) * 0.3, 5, 26);
+    }
+    return 0;
+  }
+  cast() { return (this.leavers || []).concat(this.resident ? [this.resident] : []); }
+  schedule() {
+    this.leavers = []; this.pending = null;
+    const { step, slug } = this.lit();
+    if (!step) return;
+    const rec = memory.get(this.key);
+    if (rec && rec.step === step && rec.slug === slug && ROSTER[rec.kind]) this.spawn(rec, true);   // back on the page
+    else this.pending = { at: now() + 0.4 };
+  }
+  spawn(rec, resume) {
+    const { step, slug } = this.lit();
+    if (!rec) {
+      const busy = new Set(stages.flatMap(s => s.cast()).map(r => r.a.kind));
+      rec = { kind: nextCharacter(busy), seed: Math.floor(Math.random() * 2 ** 31) };
+    }
+    this.rec = Object.assign({}, rec, { step, slug });
+    this.resident = new Researcher(this, this.rec, resume ? rec : null);
+    // Still at most two on the page: the card visitor who has stayed longest heads off to make room.
+    const cards = stages.filter(s => s.kind === "card" && s.resident && !s.resident.leaving);
+    if (cards.length >= MAX_ON_STAGE && !REDUCE) cards.sort((a, b) => a.rec.born - b.rec.born)[0].resident.leave();
+  }
+  save() {
+    const r = this.resident;
+    memory.set(this.key, r ? Object.assign({}, this.rec, { x: r.x, face: r.face }) : null);
+  }
+  // assets/flow.js says the lit step changed: chase, hand off, or clear the stage.
+  change(c) {
+    this.layout();
+    const r = this.resident;
+    if (!c.to.step) {
+      this.pending = null;
+      if (r) this.dismiss(r, closer(c));
+    } else if (r && c.from.step && c.to.slug && c.from.slug === c.to.slug) {
+      this.rec.step = c.to.step;
+      if (REDUCE) r.x = this.spawnX(r.rand); else r.chase();
+    } else {
+      if (r) this.dismiss(r, closer(c));
+      this.pending = { at: now() + (r ? 1.5 : 0.2) };   // the newcomer follows a beat behind the one leaving
+    }
+    if (REDUCE) still();
+  }
+  dismiss(r, text) {
+    this.resident = null;
+    if (REDUCE) return;
+    this.leavers.push(r);
+    r.leave(text);
+  }
+  update(dt) {
+    if (this.pending && now() >= this.pending.at && !this.resident) { this.pending = null; if (this.home) this.spawn(); }
+    for (const r of this.cast()) r.update(dt);
+    if (this.resident && this.resident.gone) this.resident = null;
+    this.leavers = this.leavers.filter(r => !r.gone);
+    this.tick(dt);
+  }
+}
+
 const BUBBLE_FONT = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace", BUBBLE_MAX = 232;
 // Greedy word wrap; a word too long for a line gets broken rather than spilling out of the bubble.
 function wrapText(ctx, text, max) {
@@ -1217,25 +1384,47 @@ function wrapText(ctx, text, max) {
 
 // ---------- start ----------
 
-// Let waiting stages in, longest-waiting first, while fewer than MAX_ON_STAGE researchers are out.
+// Let waiting card stages in, longest-waiting first, while fewer than MAX_ON_STAGE researchers are out.
+// The strip's researcher never waits for a turn, but counts against the cards' share.
 function admit() {
   const t = now();
   let free = MAX_ON_STAGE - stages.filter(s => s.resident).length;
   if (free <= 0) return;
-  const ready = stages.filter(s => !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
+  const ready = stages.filter(s => s.kind === "card" && !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
   for (const s of ready) { if (free-- <= 0) break; s.spawn(); }
 }
 
-function boot() {
-  document.querySelectorAll(".card[data-lab]").forEach(c => stages.push(new Stage(c, "card")));
-  const strip = document.querySelector(".agents[data-lab]");
-  if (strip && strip.querySelector(".agent.on")) stages.push(new Stage(strip, "pill"));
-  if (!stages.length) return;
-  addEventListener("pagehide", () => stages.forEach(s => s.save()));
-  if (REDUCE) {                                   // one still researcher per stage, no wandering
-    stages.slice(0, MAX_ON_STAGE).forEach(s => { if (!s.resident) s.spawn(null, true); s.resident.update(0); s.draw(); });
-    return;
+// Reduced motion: still figures only, one on the lit step and at most one more on a card.
+function still() {
+  const flow = stages.find(s => s.kind === "flow");
+  if (flow && flow.home && !flow.resident) flow.spawn(null, true);
+  let room = MAX_ON_STAGE - stages.filter(s => s.resident).length;
+  for (const s of stages) if (s.kind === "card" && !s.resident && room-- > 0) s.spawn(null, true);
+  for (const s of stages) { for (const r of s.cast()) r.update(0); s.draw(); }
+}
+
+// Find the stages on the page. After the page swaps in fresh HTML, a stage whose card (or strip) came
+// back keeps its researcher on the new copy; one whose card went away saves where it was and goes.
+function rescan() {
+  for (const s of stages.slice()) {
+    if (s.host.isConnected) continue;
+    const sel = s.kind === "flow" ? ".flow-track[data-lab]"
+      : `.card[data-lab][href="${CSS.escape(s.host.getAttribute("href"))}"]`;
+    const next = document.querySelector(sel);
+    if (next && !stages.some(o => o.host === next)) { s.adopt(next); continue; }
+    s.save(); s.kill(); stages.splice(stages.indexOf(s), 1);
   }
+  document.querySelectorAll(".card[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
+  const track = document.querySelector(".flow-track[data-lab]");
+  if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
+  start();
+}
+
+let started = false;
+function start() {
+  if (REDUCE) { still(); return; }
+  if (started || !stages.length) return;
+  started = true;
   let last = performance.now();
   const frame = t => {
     const dt = clamp((t - last) / 1000, 0, 0.05); last = t;
@@ -1245,6 +1434,12 @@ function boot() {
   };
   requestAnimationFrame(frame);
 }
-window.Researchers = { stages, ROSTER, makeLook, ACTIONS, Stage, Researcher };   // handy from the console
+
+function boot() {
+  addEventListener("pagehide", () => stages.forEach(s => s.save()));
+  document.addEventListener("flowchange", e => { const f = stages.find(s => s.kind === "flow"); if (f) f.change(e.detail); });
+  rescan();
+}
+window.Researchers = { stages, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Researcher, rescan };   // handy from the console
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

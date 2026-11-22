@@ -15,12 +15,9 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 252 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
-  Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 240 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
-  `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
+- Tests: `pytest -q` (expects 274 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+  Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -128,12 +125,20 @@ the finder's inspiration line and to start, stop or wake the loop (a loop starte
 Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
 as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
-the agent working at that moment, read from `data/activity.json` (written by `activity.py`). Small pixel
-researchers (`assets/researchers.js`, decorative only) walk in from the side onto in-progress cards and the
-working agent's pill, never more than two on the page at once: each stage has its own random first wait, a
-visitor stays 15-30 s, walks off, and the stage waits 10-20 s; the longest-waiting stage goes next. Visitors
-come from a shuffled cast and their lines from a shuffled deck of ~200 academic quips, so nothing repeats soon.
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always
+drawn, unlit while the loop is off: agents on a track in runtime order, each code check a vertical block right
+after the agent it checks (with a red count of missions parked there), and each human review a sidestep below
+between that check and the next agent (with a count of missions waiting on you). The step working right now is
+lit, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2 s
+and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
+never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on in-progress cards
+and on the strip, never more than two on the page at once. A card's visitor keeps a timer: a random first wait,
+15-30 s on stage, walks off, then 10-20 s before the next; the longest-waiting card goes next. The strip's
+researcher follows the work instead: it stays on the lit step doing that step's kind of work, runs after its
+mission when the mission moves on (sources, brief, check), and when the work ends or moves to another mission it
+says a closing line about where the work went (your review, parked, published, another try) and walks off, and
+a new one walks in for whatever started. Visitors come from a shuffled cast and their lines from a shuffled
+deck of ~200 academic quips, so nothing repeats soon.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |

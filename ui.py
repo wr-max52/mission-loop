@@ -191,16 +191,10 @@ nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; st
 .dot { width:.6rem; height:.6rem; border-radius:50%; background:var(--muted); display:inline-block; }
 .dot.on { background:#2f9e44; } .dot.stopping { background:#e8a33d; }
 .loop .grow { flex:1; }
-.agents { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.3rem; }
-.agent { font-size:.78rem; font-weight:600; padding:.22rem .55rem; border-radius:999px;
-         background:var(--quote); color:var(--muted); }
-.agent.on { background:#237a35; color:#fff; animation:working 2s ease-out infinite; }
-.agents .arrow { color:var(--muted); }
 .now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
 .now strong, .now a { color:var(--fg); }
 @keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
 @keyframes blink { 50% { opacity:.2; } }
-@media (prefers-reduced-motion: reduce) { .agent.on, .status .dot.on { animation:none; } }
 h1 { font-family: Georgia, serif; }
 h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .5rem; }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
@@ -253,14 +247,69 @@ select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); borde
          background:var(--bg); color:var(--fg); }
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
 form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
+
+/* the pipeline strip: agents on the track, checks as vertical blocks, human reviews as sidesteps below */
+.flow { flex-basis:100%; min-width:0; margin-top:.3rem; --line:color-mix(in srgb, var(--muted) 60%, transparent); }
+.flow-scroll { overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin; padding-bottom:.25rem; }
+.flow-track { --row:1.6rem; --drop:1rem; --hh:1.45rem; --ch:calc(var(--row) + 1.1rem);
+              display:flex; align-items:flex-start; width:max-content; min-width:100%; position:relative; }
+.flow-track[data-lab] { padding-top:5rem; }          /* headroom for the researchers and their speech bubbles */
+.flow .step { flex:none; height:var(--row); line-height:calc(var(--row) - 2px); padding:0 .65rem; border-radius:999px;
+              border:1px solid var(--rule); background:var(--quote); color:var(--muted);
+              font-size:.78rem; font-weight:600; white-space:nowrap; }
+.flow .step.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
+.flow .join { flex:1 0 1rem; max-width:3.5rem; height:var(--row); position:relative; }   /* stretch to fill the panel */
+.flow .join::before { content:""; position:absolute; left:2px; right:4px; top:calc(50% - 1px); border-top:2px solid var(--line); }
+.flow .join::after { content:""; position:absolute; right:1px; top:calc(50% - 4px);
+                     border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
+.flow .join.short { flex:none; width:.5rem; } .flow .join.short::after { display:none; } .flow .join.short::before { right:1px; }
+.flow .check { flex:none; position:relative; width:1rem; height:var(--ch); border-radius:4px; overflow:visible;
+               border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
+               background:repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
+.flow .check .label { writing-mode:vertical-rl; transform:rotate(180deg); font-size:.56rem; font-weight:700;
+                      letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.flow .check.on { background:#237a35; border-color:#237a35; animation:working 2s ease-out infinite; }
+.flow .check.on .label { color:#fff; }
+.flow .check.on::after { content:""; position:absolute; left:1px; right:1px; height:3px; border-radius:2px;
+                         background:#b2f2bb; animation:scan 1.1s ease-in-out infinite alternate; }
+.flow .parked-count { position:absolute; right:calc(100% + 3px); bottom:-1px; min-width:1rem; height:1rem;
+                      border-radius:999px; background:#c92a2a; color:#fff; font-size:.62rem; line-height:1rem;
+                      text-align:center; padding:0 .2rem; }
+.flow .detour { flex:none; position:relative; padding:calc(var(--row) + var(--drop)) .9rem 0; }
+.flow .detour::before { content:""; position:absolute; left:-.5rem; width:calc(1.4rem - 3px); top:var(--ch);
+                        height:calc(var(--row) + var(--drop) + var(--hh) / 2 - var(--ch));
+                        border-left:2px solid var(--line); border-bottom:2px solid var(--line);
+                        border-bottom-left-radius:7px; }
+.flow .detour::after { content:""; position:absolute; right:0; width:.9rem; top:calc(var(--row) / 2 - 1px);
+                       height:calc(var(--row) / 2 + var(--drop) + var(--hh) / 2);
+                       border-right:2px solid var(--line); border-bottom:2px solid var(--line);
+                       border-bottom-right-radius:7px; }
+.flow .human { position:relative; display:inline-flex; align-items:center; gap:.3rem; height:var(--hh); padding:0 .55rem;
+               border-radius:999px; border:1px dashed var(--line); background:var(--bg); color:var(--muted);
+               font-size:.74rem; font-weight:600; white-space:nowrap; text-decoration:none; }
+.flow .human::before { content:""; position:absolute; left:-6px; top:calc(50% - 4px);
+                       border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
+.flow .human svg { width:.85rem; height:.85rem; fill:none; stroke:currentColor; stroke-width:2.2;
+                   stroke-linecap:round; stroke-linejoin:round; }
+.flow .human.waiting { border-style:solid; border-color:var(--tone); background:var(--tint); color:var(--fg); }
+.flow .human .count { background:var(--tone); color:#fff; border-radius:999px; font-size:.68rem;
+                      line-height:1.05rem; padding:0 .38rem; }
+.flow .human.arrived { animation:arrived 1s ease-out 3; }
+.flow [hidden] { display:none; }
+.flow.off .step, .flow.off .check { opacity:.7; }
+.flow .now { margin-top:.45rem; }
+@keyframes scan { from { top:2px; } to { top:calc(100% - 5px); } }
+@keyframes arrived { from { box-shadow:0 0 0 0 var(--tone); } to { box-shadow:0 0 0 .5rem transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .flow .step.on, .flow .check.on, .flow .check.on::after, .flow .human.arrived, .status .dot.on { animation:none; }
+}
 .card[data-lab] { position:relative; padding-bottom:4rem;
                   background-image:linear-gradient(var(--rule), var(--rule));
                   background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
                   background-repeat:no-repeat; }
-.agents[data-lab] { position:relative; padding-top:3.7rem; }
 canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-rendering:pixelated; width:100%; }
 .card canvas.lab-stage { bottom:0; height:160px; }   /* tall enough for a bubble above the tallest researcher */
-.agents canvas.lab-stage { top:0; }
+.flow-track canvas.lab-stage { top:0; height:100%; }
 .switch { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; margin:0; font-size:1rem; cursor:pointer; }
 .switch input { appearance:none; -webkit-appearance:none; flex:none; width:2.6rem; height:1.5rem; padding:0; margin:0;
                 border-radius:999px; border:1px solid var(--muted); background:var(--rule); position:relative;
@@ -314,6 +363,9 @@ setInterval(showElapsed, 1000);
 # Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
 RESEARCHERS = '<script src="/assets/researchers.js" defer></script>'
 ASSETS = Path(__file__).parent / "assets"
+FLOW_JS = '<script src="/assets/flow.js" defer></script>'   # keeps the pipeline strip live
+ICON_PERSON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/>'
+               '<path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>')
 
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
@@ -338,13 +390,36 @@ def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     # Refresh itself when the loop changes something, unless the human is typing.
     script = f"""<script>
 let sig = "{signature()}";
-setInterval(async () => {{
+async function check() {{
   const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
             ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)
             || document.body.classList.contains("chat-open");
   if (busy || document.hidden) return;
-  try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig) location.reload(); }} catch (e) {{}}
-}}, 5000);
+  try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig && await refresh()) sig = s; }} catch (e) {{}}
+}}
+setInterval(check, 5000);
+window.checkPage = check;              // the strip calls this the moment its step changes
+// Swap in the fresh page without reloading, keeping the live pipeline strip (and anyone walking on it).
+async function refresh() {{
+  const res = await fetch(location.href);
+  if (!res.ok || res.redirected) {{ location.reload(); return false; }}
+  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+  const fresh = doc.querySelector("main"), main = document.querySelector("main");
+  if (!fresh || !main) {{ location.reload(); return false; }}
+  const open = new Set([...main.querySelectorAll("details[open] > summary")].map(e => e.textContent));
+  const next = document.importNode(fresh, true);
+  const keep = document.getElementById("flow"), slot = next.querySelector("#flow");
+  if (keep && slot && keep.dataset.shape === slot.dataset.shape) slot.replaceWith(keep);
+  next.querySelectorAll("details > summary").forEach(e => {{ if (open.has(e.textContent)) e.parentNode.open = true; }});
+  main.replaceChildren(...next.childNodes);
+  const status = doc.querySelector("nav.top .status"), shown = document.querySelector("nav.top .status");
+  if (status && shown) shown.replaceWith(document.importNode(status, true));
+  document.title = doc.title;
+  showElapsed();
+  if (window.Researchers) window.Researchers.rescan();
+  if (window.Flow) window.Flow.attach();
+  return true;
+}}
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -364,28 +439,101 @@ def flash(request: Request) -> str:
         return f'<div class="flash">{escape(MESSAGES[done])}</div>'
     return ""
 
-def agent_strip(now: dict | None) -> str:
-    """Every agent in pipeline order, with the one working this moment lit up."""
-    working = now["agent"] if now else None
-    chips = [f'<span class="agent on" aria-current="step">{name}</span>' if key == working
-             else f'<span class="agent">{name}</span>'
-             for key, name in activity.AGENTS.items()
-             if key == working or (key != "contacts" or settings.OUTREACH)
-             and (key != "1f916" or agents.f916_enabled())
-             and (key != "bluesky" or agents.bluesky_enabled())]
-    strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
+# The pipeline as the strip draws it, in runtime order: agents on the main track, each code check a
+# vertical block right after the agent it checks, and each human review a sidestep below, between the
+# check that leads to it and the agent that follows it. (key, kind, label on the strip)
+FLOW = [
+    ("finder", "agent", "Finder"),
+    ("sources", "agent", "Sources"),
+    ("contacts", "agent", "Contacts"),
+    ("brief", "agent", "Brief"),
+    ("source_check", "check", "check"),
+    ("brief_review", "human", "Review brief"),
+    ("writer", "agent", "Article"),
+    ("article_check", "check", "check"),
+    ("article_review", "human", "Review article"),
+    ("publisher", "agent", "Publish"),
+    ("1f916", "agent", "1F916"),
+    ("bluesky", "agent", "Bluesky"),
+]
+HUMAN_STEPS = {"brief_review": ("Brief review: you approve the brief or send it back", "review"),
+               "article_review": ("Article review: you publish the article or send it back", "publish")}
+CHECK_TITLE = ("{name}: code, no model. A failure goes back for another try; "
+               "after {n} tries the mission is parked for you")
+
+def flow_steps() -> list[tuple[str, str, str]]:
+    """The strip's steps for this setup: channels and outreach that are off are left out."""
+    on = {"contacts": settings.OUTREACH, "1f916": agents.f916_enabled(), "bluesky": agents.bluesky_enabled()}
+    return [s for s in FLOW if on.get(s[0], True)]
+
+def flow_state() -> dict:
+    """What the strip shows: the step working right now (if the loop runs), how many missions wait at
+    each human review, and how many each check has parked. /api/flow serves it to the page every few
+    seconds, with every mission's state, so the page can tell where a mission went when its step ends."""
+    running = loop_running()
+    now = activity.current() if running else None
+    missions = store.all_missions()
+    parked = [m for m in missions if m.state == State.PARKED]
+    writing = sum(orchestrator.parked_while_writing(m) for m in parked)
+    return {
+        "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
+        "step": now["agent"] if now else None, "slug": now["slug"] if now else None,
+        "since": float(now["since"]) if now else None,
+        "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
+                    "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
+        "parked": {"source_check": len(parked) - writing, "article_check": writing},
+        "states": {m.slug: m.state.value for m in missions},
+        "now": flow_status(now, running),
+    }
+
+def flow_status(now: dict | None, running: bool) -> str:
+    """The line under the strip: who is working on what, and for how long."""
     if now and not now["slug"]:            # the mission finder works for the desk, not one mission
-        status = (f'<strong>{activity.AGENTS[working]}</strong> is looking for new missions'
-                  f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
-    elif now:
+        return (f'<strong>{activity.AGENTS[now["agent"]]}</strong> is looking for new missions'
+                f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
+    if now:
         m = store.get_mission(now["slug"])
-        status = (f'<strong>{activity.AGENTS[working]}</strong> is working on '
-                  f'<a href="/m/{quote(now["slug"])}">{escape(m.topic if m else now["slug"])}</a>'
-                  f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
-    else:
-        status = "No agent is working right now."
-    stage = " data-lab" if working and settings.animations() else ""   # a pixel researcher walks on the lit pill
-    return f'<div class="agents"{stage}>{strip}</div><div class="now">{status}</div>'
+        return (f'<strong>{activity.AGENTS[now["agent"]]}</strong> is working on '
+                f'<a href="/m/{quote(now["slug"])}">{escape(m.topic if m else now["slug"])}</a>'
+                f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
+    return "No agent is working right now." if running else "Loop is off, so every step is idle."
+
+def flow_strip(state: dict) -> str:
+    """The pipeline strip. It is always drawn; with the loop off nothing on it is lit. assets/flow.js
+    keeps it current without reloading the page, and the pixel researchers live on its track."""
+    steps, lit = flow_steps(), state["step"]
+    if lit and lit not in {k for k, _, _ in steps}:
+        lit = None                         # a channel switched off mid-pass: nothing to light
+    parts, before = [], None
+    for key, kind, text in steps:
+        on = key == lit
+        cur = ' aria-current="step"' if on else ""
+        if kind == "agent":
+            if before in ("agent", "check", "human"):
+                parts.append('<span class="join" aria-hidden="true"></span>')
+            parts.append(f'<span class="step{" on" if on else ""}" data-step="{key}" '
+                         f'title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
+        elif kind == "check":
+            parts.append('<span class="join short" aria-hidden="true"></span>')
+            n = state["parked"].get(key, 0)
+            title = CHECK_TITLE.format(name=activity.AGENTS[key], n=Mission.model_fields["max_attempts"].default)
+            parts.append(f'<span class="check{" on" if on else ""}" data-step="{key}" title="{escape(title)}"{cur}>'
+                         f'<span class="label">{text}</span>'
+                         f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
+        else:
+            title, tone_ = HUMAN_STEPS[key]
+            n = state["waiting"].get(key, 0)
+            parts.append(f'<span class="detour"><a class="human {tone_}{" waiting" if n else ""}" href="/#needs-you" '
+                         f'data-step="{key}" title="{escape(title)}">{ICON_PERSON}{text}'
+                         f'<b class="count"{"" if n else " hidden"}>{n}</b></a></span>')
+        before = kind
+    lab = " data-lab" if settings.animations() else ""
+    attrs = (f'data-shape="{",".join(k for k, _, _ in steps)}" data-step="{lit or ""}" '
+             f'data-slug="{escape(state["slug"] or "", quote=True)}"')
+    off = "" if state["running"] else " off"
+    return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
+            f'<div class="flow-scroll"><div class="flow-track"{lab}>{"".join(parts)}</div></div>'
+            f'<div class="now" aria-live="polite">{state["now"]}</div></section>')
 
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
@@ -403,8 +551,8 @@ def loop_panel(back: str) -> str:
         controls = (f'<form method="post" action="/loop/start"><input type="hidden" name="back" value="{back}">'
                     f'<span class="hint">every</span><input type="number" name="every" value="5" min="1" step="1">'
                     f'<span class="hint">min</span><button class="primary">Start loop</button></form>')
-    strip = agent_strip(running_now()) if running else ""
-    return f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}{strip}</div>'
+    return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
+            f'{flow_strip(flow_state())}</div>{FLOW_JS}')
 
 def finder_panel() -> str:
     line = store.get_inspiration()
@@ -670,7 +818,8 @@ async def home(request: Request) -> HTMLResponse:
         body.append('<p class="muted">No missions yet. Add one below.</p>')
     for title, ms in groups:
         if ms:
-            body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
+            anchor = ' id="needs-you"' if title == "Needs you" else ""
+            body.append(f'<h2 class="group"{anchor}>{title} ({len(ms)})</h2>')
             if title == "Published":
                 body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
@@ -898,7 +1047,8 @@ CHAT_JS = """<script>
   form.addEventListener("submit", e => { e.preventDefault(); ask(box.value); });
   box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(box.value); } });
   suggest.querySelectorAll("button").forEach(b => b.addEventListener("click", () => ask(b.textContent)));
-  document.querySelectorAll("[data-ask]").forEach(b => b.addEventListener("click", () => ask(b.dataset.ask)));
+  // one listener for every "Ask the assistant" button, so ones swapped in by a page refresh work too
+  document.addEventListener("click", e => { const b = e.target.closest("[data-ask]"); if (b) ask(b.dataset.ask); });
   redraw();
   if (store("chat-open")) setOpen(true);
 })();
@@ -948,6 +1098,9 @@ async def chat_ask(request: Request) -> Response:
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
+
+async def api_flow(request: Request) -> JSONResponse:
+    return JSONResponse(flow_state())
 
 # ---------- actions (POST, then redirect back) ----------
 
@@ -1123,6 +1276,7 @@ app = Starlette(routes=[
     Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
+    Route("/api/flow", api_flow),
     Mount("/assets", StaticFiles(directory=ASSETS)),
     Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),
 ])
