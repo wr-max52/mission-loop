@@ -163,6 +163,7 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
     try:
         async with asyncio.timeout(time_limit) as limit:
             while calls < budget and not stopping.requested():
+                messages = llm.compact(messages, llm.TURN_TOKENS)   # kept cut, so the next turns reuse Ollama's cache
                 try:
                     msg = await llm.chat(messages, tools=tb.tools, model=llm.model_for("assistant"))
                 except llm.Cut:
@@ -176,8 +177,10 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                 if not msg.tool_calls:
                     break
                 for tc in msg.tool_calls:
-                    if calls >= budget:
-                        break
+                    if calls >= budget:    # every call gets an answer, or some chat templates break
+                        messages.append({"role": "tool", "tool_name": tc.function.name,
+                                         "content": "Not run: the tool budget is used up."})
+                        continue
                     calls += 1
                     result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
                     trail.record("tool_result", f"{tc.function.name}: {result}")
@@ -207,8 +210,29 @@ async def find_contacts(m: Mission, tb) -> list[POC]:
     return good
 
 def _plain(msg) -> dict:
-    """A transcript message as plain JSON, so it can be saved between the two steps."""
-    return msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
+    """A transcript message as plain JSON, so it can be saved between the two steps. The small model's
+    thinking is left out: the brief writer only needs what it did and what it found."""
+    out = msg.model_dump(exclude_none=True) if hasattr(msg, "model_dump") else dict(msg)
+    out.pop("thinking", None)
+    return out
+
+FAILED = ("ERROR", "CANNOT CITE", "Not run:")
+
+def _for_brief(messages: list) -> list:
+    """The gathered transcript, trimmed for the brief writer: failed tool calls shrink to their first
+    line and a result already shown earlier is not shown again, which leaves more room for real pages."""
+    out, seen = [], set()
+    for m in messages:
+        m = {k: v for k, v in m.items() if k != "thinking"}   # evidence saved before thinking was dropped
+        text = m.get("content") or ""
+        if m.get("role") == "tool":
+            if text.startswith(FAILED):
+                m["content"] = text.splitlines()[0][:200]
+            elif text in seen:
+                m["content"] = "(same result as an earlier call)"
+            seen.add(text)
+        out.append(m)
+    return out
 
 async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox) -> Evidence:
     """The Research Assistant's step: search and read until done, out of budget or time, or stopped."""
@@ -227,7 +251,7 @@ async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox) -> Evidence:
 async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
     """The Principal Investigator's step: write the brief from the gathered transcript."""
     activity.begin(m.slug, "brief")
-    messages = list(evidence.messages)
+    messages = _for_brief(evidence.messages)
     if evidence.pocs is not None:
         messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
                          + Contacts(contacts=evidence.pocs).model_dump_json()})
@@ -257,7 +281,7 @@ async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
                 raise stopping.Interrupted(stopping.salvage(msg.content, ResearchBrief))
             error = e
             messages.append({"role": "assistant", "content": msg.content})
-            messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})
+            messages.append({"role": "user", "content": llm.invalid(e)})
     raise ResearchFailed(f"model could not produce a valid brief: {error}")
 
 async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:

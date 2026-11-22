@@ -53,6 +53,11 @@ def _comments(records: list[OutreachRecord]) -> str:
 def _notes(m: Mission) -> str:
     if not m.validator_notes:
         return ""
+    failed = m.rejected_article
+    if failed and failed.notes == m.validator_notes:   # the check's notes point at paragraphs of this draft
+        return (f"\nYour previous draft failed the article check. Revise it instead of starting over: keep what "
+                f"works and fix every problem listed after it.\n{failed.article.model_dump_json()}\n"
+                f"Problems:\n{m.validator_notes}\n")
     return f"\nYour previous draft was rejected. Fix every problem below:\n{m.validator_notes}\n"
 
 def prompt(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> str:
@@ -82,7 +87,7 @@ async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRec
                 raise stopping.Interrupted(stopping.salvage(msg.content, Article))
             error = e
             messages.append({"role": "assistant", "content": msg.content})
-            messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})
+            messages.append({"role": "user", "content": llm.invalid(e)})
     raise WritingFailed(f"model could not produce a valid article: {error}")
 
 def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Article:
