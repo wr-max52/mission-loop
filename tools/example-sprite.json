@@ -6,7 +6,7 @@
   "shirt": "#b197fc",
   "prop": null,
   "maps": [
-    { "layer": "head", "at": [-4, 12], "rows": [".h.....h.", "hrh...hrh", "hhh...hhh"], "pal": { "r": "#ffb3c7" } },
+    { "layer": "head", "at": [-4, 14], "rows": [".h.....h.", "hrh...hrh", "hhh...hhh"], "pal": { "r": "#ffb3c7" } },
     { "layer": "back", "at": [-10, 1], "fps": 3,
       "frames": [["hh..", ".hh.", "..hh"], ["..hh", ".hh.", "hh.."]] }
   ],

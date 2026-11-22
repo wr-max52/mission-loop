@@ -66,10 +66,23 @@ function weighted(r, table) {
   for (const k in table) if ((x -= table[k]) < 0) return k;
   return Object.keys(table)[0];
 }
+const rgb = hex => { const n = parseInt(hex.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const hexOf = c => "#" + ((1 << 24) | (Math.round(clamp(c[0], 0, 255)) << 16) | (Math.round(clamp(c[1], 0, 255)) << 8) | Math.round(clamp(c[2], 0, 255))).toString(16).slice(1);
+function mix(a, b, t) { const x = rgb(a), y = rgb(b); return hexOf(x.map((v, i) => v + (y[i] - v) * t)); }
+const lum = hex => { const c = rgb(hex); return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]; };
+// Darker (f < 1) or lighter (f > 1), the way pixel art shades: shadows lean cool and violet, lights lean warm.
+const COOL = [38, 28, 78], WARM = [255, 240, 205];
 function shade(hex, f) {
-  const n = parseInt(hex.slice(1), 16);
-  const ch = v => Math.round(clamp(f < 1 ? v * f : v + (255 - v) * (f - 1), 0, 255));
-  return "#" + ((1 << 24) | (ch(n >> 16) << 16) | (ch((n >> 8) & 255) << 8) | ch(n & 255)).toString(16).slice(1);
+  const c = rgb(hex), k = f < 1 ? (1 - f) * 0.3 : Math.min(0.3, (f - 1) * 0.3), to = f < 1 ? COOL : WARM;
+  return hexOf(c.map((v, i) => { const s = f < 1 ? v * f : v + (255 - v) * (f - 1); return s + (to[i] - s) * k; }));
+}
+// A soft line: the dark of a part's own color, for the lines inside the figure (an arm across the chest, one leg
+// in front of the other). Where one ends up on the silhouette, the outline pass turns it to ink like the rest.
+const SOFT = new Set(), softOf = new Map();
+function soft(c) {
+  let s = softOf.get(c);
+  if (!s) { s = mix(shade(c, 0.62), INK, 0.42); softOf.set(c, s); SOFT.add(parseInt(s.slice(1), 16)); }
+  return s;
 }
 function shuffle(list, r = Math.random) {
   const a = list.slice();
@@ -88,7 +101,7 @@ const INK = "#1d1b22", MOUTH = "#7a3434", WHITE = "#ffffff", BLUSH = "#ff8f9e";
 const SKIN = ["#ffe1c6", "#f5cba3", "#e8b38a", "#d49a6a", "#b97c4e", "#9a6038", "#7a4628", "#58321d"];
 const BOOKS = ["#b33939", "#227093", "#218c74", "#cc8e35", "#6d214f", "#40407a"];
 const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", "#a3a3a3"];
-const IRIS = ["#3b2a20", "#2f3f63", "#35502f", "#4a2f1d"];
+const IRIS = ["#6b3d22", "#2f5fa8", "#2f7d4f", "#7a5a22", "#4a3a7a", "#3b2a20"];
 
 // Each character keeps their look (outfit, hair, headwear, signature prop) and their attitude (`brow` and
 // `mouth` are their resting expression, `quirk` their own little habit); height, build and some colors vary
@@ -117,7 +130,7 @@ const ROSTER = {
   david:  { worker: "pi", name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit", brow: "stern", mouth: "smirk",
             top: ["#22346b", "#2b2e38", "#3b3f48"], tie: ["#e8e8e8", "#c0392b", "#d4a017"], shoes: ["#2b2b30"],
             prop: ["briefcase", "tablet"], fav: { citation: 2, papers: 2, notes: 1.5 } },
-  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", outfit: "overalls", rolled: true,
+  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "tousled", outfit: "overalls", rolled: true,
             pencil: true, grin: true, shirt: ["#b5473a", "#5f7f6b", "#e8e4da", "#8a6f9e"], pants: ["#3f5f8a", "#4a6f9e"],
             shoes: ["#6b3e26"], prop: null, fav: { dig: 3.5, search: 1.5, telescope: 1 } },
   hanna:  { worker: "assistant", name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
@@ -149,30 +162,46 @@ const crewOf = worker => {                        // a crew never ends up empty:
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
   const one = v => (Array.isArray(v) ? pick(r, v) : v);
-  const a = { kind, seed, name: t.name, fav: t.fav || {} };
+  const a = { kind, seed, name: t.name, fav: t.fav || {}, worker: t.worker };
   a.skin = SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)];
-  a.skinD = shade(a.skin, 0.82);
-  a.hair = one(t.hair) || "#17110e"; a.hairD = shade(a.hair, 0.72); a.hairL = shade(a.hair, 1.28);
+  const deep = lum(a.skin) < 125;                                // darker skin: warmer shade, eyes that still read
+  a.skinD = mix(shade(a.skin, 0.84), "#8a2f3c", 0.14); a.skinL = mix(a.skin, "#fff3dc", deep ? 0.3 : 0.45);
+  a.cheek = mix(a.skin, "#ff5a6e", deep ? 0.2 : 0.28);
+  a.hair = one(t.hair) || "#17110e";
+  const dark = lum(a.hair) < 48;                                 // black hair shines blue, the manga way
+  a.hairD = dark ? shade(a.hair, 0.55) : shade(a.hair, 0.7); a.hairL = dark ? mix(a.hair, "#7f95d6", 0.42) : shade(a.hair, 1.32);
   a.style = t.style || "short"; a.head = t.head || null; a.face = t.face || null; a.facial = one(t.facial) || null;
   a.eye = pick(r, IRIS); a.lash = !!t.lash; a.lids = !!t.lids; a.bushy = !!t.bushy; a.ahoge = !!t.ahoge;
+  if (deep) a.eye = "#3a2114";                                   // dark eyes read best on dark skin
+  a.eyeD = mix(a.eye, INK, deep ? 0.75 : 0.5); a.eyeW = deep ? a.skinL : "#ffffff"; a.lashC = INK;
   a.brow = t.brow || "flat"; a.mouth = t.mouth || "none"; a.grin = !!t.grin;
-  a.browC = a.bushy ? a.hair : shade(a.hair, 0.6);
   a.freckles = !!t.freckles; a.pencil = !!t.pencil; a.frame = one(t.frame) || INK;
+  a.rosy = a.worker !== "pi" || !!t.lash;                        // the young ones, and anyone with lashes, get rosy cheeks
+  a.nose = !!a.facial;                                           // a mustache needs a nose to sit under
   a.outfit = t.outfit;
   a.top = one(t.top) || "#7d8691"; a.topD = shade(a.top, 0.78);
   a.shirt = one(t.shirt) || "#e8e4da"; a.shirtD = shade(a.shirt, 0.82);
-  a.coat = a.outfit === "labcoat" ? "#f4f4f0" : a.top; a.coatD = shade(a.coat, 0.82);
+  a.coat = a.outfit === "labcoat" ? "#f6f5f0" : a.top; a.coatD = a.outfit === "labcoat" ? "#cfd3e0" : shade(a.coat, 0.82);
   a.pants = a.outfit === "suit" ? a.top : one(t.pants) || "#3a3a40"; a.pantsD = shade(a.pants, 0.75);
-  a.shoes = one(t.shoes) || "#2b2b30"; a.shoesD = shade(a.shoes, 0.75);
+  a.shoes = one(t.shoes) || "#2b2b30"; a.shoesD = shade(a.shoes, 0.75); a.sneaker = lum(a.shoes) > 170;
   a.legsStyle = t.legs || "pants"; a.skirt = one(t.skirt) || "#2f3640";
   a.pack = one(t.pack) || null;
   a.tie = one(t.tie) || null; a.bow = one(t.bow) || null;
   a.hijab = one(t.hijab) || "#1f3a5f"; a.hijabD = shade(a.hijab, 0.72); a.hijabL = shade(a.hijab, 1.45);
+  a.veilPal = { j: a.hijab, J: a.hijabD, L: a.hijabL, u: mix(a.hijab, "#ffffff", 0.72), g: "#e9c46a" };
   a.cap = one(t.cap) || "#2f3640"; a.beanie = one(t.beanie) || "#5d6b55"; a.pom = one(t.pom) || "#f4efe6";
+  a.hairPal = { f: mix(a.hair, a.skin, 0.55) };                  // a fade: hair thinning into skin
+  // Brows sit on the skin, or over whatever comes down to them (bangs, a hat's edge) in a color that shows on it.
+  const over = { cap: a.cap, beanie: a.beanie, hardhat: "#e0a800", deerstalker: "#75512f", propeller: "#c79d0a" }[a.head] || a.hair;
+  a.fringe = a.head ? 10 : { bob: 8, receding: 13, bigcurly: 9 }[a.style] || 9;
+  a.browC = a.bushy ? a.hairL : mix(shade(a.hair, 0.6), a.skin, a.lash ? 0.4 : 0.22);
+  if (Math.abs(lum(a.browC) - lum(a.skin)) < 45) a.browC = deep ? "#120c0c" : shade(a.skin, 0.45);
+  a.browHi = lum(over) < 42 ? mix(over, "#ffffff", 0.32) : shade(over, 0.5);
   a.prop = one(t.prop) || null;
   a.sleeve = { labcoat: a.coat, suit: a.top, hoodie: a.top, sweater: a.top, cardigan: a.top, jacket: a.top,
                abaya: a.top, trench: a.top, vest: a.shirt, overalls: a.shirt, tshirt: a.top }[a.outfit] || a.top;
-  a.sleeveD = shade(a.sleeve, 0.78);
+  a.sleeveD = a.outfit === "labcoat" ? a.coatD : shade(a.sleeve, 0.78);
+  a.cuff = a.outfit === "suit" ? "#f6f6f6" : a.outfit === "abaya" ? a.hijab : null;   // a line of shirt cuff, a trimmed sleeve
   a.rolled = !!t.rolled;
   a.short = a.outfit === "tshirt" || a.rolled; // bare forearms
   a.legs = 12 + Math.floor(r() * 7);          // 12..18 px: short to lanky
@@ -200,23 +229,45 @@ function painter(g, ox, oy, face) {
     g.fillRect(ox + (face > 0 ? x : -(x + w - 1)), oy - y - h + 1, w, h);
   };
 }
-const box = (P, x, y, w, h, c) => { P(x - 1, y - 1, w + 2, h + 2, INK); P(x, y, w, h, c); };
+const box = (P, x, y, w, h, c, ink = INK) => { P(x - 1, y - 1, w + 2, h + 2, ink); P(x, y, w, h, c); };
+// The same, with the corners of its line left off, so small things (a hand, a shoe) read as round.
+const pill = (P, x, y, w, h, c, ink = INK) => { P(x - 1, y, w + 2, h, ink); P(x, y - 1, w, h + 2, ink); P(x, y, w, h, c); };
 
-// A thick straight limb from (x0, y0) to (x1, y1), w pixels wide, with its own dark outline so it reads
-// against whatever is behind it.
+// A thick straight limb from (x0, y0) to (x1, y1), w pixels wide, with its own line round it so it reads
+// against whatever is behind it. The line is dark ink, or a soft line (see `soft`) for the body's own parts.
 function limb(P, x0, y0, x1, y1, w, c, ink = true) {
   const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1), o = Math.floor((w - 1) / 2), pts = [];
   for (let i = 0; i <= n; i++) pts.push([Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n)]);
-  if (ink) for (const [x, y] of pts) P(x - o - 1, y - o - 1, w + 2, w + 2, INK);
+  const line = ink === true ? INK : ink;
+  if (line) for (const [x, y] of pts) { P(x - o - 1, y - o, w + 2, w, line); P(x - o, y - o - 1, w, w + 2, line); }
   for (const [x, y] of pts) P(x - o, y - o, w, w, c);
 }
 
+// A picture in letters, rows top to bottom, its top-left pixel at (x0, yTop). Letters are the color slots a
+// custom map uses (SLOTS: h hair, H its shade, l its light, s skin, ...) or come from `pal`. Runs of one
+// letter are painted as one rectangle.
+function art(P, a, rows, x0, yTop, pal) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    for (let j = 0; j < row.length; j++) {
+      const ch = row[j];
+      if (ch === ".") continue;
+      let n = 1;
+      while (j + n < row.length && row[j + n] === ch) n++;
+      P(x0 + j, yTop - i, n, 1, slotColor(a, ch, pal));
+      j += n - 1;
+    }
+  }
+}
+
 function drawLeg(P, a, cx, off, lift, L, back) {
-  const lf = lift ? 2 : 0, foot = cx - 1 + off, sc = back ? a.shoesD : a.shoes;
-  limb(P, cx, L - 2, cx + off, lf + 4, 4, back ? a.pantsD : a.pants);
-  box(P, foot, lf + 1, 5, 2, sc);
-  P(foot, lf + 1, 5, 1, shade(sc, 0.72));                 // sole
-  P(foot + 3, lf + 2, 1, 1, shade(sc, 1.4));              // a shine on the toe
+  const lf = lift ? 2 : 0, foot = cx - 1 + off, sc = back ? a.shoesD : a.shoes, line = soft(a.shoes);
+  limb(P, cx, L - 2, cx + off, lf + 4, 4, back ? a.pantsD : a.pants, soft(a.pants));
+  if (!back && a.legsStyle !== "skirt") P(cx + off - 1, lf + 4, 4, 1, a.pantsD);   // the hem over the shoe
+  P(foot - 1, lf, 7, 3, line); P(foot - 1, lf + 3, 6, 1, line);                    // a shoe with a rounded toe
+  P(foot, lf + 2, 5, 1, sc); P(foot, lf + 1, 5, 1, a.sneaker ? (back ? "#c9ccd4" : "#ffffff") : shade(sc, 0.66));
+  if (a.sneaker) P(foot + 1, lf + 2, 2, 1, shade(sc, 0.8));                        // laces side
+  else P(foot + 3, lf + 2, 1, 1, shade(sc, 1.45));                                 // a shine on the toe
 }
 
 function drawArm(P, a, spec, g, back) {
@@ -234,346 +285,562 @@ function drawArm(P, a, spec, g, back) {
     case "face":    elbow = [ax + 2, sy - 4]; hand = [ax + 3 + v, g.head + 6]; break;   // a hand up at the glasses
     default:        elbow = [ax + Math.round(v / 2), sy - 6]; hand = [ax + v, sy - a.torso + 3];
   }
-  const sleeve = back ? a.sleeveD : a.sleeve, skin = back ? a.skinD : a.skin;
-  limb(P, ax, sy, elbow[0], elbow[1], 3, sleeve);
-  limb(P, elbow[0], elbow[1], hand[0], hand[1], 3, a.short ? skin : sleeve);
-  if (a.rolled) P(elbow[0] - 1, elbow[1] - 1, 3, 3, shade(sleeve, 1.14));   // the rolled-up cuff
-  else if (!a.short) P(hand[0] - 1, hand[1] - 1, 3, 1, shade(sleeve, 0.85)); // cuff
-  box(P, hand[0] - 1, hand[1] - 1, 3, 3, skin);
+  const sleeve = back ? a.sleeveD : a.sleeve, skin = back ? a.skinD : a.skin, line = soft(a.sleeve), bare = soft(a.skin);
+  limb(P, ax, sy, elbow[0], elbow[1], 3, sleeve, line);
+  limb(P, elbow[0], elbow[1], hand[0], hand[1], 3, a.short ? skin : sleeve, a.short ? bare : line);
+  if (a.rolled) P(elbow[0] - 1, elbow[1] - 1, 3, 3, shade(sleeve, 1.16));       // the rolled-up cuff
+  else if (a.short) P(elbow[0] - 1, elbow[1], 3, 1, shade(sleeve, 0.8));          // a short sleeve's hem
+  pill(P, hand[0] - 1, hand[1] - 1, 3, 3, skin, bare);
+  if (!a.short) {                                                                  // a cuff where the sleeve ends
+    const dx = Math.sign(hand[0] - elbow[0]), dy = Math.sign(hand[1] - elbow[1]);
+    const cuff = a.cuff || shade(sleeve, 0.82);
+    if (Math.abs(hand[1] - elbow[1]) >= Math.abs(hand[0] - elbow[0])) P(hand[0] - 1, hand[1] - 2 * dy, 3, 1, cuff);
+    else P(hand[0] - 2 * dx, hand[1] - 1, 1, 3, cuff);
+  }
+  if (!back) P(hand[0] - 1, hand[1] - 1, 2, 1, a.skinD);                           // fingers curl under
   return hand;
 }
 
 function drawTorso(P, a, g) {
   const { tl, tr, hip, sh } = g, W = tr - tl + 1, T = sh - hip + 1;
-  const plain = (c, cd) => { box(P, tl, hip, W, T, c); P(tl, hip, 2, T, cd); };
-  const strap = () => { if (a.pack) P(tr - 3, hip + 2, 1, T - 2, shade(a.pack, 0.85)); };   // the backpack strap over the shoulder
+  // The body of a garment `drop` pixels longer than the hips: the far side in shade, a soft line where it meets
+  // the far arm and the legs. The silhouette pass draws the dark outline, so nothing here is boxed in ink.
+  const shell = (c, drop = 0, cd = shade(c, 0.8)) => {
+    const b = hip - drop, line = soft(c);
+    P(tl, b - 1, W, 1, line);
+    P(tl, b, W, sh - b, c); P(tl + 1, sh, W - 2, 1, c);
+    P(tl + 1, b, 2, sh - b + 1, cd); P(tl, b, 1, sh - b, line);
+    P(tl + 3, b, W - 3, 1, cd);                                   // the hem
+    return b;
+  };
+  // The chest is drawn a pixel back from the middle: the front arm hides the front edge of the torso.
+  // An open collar: `col` shows in a V that narrows over `depth` rows, edged with `edge` (lapels).
+  const vneck = (col, depth, edge) => {
+    for (let i = 0; i < depth; i++) {
+      const w = Math.max(0, 2 - (i >> 1));
+      P(-w - 1, sh - i, 2 * w + 1, 1, col);
+      if (edge) { P(-w - 2, sh - i, 1, 1, edge); P(w, sh - i, 1, 1, edge); }
+    }
+  };
+  const tie = (c, len) => { P(-1, sh - len, 1, len, c); P(-2, sh - 1, 3, 1, c); P(-1, sh - 1, 1, 1, shade(c, 0.72)); P(-1, sh - 3, 1, 1, shade(c, 1.25)); };
+  const strap = () => { if (a.pack) { P(tr - 4, hip + 2, 2, T - 2, shade(a.pack, 0.9)); P(tr - 4, hip + 2, 1, T - 2, shade(a.pack, 0.68)); P(tr - 4, sh - 4, 2, 1, "#d8b36a"); } };
   switch (a.outfit) {
-    case "labcoat":
-      P(tl - 1, hip - 6, W + 2, T + 7, INK);
-      P(tl, hip - 5, W, T + 5, a.coat); P(tl, hip - 5, 2, T + 5, a.coatD);
-      P(0, hip - 5, 1, 6, INK);                                   // coat tails part
-      P(-1, hip + 2, 3, T - 4, a.shirt); P(-2, sh - 2, 5, 3, a.shirt);
-      if (a.tie) { P(0, hip + 3, 1, T - 4, a.tie); P(-1, sh - 2, 3, 1, a.tie); }
-      P(-2, hip + 2, 1, T - 4, a.coatD); P(2, hip + 2, 1, T - 4, a.coatD);
-      P(-3, sh - 1, 1, 2, a.coatD); P(3, sh - 1, 1, 2, a.coatD);  // collar points
-      P(tr - 4, hip + 2, 3, 1, a.coatD); P(tr - 3, hip + 3, 1, 2, "#2e6fd8"); P(tr - 2, hip + 3, 1, 1, "#e03131");   // pens in the pocket
-      if (a.bow) { P(-3, sh - 2, 2, 3, a.bow); P(2, sh - 2, 2, 3, a.bow); P(-1, sh - 1, 3, 1, shade(a.bow, 0.75)); P(-3, sh, 1, 1, shade(a.bow, 1.3)); }
+    case "labcoat": {
+      const c = a.coat, cd = a.coatD, b = shell(c, 5, cd), line = soft(c);
+      P(0 - 1, b, 1, 5, line); P(1 - 1, b, 1, 1, a.pantsD);               // the coat parts over the knees
+      P(0 - 1, hip + 1, 1, T - 6, cd);                                // buttoned up the middle
+      P(1 - 1, hip + 1, 1, 1, "#9aa3b2"); P(1 - 1, hip + 4, 1, 1, "#9aa3b2");
+      vneck(a.shirt, 6, cd);
+      P(-2 - 1, sh, 1, 1, shade(a.shirt, 1.25)); P(2 - 1, sh, 1, 1, shade(a.shirt, 1.25));   // collar points
+      if (a.tie) tie(a.tie, 5);
+      if (a.bow) {                                                // a proper bow tie: two wings and a knot
+        const w = a.bow;
+        P(-3 - 1, sh - 2, 2, 3, w); P(2 - 1, sh - 2, 2, 3, w); P(-1 - 1, sh - 1, 3, 1, w);
+        P(0 - 1, sh - 1, 1, 1, shade(w, 0.62)); P(-3 - 1, sh, 1, 1, shade(w, 1.35)); P(2 - 1, sh, 1, 1, shade(w, 1.35));
+        P(-3 - 1, sh - 2, 1, 1, shade(w, 0.72)); P(3 - 1, sh - 2, 1, 1, shade(w, 0.72));
+      }
+      P(-5 - 1, sh - 5, 3, 1, cd); P(-5 - 1, sh - 4, 1, 2, "#2e6fd8"); P(-4 - 1, sh - 4, 1, 1, "#e03131");   // pens in the breast pocket
+      P(-5 - 1, hip - 2, 3, 1, cd);                                   // a hip pocket
+      P(tl + 3, sh - 1, 1, 1, shade(c, 1.2));
       break;
-    case "suit":
-      P(tl - 1, hip - 3, W + 2, T + 4, INK);
-      P(tl, hip - 2, W, T + 2, a.top); P(tl, hip - 2, 2, T + 2, a.topD);
-      P(-1, sh - 5, 3, 6, "#f2f2f2"); P(-2, sh - 1, 5, 2, "#f2f2f2");
-      P(0, sh - 6, 1, 6, a.tie || "#c0392b"); P(-1, sh - 1, 3, 1, a.tie || "#c0392b");
-      P(-2, sh - 6, 1, 5, a.topD); P(2, sh - 6, 1, 5, a.topD); P(1, hip + 2, 1, 1, a.topD); P(1, hip + 5, 1, 1, a.topD);
-      P(-3, sh - 3, 1, 2, shade(a.top, 1.25)); P(3, sh - 3, 1, 2, shade(a.top, 1.25));   // lapel edges catch the light
-      P(tr - 3, sh - 3, 2, 1, a.tie === "#e8e8e8" ? "#c0392b" : "#f2f2f2");                // pocket square
+    }
+    case "suit": {
+      const c = a.top, cd = a.topD, cl = shade(c, 1.28), b = shell(c, 2, cd);
+      P(0 - 1, b, 1, 2, soft(c));                                     // the vent
+      P(0 - 1, hip + 1, 1, T - 7, cd); P(1 - 1, hip + 2, 1, 1, cl); P(1 - 1, hip, 1, 1, cl);   // two buttons
+      vneck("#f6f6f6", 7, cd);
+      P(-3 - 1, sh - 1, 1, 2, cl); P(3 - 1, sh - 1, 1, 2, cl); P(-2 - 1, sh - 3, 1, 2, cl); P(2 - 1, sh - 3, 1, 2, cl);   // lapels catch the light
+      P(-4 - 1, sh, 1, 1, cd); P(4 - 1, sh - 2, 1, 1, cd);                // and their notches
+      tie(a.tie || "#c0392b", 6);
+      P(-2 - 1, sh, 1, 1, "#ffffff"); P(2 - 1, sh, 1, 1, "#ffffff");
+      P(-5 - 1, sh - 4, 2, 1, a.tie === "#e8e8e8" ? "#c0392b" : "#f6f6f6"); P(-5 - 1, sh - 5, 2, 1, cd);   // pocket square
       break;
-    case "hoodie":
-      plain(a.top, a.topD);
-      P(-3, hip + 1, 7, 3, a.topD); P(-2, hip + 2, 5, 1, shade(a.top, 0.7));
-      P(-1, sh - 5, 1, 5, "#eeeeee"); P(2, sh - 4, 1, 4, "#eeeeee"); P(-1, sh - 6, 1, 1, "#c8ccd2"); P(2, sh - 5, 1, 1, "#c8ccd2");
-      P(tl, hip, W, 1, a.topD);
+    }
+    case "hoodie": {
+      const c = a.top, cd = a.topD, cl = shade(c, 1.2);
+      shell(c, 0, cd);
+      P(tl + 1, hip, W - 1, 2, cd); for (let x = tl + 2; x < tr; x += 2) P(x - 1, hip, 1, 2, shade(c, 0.68));   // ribbed hem
+      P(-4 - 1, hip + 3, 8, 3, cd); P(-4 - 1, hip + 5, 1, 1, c); P(3 - 1, hip + 5, 1, 1, c); P(-3 - 1, hip + 3, 6, 1, shade(c, 0.68));   // kangaroo pocket
+      P(-3 - 1, sh, 7, 1, cd); P(-2 - 1, sh - 1, 5, 1, cd); P(-1 - 1, sh, 3, 1, shade(c, 0.62));   // the hood's opening round the neck
+      P(-1 - 1, sh - 5, 1, 4, "#f1f1f1"); P(2 - 1, sh - 4, 1, 3, "#f1f1f1"); P(-1 - 1, sh - 6, 1, 1, "#aab0ba"); P(2 - 1, sh - 5, 1, 1, "#aab0ba");   // drawstrings
+      P(tl + 3, sh - 2, 1, 2, cl);
       break;
-    case "cardigan":
-      box(P, tl, hip - 1, W, T + 1, a.top); P(tl, hip - 1, 2, T + 1, a.topD);
-      P(-1, hip + 1, 3, T - 1, a.shirt); P(-2, sh - 1, 5, 2, a.shirt);
-      P(2, hip + 2, 1, 1, a.topD); P(2, hip + 5, 1, 1, a.topD); P(2, hip + 8, 1, 1, a.topD);
-      P(tr - 3, hip + 1, 3, 2, a.topD);                            // a pocket
-      P(-2, sh - 3, 1, 1, "#d4a017"); P(-3, sh - 3, 1, 1, "#e9c46a");   // a little brooch
+    }
+    case "cardigan": {
+      const c = a.top, cd = a.topD, b = shell(c, 1, cd), gold = "#e0b64a";
+      P(-1 - 1, b, 3, sh - b, a.shirt); P(-2 - 1, sh - 2, 5, 3, a.shirt); P(-1 - 1, b, 1, sh - b - 2, a.shirtD);   // the blouse
+      P(-2 - 1, b, 1, sh - b - 2, cd); P(2 - 1, b, 1, sh - b - 2, cd); P(-3 - 1, sh - 2, 1, 2, cd); P(3 - 1, sh - 2, 1, 2, cd);   // the knit's edges
+      for (let y = hip + 1; y < sh - 3; y += 3) P(2 - 1, y, 1, 1, gold);                 // buttons
+      P(-5 - 1, hip, 3, 1, cd); P(-5 - 1, hip + 1, 3, 1, shade(c, 1.15));                    // a pocket
+      for (let x = tl + 3; x <= tr; x += 2) if (Math.abs(x) > 2) P(x - 1, b, 1, 1, shade(c, 0.66));   // ribbing at the hem
+      P(-1 - 1, sh, 3, 1, "#f3ead8"); P(0 - 1, sh - 1, 1, 1, "#f3ead8");                     // a string of pearls
+      P(-4 - 1, sh - 3, 1, 1, gold); P(-5 - 1, sh - 3, 1, 1, "#f6dc8c"); P(-4 - 1, sh - 4, 1, 1, "#c2543c");   // a little brooch
       break;
-    case "vest":
-      plain(a.shirt, a.shirtD);
-      P(tl + 1, hip, W - 2, T - 2, "#ff8a1a"); P(-1, hip, 2, T - 2, "#e5741a");
-      P(tl + 1, hip + 3, W - 2, 2, "#ffe14d"); P(-4, hip + 5, 2, T - 7, "#ffe14d"); P(2, hip + 5, 2, T - 7, "#ffe14d");
+    }
+    case "vest": {
+      shell(a.shirt, 0, a.shirtD);
+      P(tl + 1, hip, W - 2, T - 2, "#ff8a1a"); P(tl + 1, hip, 2, T - 2, "#e5741a"); P(0 - 1, hip, 1, T - 2, "#c85f10");
+      P(tl + 1, hip + 3, W - 2, 2, "#ffe14d"); P(-4 - 1, hip + 5, 2, T - 7, "#ffe14d"); P(2 - 1, hip + 5, 2, T - 7, "#ffe14d");
+      P(tl + 1, hip + 3, W - 2, 1, "#e8c93a");
+      P(-1 - 1, sh, 3, 1, a.shirtD);
       break;
+    }
     case "overalls": {                                             // a shirt under a denim bib and straps
-      const bib = T - 5;
-      plain(a.shirt, a.shirtD);
-      P(tl + 1, hip, W - 2, bib, a.pants); P(tl + 1, hip, 2, bib, a.pantsD);
-      P(-3, hip + bib, 2, 5, a.pants); P(2, hip + bib, 2, 5, a.pants);
-      P(-3, hip + bib - 1, 1, 1, "#d8b36a"); P(3, hip + bib - 1, 1, 1, "#d8b36a");   // brass buttons
-      P(-1, hip + 2, 3, 2, a.pantsD); P(0, hip + 3, 1, 1, "#e8c050");               // bib pocket and its rivet
-      P(-1, sh, 3, 1, a.shirtD);                                                     // collar
+      const bib = T - 5, d = a.pants, dd = a.pantsD, stitch = shade(d, 1.35), brass = "#e0b64a";
+      shell(a.shirt, 0, a.shirtD);
+      P(tl + 1, hip, W - 1, 3, d); P(tl + 1, hip, 2, 3, dd);                        // the waist
+      P(-4 - 1, hip, 8, bib, d); P(-4 - 1, hip, 1, bib, dd);                                // the bib
+      P(-4 - 1, hip + bib, 2, 5, d); P(2 - 1, hip + bib, 2, 5, d); P(-4 - 1, hip + bib, 1, 5, dd);   // straps
+      P(-4 - 1, hip + bib - 1, 2, 2, brass); P(2 - 1, hip + bib - 1, 2, 2, brass); P(-4 - 1, hip + bib - 1, 1, 1, "#a8842c"); P(2 - 1, hip + bib - 1, 1, 1, "#a8842c");   // brass clasps
+      P(-2 - 1, hip + 3, 4, 3, dd); P(-2 - 1, hip + 5, 4, 1, stitch); P(1 - 1, hip + 4, 1, 1, brass);   // the bib pocket, a stitched top and a rivet
+      P(-4 - 1, hip + 2, 8, 1, stitch);                                                 // a seam at the waist
+      P(-2 - 1, sh, 5, 1, a.shirtD); P(-1 - 1, sh, 3, 1, shade(a.shirt, 1.15));             // collar
       break;
     }
-    case "jacket":
-      plain(a.top, a.topD);
-      P(0, hip, 1, T, "#b9bec6"); P(0, sh - 3, 1, 1, "#e9ecef");                  // zip and its pull
-      P(-2, sh - 1, 5, 2, a.topD); P(tr - 4, hip + 2, 3, 1, a.topD);
+    case "jacket": {
+      const c = a.top, cd = a.topD, cl = shade(c, 1.22);
+      shell(c, 0, cd);
+      P(tl + 1, hip, W - 1, 1, shade(c, 0.66));                                     // the waistband
+      P(0 - 1, hip + 1, 1, T - 2, "#c3c8d0"); P(0 - 1, sh - 3, 1, 2, "#eef0f3"); P(1 - 1, hip + 1, 1, T - 4, cd);   // zip and its pull
+      P(-3 - 1, sh - 1, 3, 2, cl); P(1 - 1, sh - 1, 3, 2, cl); P(-3 - 1, sh - 1, 1, 1, cd); P(3 - 1, sh - 1, 1, 1, cd);   // collar, turned out
+      P(-1 - 1, sh, 2, 1, a.shirt);
+      P(-5 - 1, hip + 3, 3, 1, cd); P(-5 - 1, hip + 2, 3, 1, cl);                           // a pocket flap
       strap();
-      break;
-    case "abaya": {
-      P(tl - 2, 1, W + 4, sh, INK);
-      P(tl, 2, W, sh - 1, a.top); P(tl - 1, 2, W + 2, 4, a.top);
-      P(tl, 2, 2, sh - 1, a.topD); P(1, 2, 1, sh - 4, a.topD);
-      P(tl - 1, 3, W + 2, 1, a.topD); P(tl - 1, 4, W + 2, 1, shade(a.top, 1.12));   // a trim band at the hem
-      for (let x = tl + 1; x < tr; x += 3) P(x, 4, 1, 1, a.topD);                   // and its stitching
       break;
     }
-    case "trench":
-      P(tl - 1, hip - 7, W + 2, T + 8, INK);
-      P(tl, hip - 6, W, T + 6, a.top); P(tl, hip - 6, 2, T + 6, a.topD);
-      P(tl, hip + 1, W, 1, "#5a4026"); P(1, hip + 1, 1, 1, "#d8b36a");
-      P(-2, sh - 4, 1, 4, a.topD); P(2, sh - 4, 1, 4, a.topD); P(-1, sh - 3, 3, 4, a.shirt);
-      P(2, hip + 4, 1, 1, a.topD); P(2, hip + 7, 1, 1, a.topD); P(-2, hip + 4, 1, 1, a.topD); P(-2, hip + 7, 1, 1, a.topD);
-      P(-4, sh - 1, 2, 3, a.topD); P(2, sh - 1, 2, 3, a.topD);   // collar turned up
+    case "abaya": {                                                // long and flowing: it widens toward the hem
+      const c = a.top, cd = a.topD, cl = shade(c, 1.14), line = soft(c), trim = a.hijab, mid = Math.min(hip, 9);
+      P(tl, mid, W, sh - mid, c); P(tl + 1, sh, W - 2, 1, c);
+      P(tl - 1, 5, W + 2, mid - 5, c); P(tl - 2, 2, W + 4, 3, c);
+      P(tl, mid, 1, sh - mid, line); P(tl + 1, mid, 2, sh - mid + 1, cd);
+      P(tl - 1, 5, 2, mid - 5, cd); P(tl - 2, 2, 2, 3, cd);
+      for (const x of [-3, 1, 4]) { P(x - 1, 5, 1, Math.max(2, hip - 3 + (x === 1 ? 4 : 0)), cd); P(x + 1 - 1, 5, 1, Math.max(1, hip - 6), cl); }   // folds
+      P(tl - 2, 3, W + 4, 1, trim); P(tl - 2, 2, W + 4, 1, shade(trim, 0.7));        // an embroidered band at the hem
+      for (let x = tl - 1; x <= tr + 1; x += 2) P(x - 1, 3, 1, 1, "#e9c46a");
+      P(tl - 2, 4, W + 4, 1, cl);
       break;
-    case "tshirt":
-      plain(a.top, a.topD);
-      P(-1, sh, 3, 1, a.skinD); P(-2, sh, 1, 1, a.topD); P(2, sh, 1, 1, a.topD);
-      P(1, hip + 8, 1, 1, "#ffe066"); P(0, hip + 7, 2, 1, "#ffe066"); P(-1, hip + 6, 2, 1, "#ffe066"); P(-1, hip + 5, 1, 1, "#ffe066");   // a lightning bolt
+    }
+    case "trench": {
+      const c = a.top, cd = a.topD, cl = shade(c, 1.2), b = shell(c, 6, cd), leather = "#5a3d24";
+      P(0 - 1, b, 1, 6, soft(c));                                     // the back vent shows between the knees
+      P(1 - 1, hip + 2, 1, T - 4, cd);                                // double-breasted: the front laps over
+      for (const y of [hip + 3, hip + 6]) { P(-2 - 1, y, 1, 1, leather); P(3 - 1, y, 1, 1, leather); }
+      P(-1 - 1, sh - 3, 3, 4, a.shirt); P(0 - 1, sh - 3, 1, 3, a.shirtD);
+      P(-3 - 1, sh - 3, 2, 3, cl); P(2 - 1, sh - 3, 2, 3, cl); P(-2 - 1, sh - 4, 2, 1, cl); P(1 - 1, sh - 4, 2, 1, cl); P(-3 - 1, sh - 3, 1, 1, cd); P(3 - 1, sh - 3, 1, 1, cd);   // wide lapels
+      P(-4 - 1, sh, 3, 3, c); P(-4 - 1, sh, 1, 3, cd); P(2 - 1, sh, 3, 3, c); P(4 - 1, sh + 2, 1, 1, cl);   // the collar, turned up
+      P(tl + 1, hip, W - 1, 2, leather); P(tl + 1, hip, W - 1, 1, shade(leather, 0.7)); P(0 - 1, hip, 2, 2, "#e0b64a"); P(1 - 1, hip + 1, 1, 1, "#fff0b8");   // belt and buckle
+      P(-2 - 1, hip - 2, 1, 3, leather);                              // the belt's loose end
+      P(tl + 1, sh - 1, 3, 1, cd); P(tl + 3, sh - 1, 1, 1, "#e0b64a");   // an epaulette
       break;
-    default:                                                       // sweater over a collared shirt
-      plain(a.top, a.topD);
-      P(tl + 2, sh - 4, W - 2, 1, shade(a.top, 1.22));           // a stripe across the chest
-      P(-2, sh, 5, 1, a.topD); P(-1, sh, 3, 1, a.skinD);
-      P(-2, sh - 1, 1, 1, "#f2f2f2"); P(2, sh - 1, 1, 1, "#f2f2f2");   // collar points
-      P(tl, hip, W, 1, a.topD);
+    }
+    case "tshirt": {
+      const c = a.top, cd = a.topD, bolt = "#ffe066";
+      shell(c, 0, cd);
+      P(-2 - 1, sh, 5, 1, cd); P(-1 - 1, sh, 3, 1, a.skinD);              // the neck band
+      P(1 - 1, hip + 9, 2, 1, bolt); P(0 - 1, hip + 8, 2, 1, bolt); P(-1 - 1, hip + 7, 4, 1, bolt); P(1 - 1, hip + 6, 2, 1, bolt); P(0 - 1, hip + 5, 2, 1, bolt); P(0 - 1, hip + 4, 1, 1, bolt);   // a lightning bolt
+      P(2 - 1, hip + 7, 1, 1, "#fff6c2");
+      P(tl + 3, hip + 1, W - 4, 1, shade(c, 1.12));
+      break;
+    }
+    default: {                                                     // sweater over a collared shirt
+      const c = a.top, cd = a.topD, cl = shade(c, 1.24);
+      shell(c, 0, cd);
+      P(tl + 1, hip, W - 1, 2, cd); for (let x = tl + 2; x < tr; x += 2) P(x - 1, hip, 1, 2, shade(c, 0.66));   // ribbed hem
+      P(tl + 3, sh - 5, W - 3, 2, cl); P(tl + 3, sh - 5, W - 3, 1, shade(cl, 0.9)); P(tl + 1, sh - 5, 2, 2, shade(cl, 0.8));   // a stripe across the chest
+      P(-3 - 1, sh, 7, 1, cd); P(-1 - 1, sh, 3, 1, a.skinD);              // crew neck
+      P(-2 - 1, sh - 1, 1, 1, "#f6f6f6"); P(1 - 1, sh - 1, 1, 1, "#f6f6f6");   // collar points
       strap();
+    }
   }
+}
+
+function drawSkirt(P, a, g) {                                       // an A-line skirt with a pleat
+  const { tl, hip } = g, W = a.width, c = a.skirt, cd = shade(c, 0.76), line = soft(c);
+  P(tl - 1, hip - 8, W + 2, 1, line);
+  P(tl, hip - 4, W, 4, c); P(tl - 1, hip - 7, W + 2, 3, c);
+  P(tl - 1, hip - 7, 2, 3, cd); P(tl, hip - 4, 2, 4, cd);
+  P(-1, hip - 7, 1, 6, cd); P(3, hip - 7, 1, 4, cd);
+  P(tl - 1, hip - 7, W + 2, 1, shade(c, 1.3));                      // a light band at the hem
 }
 
 function drawBack(P, a, g) {                                      // things worn behind the body
   if (a.pack) {
-    box(P, g.tl - 4, g.hip + 1, 5, g.sh - g.hip - 2, a.pack);
-    P(g.tl - 4, g.hip + 3, 5, 1, shade(a.pack, 0.75));
-    P(g.tl - 3, g.sh - 4, 3, 1, shade(a.pack, 1.25));             // the top flap catches the light
-    P(g.tl - 2, g.hip + 2, 1, 1, "#d8b36a");                       // a buckle
+    const c = a.pack, cd = shade(c, 0.74), cl = shade(c, 1.25), x = g.tl - 5, y = g.hip + 1, h = g.sh - g.hip - 2;
+    pill(P, x, y, 5, h, c);
+    P(x, y, 1, h, cd); P(x, y, 5, 1, cd);
+    P(x, y + h - 3, 5, 1, cd); P(x + 1, y + h - 2, 3, 1, cl);     // the top flap catches the light
+    P(x + 1, y + 1, 3, 3, cd); P(x + 1, y + 3, 3, 1, cl);         // a front pocket
+    P(x + 2, y + h - 4, 1, 2, "#e0b64a");                          // a buckle
+    P(x + 2, y + h, 2, 1, cd);                                     // the grab loop
   }
 }
 
-// The head is a 12x12 rounded block (the silhouette outline included) on a short neck. Faces follow manga
-// shorthand: two-pixel eyes with a catchlight, small mouths, brows that do the acting.
+// The head is a 14x13 rounded block (the silhouette outline included) on a short neck: big for the body, the
+// way manga draws small characters, so the face has room. Faces follow manga shorthand: tall two-pixel eyes
+// with a lash line and a catchlight, small mouths, brows that do the acting. Hair and hats are small pictures
+// in letters (HAIR, HATS), drawn over the skull.
 function drawHead(P, a, g, p, t) {
   const y = g.head;
   let eyes = p.eyes || "open", mouth = p.mouth || a.mouth;
   if (eyes === "open" && a.lids) eyes = "down";                  // a cool half-lidded look
   if (eyes === "closed" && (mouth === "smile" || p.blush)) eyes = "happy";
   if (mouth === "smile" && a.grin) mouth = "grin";
+  const hat = HATS[a.head] || null, hair = HAIR[a.style] || HAIR.short, veil = a.head === "hijab";
   drawHairBack(P, a, g, y, t, p);
   drawMaps(P, a, g, "behindHead", t);
-  if (a.outfit === "hoodie") P(-6, g.sh + 1, 7, 3, a.topD);     // the hood bunched behind the neck
-  P(-1, g.sh + 1, 3, 1, a.skinD);                                 // neck
-  if (a.head === "hijab") drawHijab(P, a, y);
-  else {
-    P(-4, y + 2, 10, 8, a.skin); P(-3, y + 10, 8, 1, a.skin); P(-2, y + 1, 7, 1, a.skin);
-  }
+  if (a.outfit === "hoodie") { P(-8, g.sh, 6, 4, a.top); P(-8, g.sh, 6, 1, a.topD); P(-8, g.sh + 1, 1, 3, a.topD); P(-6, g.sh + 3, 3, 1, shade(a.top, 1.2)); }   // the hood bunched behind the neck
+  P(-1, g.sh + 1, 3, 1, a.skinD); P(1, g.sh + 1, 1, 1, shade(a.skinD, 0.86));   // neck, in the chin's shadow
+  // the skull: a soft jaw, the far side in shade
+  P(-5, y + 3, 12, 7, a.skin); P(-4, y + 2, 10, 1, a.skin); P(-2, y + 1, 7, 1, a.skin); P(-4, y + 10, 10, 1, a.skin); P(-3, y + 11, 8, 1, a.skin);
+  if (hair.bald && !hat) { P(-1, y + 12, 4, 1, a.skin); P(-1, y + 11, 5, 1, a.skinL); P(0, y + 12, 2, 1, a.skinL); P(3, y + 10, 2, 1, a.skinL); }
+  if (!veil) { P(-5, y + 3, 1, 7, a.skinD); P(-4, y + 2, 2, 1, a.skinD); P(-4, y + 3, 1, 2, a.skinD); P(-2, y + 1, 2, 1, a.skinD); }
+  if (veil) art(P, a, HIJAB, -8, y + 14, a.veilPal);
   drawFace(P, a, y, eyes, mouth, p);
-  if (a.head !== "hijab") drawHair(P, a, y, t);
-  if (a.head !== "hijab" && a.style !== "bob") { P(-3, y + 4, 2, 3, a.skin); P(-3, y + 4, 1, 3, a.skinD); P(-2, y + 5, 1, 1, shade(a.skin, 0.7)); }   // ear
+  if (!veil) {
+    if (hair.top && !hat) art(P, a, hair.top[1], -9, y + hair.top[0], a.hairPal);
+    if (hair.side) art(P, a, hair.side[1], -9, y + hair.side[0], a.hairPal);
+    if (!hair.ears) { P(-4, y + 4, 2, 3, a.skin); P(-4, y + 4, 1, 3, a.skinD); P(-3, y + 5, 1, 1, a.skinD); }   // ear
+    if (hair.extra) hair.extra(P, a, y, t, !!hat);
+  }
   drawBrows(P, a, y, eyes, mouth, p);
   drawGlasses(P, a, y, eyes, p, t);
-  drawHeadwear(P, a, y, p, t);
+  if (a.pencil && !veil) { P(-9, y + 7, 1, 1, "#e8838a"); P(-8, y + 7, 3, 1, "#f2c94c"); P(-5, y + 7, 1, 1, "#e8d9b0"); P(-4, y + 7, 1, 1, "#3d3d45"); }   // tucked behind the ear
+  if (hat) hat(P, a, y, p, t);
   drawMaps(P, a, g, "head", t);
 }
 
+// Eyes are at x 0 and x 4, three rows tall; the mouth sits between and below them.
 function drawFace(P, a, y, eyes, mouth, p) {
+  const e = a.eye, ed = a.eyeD, small = a.face === "round" || a.face === "browline";
   for (const front of [false, true]) {
-    const ex = front ? 3 : 0;
+    const ex = front ? 4 : 0, out = front ? ex + 2 : ex - 1;
     switch (eyes) {
-      case "closed": P(ex, y + 5, 2, 1, INK); break;
-      case "happy": { const x0 = front ? 3 : -1; P(x0, y + 5, 1, 1, INK); P(x0 + 1, y + 6, 1, 1, INK); P(x0 + 2, y + 5, 1, 1, INK); break; }
-      case "down": P(ex, y + 5, 2, 1, INK); P(ex, y + 4, 2, 1, a.eye); break;
-      case "wide": P(ex, y + 7, 2, 1, INK); P(ex, y + 4, 2, 3, a.eye); P(ex, y + 6, 1, 1, WHITE); P(ex + 1, y + 4, 1, 1, WHITE); break;
-      case "up": P(ex, y + 7, 2, 1, INK); P(ex, y + 5, 2, 2, a.eye); P(ex + 1, y + 6, 1, 1, WHITE); break;
-      default: P(ex, y + 6, 2, 1, INK); P(ex, y + 4, 2, 2, a.eye); P(ex, y + 5, 1, 1, WHITE);
+      case "closed": P(ex, y + 5, 2, 1, INK); if (a.lash) P(out, y + 4, 1, 1, INK); break;
+      case "happy": P(ex - 1 + (front ? 1 : 0), y + 5, 1, 1, INK); P(ex + (front ? 1 : 0), y + 6, 1, 1, INK); P(ex + 1 + (front ? 1 : 0), y + 5, 1, 1, INK); break;
+      case "down": P(ex, y + 6, 2, 1, a.skinD); P(ex, y + 5, 2, 1, INK); P(ex, y + 4, 2, 1, e); break;
+      case "wide": P(ex, y + 7, 2, 1, INK); P(ex, y + 4, 2, 3, e); P(ex + 1, y + 6, 1, 1, ed); P(ex, y + 6, 1, 1, WHITE); P(ex + 1, y + 4, 1, 1, WHITE); break;
+      case "up": P(ex, y + 7, 2, 1, INK); P(ex, y + 5, 2, 2, e); P(ex, y + 6, 1, 1, WHITE); P(ex + 1, y + 6, 1, 1, ed); break;
+      default:
+        if (small) { P(ex, y + 5, 2, 1, INK); P(ex, y + 4, 2, 1, e); P(ex, y + 5, 1, 1, ed); }   // behind glasses: a neat dot
+        else { P(ex, y + 6, 2, 1, INK); P(ex, y + 5, 2, 1, ed); P(ex, y + 4, 2, 1, e); P(ex, y + 5, 1, 1, WHITE); }
     }
-    if (a.lash && (eyes === "open" || eyes === "wide" || eyes === "up"))   // a lash flick at the outer corner
-      P(front ? ex + 2 : ex - 1, y + (eyes === "open" ? 6 : 7), 1, 1, INK);
+    if (a.lash && (eyes === "open" || eyes === "wide" || eyes === "up"))   // lashes: the lid's line runs on past the outer corner and dips
+      P(out, y + (eyes === "open" ? (small ? 4 : 5) : 6), 1, 1, INK);
   }
-  if (p.blush) { P(-2, y + 3, 2, 1, BLUSH); P(5, y + 3, 1, 1, BLUSH); }
-  if (a.freckles) { const f = shade(a.skin, 0.7); P(-1, y + 3, 1, 1, f); P(1, y + 3, 1, 1, f); P(4, y + 3, 1, 1, f); }
-  if (p.soot) { const s = "#5c5f66"; P(-1, y + 2, 2, 1, s); P(3, y + 7, 2, 1, s); P(-3, y + 8, 1, 1, s); P(5, y + 2, 1, 1, s); P(1, y + 9, 1, 1, s); }
-  const lip = shade(a.skin, 0.62);
+  if (p.blush) { P(-3, y + 3, 2, 1, BLUSH); P(5, y + 3, 2, 1, BLUSH); }
+  else if (a.rosy) { P(-3, y + 3, 2, 1, a.cheek); P(6, y + 3, 1, 1, a.cheek); }
+  if (a.freckles) { const f = mix(a.skin, "#8a4a2a", 0.4); P(-1, y + 3, 1, 1, f); P(1, y + 3, 1, 1, f); P(5, y + 3, 1, 1, f); P(2, y + 4, 1, 1, f); P(3, y + 5, 1, 1, f); }
+  if (p.soot) { const s = "#5c5f66"; P(-1, y + 2, 2, 1, s); P(4, y + 8, 2, 1, s); P(-3, y + 8, 1, 1, s); P(6, y + 2, 1, 1, s); P(2, y + 9, 1, 1, s); }
+  if (a.nose) { P(7, y + 4, 1, 2, a.skin); P(6, y + 3, 2, 1, a.skinD); }   // a proper nose, in profile
+  const lip = mix(a.skin, MOUTH, 0.5), line = mix(a.skin, MOUTH, 0.75);
   switch (mouth) {
-    case "smile": P(2, y + 3, 1, 1, MOUTH); P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, MOUTH); break;
-    case "grin": P(2, y + 2, 4, 1, MOUTH); P(3, y + 1, 2, 1, MOUTH); P(4, y + 2, 1, 1, WHITE); break;   // open, with a fang
+    case "smile": P(2, y + 3, 1, 1, line); P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, line); break;
+    case "grin": P(2, y + 2, 4, 1, MOUTH); P(3, y + 1, 2, 1, MOUTH); P(3, y + 2, 2, 1, WHITE); break;   // open, teeth showing
     case "o": P(3, y + 1, 2, 2, MOUTH); break;
     case "flat": P(2, y + 2, 3, 1, MOUTH); break;
-    case "smirk": P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, MOUTH); break;
+    case "smirk": P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, line); break;
     default: P(3, y + 2, 2, 1, lip);
   }
   const c = a.hair;
-  if (a.facial === "walrus") { P(1, y + 3, 5, 1, c); P(1, y + 2, 1, 1, c); P(5, y + 2, 1, 1, c); P(2, y + 3, 2, 1, a.hairL); }
-  if (a.facial === "mustache") { P(2, y + 3, 4, 1, c); P(1, y + 2, 1, 1, c); P(6, y + 4, 1, 1, c); P(5, y + 3, 1, 1, a.hairD); }
+  if (a.facial === "walrus") {                                    // it hides the whole mouth
+    P(1, y + 3, 6, 1, c); P(1, y + 2, 2, 1, c); P(5, y + 2, 2, 1, c); P(1, y + 1, 1, 1, a.hairD); P(6, y + 1, 1, 1, a.hairD);
+    P(2, y + 3, 2, 1, a.hairL); P(5, y + 3, 1, 1, a.hairL); P(3, y + 2, 2, 1, shade(a.skin, 0.62));
+  }
+  if (a.facial === "mustache") { P(2, y + 3, 4, 1, c); P(1, y + 2, 1, 1, c); P(6, y + 3, 1, 1, c); P(7, y + 3, 1, 1, c); P(8, y + 4, 1, 1, c); P(3, y + 3, 1, 1, a.hairL); }   // waxed, one end curled up
 }
 
-// Brows act: raised in surprise, knitted in doubt, one up for a skeptic. Drawn over the bangs, as manga does.
+// Brows act: raised in surprise, knitted in doubt, one up for a skeptic. Over bangs or a hat's edge they are
+// drawn in a color that shows against it, as manga draws brows through the hair.
 function drawBrows(P, a, y, eyes, mouth, p) {
   const kind = p.brow || (eyes === "wide" || eyes === "up" ? "raise" : mouth === "flat" ? "worry" : a.brow);
-  const c = a.browC, h = 1, back = a.bushy ? -1 : 0, w = a.bushy ? 3 : 2;
-  const B = (x, yy, ww = w) => P(x, y + yy, ww, h, c);
+  const back = a.bushy ? -1 : 0, w = a.bushy ? 3 : 2;
+  const B = (x, yy, ww = w) => P(x, y + yy, ww, 1, yy >= a.fringe ? a.browHi : a.browC);
+  if (kind === "flat" && (a.face === "browline" || a.fringe <= 8)) return;   // the frames do the job, or bangs cover them
   switch (kind) {
-    case "raise": B(back, 9); B(3, 9); break;
-    case "stern": B(back, 9, w - 1); P(1, y + 8, 1, h, c); P(3, y + 8, 1, h, c); B(4, 9, w - 1); break;
-    case "worry": B(back, 8, w - 1); P(1, y + 9, 1, h, c); P(3, y + 9, 1, h, c); B(4, 8, w - 1); break;
-    case "skeptic": B(back, 8); B(3, 9); P(5, y + 8, 1, 1, c); break;
-    default: B(back, 8); B(3, 8);
+    case "raise": B(back, 9); B(4, 9); break;
+    case "stern": B(back, 9, w - 1); B(1, 8, 1); B(4, 8, 1); B(5, 9, w - 1); break;
+    case "worry": B(back, 8, w - 1); B(1, 9, 1); B(4, 9, 1); B(5, 8, w - 1); break;
+    case "skeptic": B(back, 8); B(4, 9); B(6, 8, 1); break;
+    default: B(back, 8); B(4, 8);
   }
 }
 
 function drawGlasses(P, a, y, eyes, p, t) {
   if (!a.face) return;
   const shine = p.glint || (t + a.phase) % 7.3 < 0.22;           // now and then the lenses catch the light
-  const lens = (ex, rows) => {
+  const lens = (ex, y0, h) => {
     if (!(shine || p.screen)) return;
-    P(ex, y + rows[0], 2, rows[1], p.screen ? "#bfe9ff" : "#eef8ff");
-    P(ex + 1, y + rows[0] + rows[1] - 1, 1, 1, WHITE); P(ex, y + rows[0], 1, 1, WHITE);
+    P(ex, y + y0, 2, h, p.screen ? "#bfe9ff" : "#eef8ff");
+    P(ex + 1, y + y0 + h - 1, 1, 1, WHITE); P(ex, y + y0, 1, 1, WHITE);
   };
-  if (a.face === "round") {                                       // thin round frames
-    const f = a.frame;
-    for (const ex of [0, 3]) { lens(ex, [4, 3]); P(ex, y + 3, 2, 1, f); P(ex - 1, y + 4, 1, 2, f); P(ex + 2, y + 4, 1, 2, f); }
-    P(-2, y + 5, 1, 1, f);
+  if (a.face === "round") {                                       // big round frames in their own color
+    const f = a.frame, fd = shade(f, 0.7);
+    for (const ex of [0, 4]) {
+      P(ex, y + 6, 2, 1, a.skinL); lens(ex, 4, 3);
+      P(ex, y + 7, 2, 1, f); P(ex, y + 3, 2, 1, fd);
+    }
+    P(-1, y + 4, 1, 3, f); P(6, y + 4, 1, 3, f); P(2, y + 5, 2, 1, f); P(2, y + 4, 1, 1, fd); P(3, y + 6, 1, 1, f);   // the rims and the bridge
+    P(-4, y + 6, 3, 1, fd);                                        // the arm, back to the ear
   } else if (a.face === "browline") {                             // a heavy top bar, thin wire below
-    for (const ex of [0, 3]) { lens(ex, [4, 3]); P(ex, y + 3, 2, 1, "#8d939b"); }
-    P(-1, y + 7, 7, 1, INK); P(-2, y + 6, 1, 1, INK);
+    const wire = "#aab2bd";
+    for (const ex of [0, 4]) { lens(ex, 4, 3); P(ex, y + 3, 2, 1, wire); P(ex - 1, y + 4, 1, 2, wire); P(ex + 2, y + 4, 1, 2, wire); P(ex - 1, y + 6, 4, 2, INK); P(ex, y + 6, 2, 1, a.skin); P(ex, y + 7, 1, 1, "#4a4f5c"); }
+    P(3, y + 6, 1, 1, wire); P(-4, y + 7, 3, 1, INK);
   } else if (a.face === "halfmoon") {                             // half-moon readers, low on the nose, on a chain
-    const gold = "#b8902a";
-    for (const ex of [0, 3]) P(ex, y + 3, 2, 1, gold);
-    P(2, y + 4, 1, 1, gold); P(-1, y + 4, 1, 1, gold);
-    P(-2, y + 4, 1, 1, gold); P(-3, y + 3, 1, 1, gold); P(-3, y + 1, 1, 1, gold); P(-4, y - 1, 1, 1, gold);
+    const gold = "#d9a520", dim = "#a87a14";
+    for (const ex of [0, 4]) { P(ex, y + 3, 2, 1, gold); P(ex - 1, y + 4, 1, 1, gold); P(ex + 2, y + 4, 1, 1, gold); if (shine) P(ex, y + 4, 2, 1, "#eef8ff"); }
+    P(3, y + 4, 1, 1, dim);
+    P(-2, y + 3, 1, 1, dim); P(-3, y + 2, 1, 1, gold); P(-4, y + 1, 1, 1, dim); P(-4, y - 1, 1, 1, gold);   // the chain
   }
 }
 
 function drawHairBack(P, a, g, y, t, p) {                        // hair and cloth that hang behind the head
-  const c = a.hair, d = a.hairD;
-  if (a.head === "hijab") {
-    P(-7, y - 3, 13, 4, a.hijab); P(-7, y - 3, 3, 4, a.hijabD); P(1, y - 4, 4, 1, a.hijab);   // the drape over the shoulders
+  const c = a.hair, d = a.hairD, l = a.hairL;
+  if (a.head === "hijab") {                                       // the scarf's tail, down the back
+    P(-9, y - 5, 4, 7, a.hijabD); P(-9, y - 5, 1, 7, shade(a.hijab, 0.55)); P(-8, y - 6, 2, 1, a.hijabD);
     return;
   }
   switch (a.style) {
-    case "bigcurly":
-      P(-8, y + 3, 5, 9, c); P(-9, y + 5, 1, 5, c); P(-7, y + 2, 3, 1, c);
-      for (const [x, yy] of [[-7, 4], [-8, 7], [-6, 6], [-7, 9], [-5, 3], [-8, 10]]) P(x, y + yy, 1, 1, d);
-      break;
-    case "long": {
+    case "long": {                                                // down past the shoulders, the tips swaying
       const sway = (p.legF || 0) !== 0 ? Math.sign(p.legF) : Math.round(Math.sin(t * 2.1 + a.phase) * 0.6);
-      P(-6, y - 1, 3, 10, c); P(-6 + sway, y - 4, 3, 3, c); P(-5 + sway, y - 5, 2, 1, c);
-      P(-4, y - 1, 1, 9, d); P(-6, y + 2, 1, 4, a.hairL);
+      P(-8, y - 3, 4, 11, c); P(-9, y, 1, 6, c);
+      P(-8 + sway, y - 6, 4, 3, c); P(-7 + sway, y - 7, 2, 1, c); P(-8 + sway, y - 6, 1, 1, d);
+      P(-5, y - 4, 1, 10, d); P(-8, y - 3, 1, 3, d);
+      P(-7, y - 1, 1, 6, l); P(-6, y - 5, 1, 3, l);
       break;
     }
-    case "bob":
-      P(-6, y + 1, 3, 10, c); P(-5, y, 2, 1, c); P(-4, y + 1, 1, 8, d);
-      break;
+    case "bob": P(-7, y + 1, 3, 4, d); break;
+    case "bigcurly": P(-9, y + 2, 4, 3, d); P(-8, y + 1, 2, 1, d); break;
   }
 }
 
-function drawHijab(P, a, y) {
-  const h = a.hijab, hd = a.hijabD;
-  P(-6, y + 1, 12, 10, h); P(-5, y + 11, 10, 1, h); P(-3, y + 12, 6, 1, h); P(-7, y + 3, 1, 6, h);
-  P(-2, y, 7, 1, h);                                             // wrapped under the chin
-  P(-7, y + 3, 2, 7, hd); P(-6, y + 2, 1, 1, hd); P(-2, y + 2, 1, 7, hd);   // folds
-  P(-4, y + 11, 4, 1, a.hijabL); P(-5, y + 10, 1, 1, a.hijabL);     // light on the crown
-  P(-1, y + 2, 6, 7, a.skin); P(0, y + 1, 5, 1, a.skin); P(0, y + 9, 5, 1, a.skin);   // the face
-  P(-1, y + 9, 1, 1, shade(h, 1.6)); P(0, y + 10, 5, 1, shade(h, 1.6));   // the underscarf's edge at the brow
-  P(-2, y + 1, 1, 1, "#e9c46a");                                  // a pin
-}
-
-function drawHair(P, a, y, t) {
-  const c = a.hair, d = a.hairD, l = a.hairL;
-  switch (a.style) {
-    case "receding": {                                            // grey tufts at the sides, a shine on top, three loyal hairs
-      P(-5, y + 4, 2, 6, c); P(-6, y + 6, 1, 3, c); P(-3, y + 7, 1, 2, c);
-      P(-5, y + 4, 1, 5, d); P(-6, y + 8, 1, 1, l);
-      P(0, y + 10, 2, 1, shade(a.skin, 1.3));
+// Hair, as pictures: `top` is everything from the crown to the hairline (left off under a hat), `side` what
+// shows below a hat's edge too. Each is [its top row above the head's base row, rows], 18 wide from x = -9
+// (the skull's skin is x -5 to 6, the eyes x 0 and 4, the ear x -4 to -3). `ears: true` covers the ear.
+const HAIR = {
+  short: {                                                        // fluffy, with a fringe to the brows
+    top: [14, [".......hhhhhhhh...",
+               ".....hhhhllhhhhhh.",
+               "....hhhhlhhhhhhhh.",
+               "...hhHhhhhhhhhhhh.",
+               "...hHhhhhhhhhhhhh.",
+               "...HHhhHh.hhH.hhH."]],
+    side: [9, ["...HHh............",
+               "...HHhh.........h.",
+               "...HHh............",
+               "...HH.............",
+               "....H............."]],
+    extra(P, a, y, t, hat) {
+      if (!a.ahoge || hat) return;                                // the one strand that never lies down
+      const k = Math.sin(t * 2.6 + a.phase) > 0.2 ? 1 : 0;
+      P(1, y + 15, 1, 1, a.hair); P(1, y + 16, 1, 1, INK); P(1 + k, y + 17, 1, 1, INK); P(2 + k, y + 18, 2, 1, INK); P(4 + k, y + 17, 1, 1, INK);
+    },
+  },
+  tousled: {                                                      // thick and pushed back, a quiff at the front
+    top: [15, ["...........hh.h...",
+               "......hhhhhhhhhh..",
+               ".....hhhhllhhhhhh.",
+               "....hhhhlhhhhhhhh.",
+               "...hhHhhhhhhhhhhh.",
+               "...hHhhhhhhhhhhhh.",
+               "...HHHhhh....hhhH."]],
+    side: [9, ["...HHH............",
+               "...HHhh...........",
+               "...HHh............",
+               "...HH.............",
+               "...H.............."]],
+  },
+  receding: {                                                     // a shining dome, tufts flying out at the sides, three loyal hairs
+    bald: true,
+    side: [10, ["....hh............",
+                "...hhlh...........",
+                "..hhlhhh..........",
+                ".hhlhhh...........",
+                ".hhhhh............",
+                "..hhHh............",
+                "....HH............"]],
+    extra(P, a, y, t, hat) {
+      if (hat) return;
       const k = Math.sin(t * 3 + a.phase) > 0.4 ? 1 : 0;
-      P(0, y + 11, 1, 1, INK); P(k, y + 12, 1, 1, INK); P(2, y + 11, 1, 1, INK); P(2 + k, y + 12, 1, 1, INK);
-      break;
-    }
-    case "bob":                                                   // a glossy bob with blunt bangs
-      P(-5, y + 7, 12, 5, c); P(-4, y + 12, 10, 1, c); P(6, y + 3, 1, 4, c); P(-5, y + 4, 1, 3, c);
-      P(-5, y + 7, 1, 5, d); P(-3, y + 7, 9, 1, d);
-      P(-3, y + 10, 2, 1, l); P(0, y + 10, 2, 1, l); P(3, y + 10, 1, 1, l);
-      break;
-    case "bigcurly":                                              // a cloud of curls and a bun with a pencil in it
-      P(-6, y + 8, 12, 4, c); P(-5, y + 12, 10, 2, c); P(5, y + 6, 2, 3, c); P(-6, y + 7, 2, 1, c);
-      P(-2, y + 14, 4, 2, c); P(-1, y + 16, 2, 1, c);
-      for (const [x, yy] of [[-4, 9], [-1, 10], [2, 9], [4, 11], [-3, 12], [1, 13], [-5, 11], [5, 7], [-1, 15]]) P(x, y + yy, 1, 1, d);
-      for (const [x, yy] of [[-2, 12], [1, 11], [3, 12], [0, 15]]) P(x, y + yy, 1, 1, l);
-      P(2, y + 16, 1, 1, "#f2c94c"); P(3, y + 17, 1, 1, "#f2c94c"); P(4, y + 18, 1, 1, "#e8838a"); P(-3, y + 14, 1, 1, "#444");
-      break;
-    case "long":                                                  // under a beanie: bangs and a lock by the cheek
-      P(-3, y + 8, 9, 2, c); P(-5, y + 4, 2, 6, c); P(6, y + 4, 1, 5, c);
-      P(0, y + 7, 1, 1, c); P(3, y + 7, 2, 1, c);
-      P(-5, y + 4, 1, 5, d); P(1, y + 9, 2, 1, l);
-      break;
-    case "crop":                                                  // tight crop, faded sides, a sharp part
-      P(-5, y + 9, 11, 2, c); P(-4, y + 11, 9, 1, c); P(5, y + 8, 1, 1, c);
-      P(-5, y + 5, 2, 4, d); P(-3, y + 7, 1, 2, d);
-      P(-2, y + 10, 3, 1, l); P(1, y + 11, 1, 1, shade(a.skin, 0.8));
-      break;
-    case "neat":                                                  // a side part swept forward
-      P(-5, y + 8, 12, 3, c); P(-4, y + 11, 10, 1, c); P(-2, y + 12, 7, 1, c); P(6, y + 10, 1, 2, c);
-      P(3, y + 7, 3, 1, c); P(-5, y + 5, 2, 3, c);
-      P(-5, y + 5, 1, 5, d); P(-2, y + 10, 1, 1, d); P(-1, y + 11, 1, 1, d);
-      P(1, y + 11, 3, 1, l); P(5, y + 10, 1, 1, l);
-      break;
-    case "spiky":                                                 // under a cap: spikes poke out all round
-      P(-5, y + 7, 11, 3, c); P(-6, y + 5, 1, 4, c); P(-7, y + 6, 1, 1, c); P(-7, y + 8, 1, 1, c);
-      P(-1, y + 6, 1, 1, c); P(2, y + 6, 1, 1, c); P(5, y + 6, 1, 1, c);
-      P(-5, y + 7, 1, 2, d); P(0, y + 8, 2, 1, l);
-      break;
-    default: {                                                    // short, with a fringe
-      P(-5, y + 8, 11, 3, c); P(-4, y + 11, 10, 1, c); P(-3, y + 12, 7, 1, c); P(6, y + 9, 1, 2, c);
-      P(-5, y + 4, 2, 4, c); P(-3, y + 6, 1, 2, c);
-      P(-1, y + 7, 1, 1, c); P(2, y + 7, 2, 1, c); P(5, y + 7, 1, 1, c);
-      P(-5, y + 4, 1, 6, d); P(-2, y + 11, 3, 1, l); P(2, y + 11, 1, 1, l);
-      if (a.ahoge) {                                              // the one strand that never lies down
-        const k = Math.sin(t * 2.6 + a.phase) > 0.2 ? 1 : 0;
-        P(0, y + 13, 1, 1, INK); P(k, y + 14, 1, 1, INK); P(1 + k, y + 15, 1, 1, INK);
-      }
-      if (a.pencil) { P(-7, y + 8, 1, 1, "#e8838a"); P(-6, y + 8, 3, 1, "#f2c94c"); }   // tucked behind the ear
-    }
-  }
-}
+      for (const x of [-1, 1, 3]) { P(x, y + 13, 1, 1, INK); P(x + k, y + 14, 1, 1, INK); }
+    },
+  },
+  bob: {                                                          // a glossy bob with blunt bangs, curling in at the jaw
+    ears: true,
+    top: [14, ["......hhhhhhhhh...",
+               "....hhhhhhhhhhhh..",
+               "...hhhlllllllhhhh.",
+               "...hhhhhhhhhhllhh.",
+               "...hhhhhhhhhhhhhh.",
+               "...hHhhhhhhhhhhhh."]],
+    side: [8, ["...hHhHhhHhhHhhhh.",
+               "...hHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh..........h.",
+               "..hhHhh........hh.",
+               "...hhHh...........",
+               "....hh............"]],
+  },
+  bigcurly: {                                                     // a cloud of curls and a bun with a pencil in it
+    ears: true,
+    top: [18, ["........hhhh......",
+               ".......hhlhhh.....",
+               ".......hHhhHh.....",
+               "....hh.hhhhh.hhh..",
+               "..hhhhhhhhhhhhhhh.",
+               ".hhlhhhlhhhhlhhhhh",
+               ".hlhhHhhhHhhhhHhhh",
+               "hhhhHhhlhhhHhhhlhh",
+               "hhHhhhhhhhhh.hhhHh",
+               "hhhhlhhh......hhhh"]],
+    side: [8, ["hhhhlhh.........hh",
+               ".hhHhhh..........h",
+               "hhhhhh............",
+               "hhlhHh............",
+               ".hhhhh............",
+               "..hhHh............",
+               "...hh............."]],
+    extra(P, a, y, t, hat) {
+      P(-3, y + 4, 1, 1, "#f6f1e4");                              // a pearl earring
+      if (hat) return;
+      P(-4, y + 16, 1, 1, "#3d3d45"); P(-3, y + 16, 1, 1, "#e8d9b0");               // the pencil's point, out the back of the bun
+      P(4, y + 18, 1, 1, "#f2c94c"); P(5, y + 19, 1, 1, "#f2c94c"); P(6, y + 20, 1, 1, "#e8838a");
+    },
+  },
+  long: {                                                         // bangs, and a lock framing the face
+    ears: true,
+    top: [14, [".......hhhhhhhh...",
+               ".....hhhhllhhhhhh.",
+               "....hhhhlhhhhhhhh.",
+               "...hhhhhhhhhhhhhh.",
+               "...hHhhhhhhhhhhhh."]],
+    side: [9, ["...hHhhhh..hhh..h.",
+               "...hHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh..........h.",
+               "..hhHh.........h..",
+               "..hhHh............",
+               "..hhH.............",
+               "..hhH............."]],
+  },
+  crop: {                                                         // a tight crop: flat on top, faded at the sides, a sharp line
+    top: [13, ["......hhhhhhhhh...",
+               ".....hhhllhShhhh..",
+               "....hhhhhhhhhhhh..",
+               "....hhhhhhhhhhhh..",
+               "....Hhhhhhhhhhh..."]],
+    side: [8, ["....HH............",
+               "....ff............",
+               "....f............."]],
+  },
+  neat: {                                                         // a side part, swept forward and shining
+    top: [14, ["......hhhhhhhhh...",
+               "....hhhhhllhhhhhh.",
+               "...hhHhhhhllhhhhh.",
+               "...hhhHhhhhhhhhhh.",
+               "...hhhhhhhhhhhhhh.",
+               "...hHhhhh..hhhhhh."]],
+    side: [9, ["...hHh............",
+               "...HHh.........hh.",
+               "...HH.............",
+               "...H..............",
+               "...H.............."]],
+  },
+  spiky: {                                                        // spikes in every direction
+    top: [16, ["......h....h...h..",
+               ".....hh...hhh.hh..",
+               ".....hhhhhhhhhhh.h",
+               "....hhhlhhhlhhhhh.",
+               "...hhhlhhhhhhhhhh.",
+               "....hHhhhhhhhhhhh.",
+               "...hhHhhhhhhhhhh.."]],
+    side: [9, ["..hhHhh.h..h..h.h.",
+               ".hhHh.............",
+               "..hHh.............",
+               ".hhH..............",
+               "..hh.............."]],
+  },
+};
 
-function drawHeadwear(P, a, y, p, t) {
-  switch (a.head) {
-    case "cap": {                                                 // a cap, worn backwards
-      const c = a.cap, cd = shade(c, 0.72);
-      P(-5, y + 9, 11, 3, c); P(-4, y + 12, 9, 1, c);
-      P(-9, y + 9, 4, 1, cd); P(-6, y + 10, 1, 1, cd);
-      P(0, y + 12, 1, 1, cd); P(-1, y + 10, 1, 2, cd);
-      P(3, y + 9, 2, 1, a.hair); P(2, y + 9, 1, 1, "#d8dde3");    // hair through the strap gap
-      P(-4, y + 11, 2, 1, shade(c, 1.3));
-      break;
-    }
-    case "beanie": {                                              // a ribbed beanie with a pom-pom that bounces
-      const b = a.beanie, cuff = shade(b, 0.82);
-      P(-5, y + 9, 11, 2, cuff);
-      for (let x = -4; x < 6; x += 2) P(x, y + 9, 1, 2, shade(b, 0.66));
-      P(-5, y + 11, 11, 1, b); P(-4, y + 12, 10, 1, b); P(-3, y + 13, 8, 1, b);
-      P(-3, y + 11, 3, 1, shade(b, 1.25));
-      const py = y + 14 - (p.bob ? 1 : 0);
-      P(-1, py, 5, 2, a.pom); P(0, py + 2, 3, 1, a.pom); P(0, py + 2, 1, 1, shade(a.pom, 1.12)); P(3, py, 1, 1, shade(a.pom, 0.8));
-      break;
-    }
-    case "hardhat":
-      box(P, -6, y + 9, 13, 1, "#e0a800"); box(P, -4, y + 10, 10, 3, "#ffd23f"); P(-3, y + 13, 8, 1, "#ffd23f");
-      P(0, y + 10, 1, 4, "#e0a800"); P(-3, y + 12, 2, 1, "#fff2a8");
-      break;
-    case "deerstalker": {                                         // checked tweed, a peak each way, flaps tied on top
-      const tw = "#a67c52", td = "#7d5a39";
-      P(-5, y + 9, 11, 4, tw); P(-4, y + 13, 9, 1, tw);
-      for (let yy = 10; yy <= 13; yy++) for (let x = -4 + (yy % 2); x < 5; x += 2) P(x, y + yy, 1, 1, td);
-      P(6, y + 9, 3, 1, td); P(-8, y + 9, 3, 1, td);
-      P(-3, y + 10, 3, 2, "#8a6440");                             // the flap folded up
-      P(-1, y + 14, 1, 1, INK); P(1, y + 14, 1, 1, INK); P(0, y + 14, 1, 1, td);
-      break;
-    }
-    case "propeller": {                                           // a beanie in four colors and a spinning propeller
-      P(-5, y + 9, 3, 3, "#e74c3c"); P(-2, y + 9, 3, 4, "#f1c40f"); P(1, y + 9, 3, 4, "#3498db"); P(4, y + 9, 2, 3, "#2ecc71");
-      P(-4, y + 12, 2, 1, "#e74c3c"); P(4, y + 12, 1, 1, "#2ecc71");
-      P(-3, y + 11, 1, 1, "#ff8a7a");
-      P(0, y + 13, 1, 2, "#555"); P(0, y + 15, 1, 1, "#f1c40f");
-      const moving = (p.legF || 0) !== 0 || (p.legB || 0) !== 0;
-      const f = Math.floor(t * 9 * (p.spin || (moving ? 2.2 : 1))) % 4, w = [9, 5, 1, 5][f];
-      if (w > 1) { box(P, 1 - Math.ceil(w / 2), y + 16, Math.floor(w / 2), 1, "#e74c3c"); box(P, 1, y + 16, Math.ceil(w / 2), 1, "#3498db"); }
-      else box(P, 0, y + 16, 1, 1, "#f1c40f");
-      break;
-    }
-  }
-}
+// The hijab: wrapped close round the face over an underscarf, folded at the temple, pinned at the jaw, and
+// draped over the shoulders. 17 wide from x = -8, its top row 14 above the head's base row.
+const HIJAB = ["......jjjjjjj....",
+               "....jjjLLjjjjjj..",
+               "...jjLLjjjjjjjjj.",
+               "..jjLjjjjjjjjjjj.",
+               "..jjjjjjuuuuuuuj.",
+               ".jjjjjjj.......j.",
+               ".jjJjjj........j.",
+               ".jjJjjj........j.",
+               "jjjJjjj........j.",
+               "jjJjjjj........j.",
+               "jjJjjjj........j.",
+               ".jjJjjj........j.",
+               ".jjjJjgj......jj.",
+               "..jjjJjjj....jj..",
+               "..jjjjJjjjjjjj...",
+               ".jjjjjjJjjjjjj...",
+               ".jjJjjjjJjjjjjj..",
+               "..jjjLjjjJjjjj..."];
+
+const HATS = {
+  cap(P, a, y) {                                                  // a cap, worn backwards: the peak behind, hair through the strap gap
+    const c = a.cap;
+    art(P, a, [".........cccccccc...",
+               ".......ccLLcccccccc.",
+               "......ccLccccccccccc",
+               "......Ccccccccccshcc",
+               ".CCCCCDDDDDDDDDshhDD"], -12, y + 14,
+        { c, C: shade(c, 0.72), D: shade(c, 0.6), L: shade(c, 1.35), s: "#d8dde3" });
+    P(-11, y + 9, 2, 1, shade(c, 0.6));                           // the peak dips
+    P(0, y + 15, 2, 1, shade(c, 0.72));                           // the button on top
+  },
+  beanie(P, a, y, p) {                                            // a ribbed beanie with a pom-pom that bounces
+    const b = a.beanie;
+    art(P, a, ["......bbbbbbbb....",
+               "....bbbLLbbbbbbb..",
+               "...bbbLbbbbbbbbbb.",
+               "...bbbbbbbbbbbbbD.",
+               "...cCcCcCcCcCcCcc.",
+               "...CDCDCDCDCDCDCC."], -9, y + 15,
+        { b, L: shade(b, 1.3), D: shade(b, 0.72), c: shade(b, 0.9), C: shade(b, 0.66) });
+    const py = y + 18 - (p.bob ? 1 : 0), q = a.pom;
+    art(P, a, [".pqp.", "pqppd", ".ppd."], -1, py, { p: q, q: shade(q, 1.18), d: shade(q, 0.78) });
+  },
+  hardhat(P, a, y) {
+    art(P, a, [".......yyyyyyy....",
+               ".....yyLLyyRyyyy..",
+               "....yyLyyyyRyyyyy.",
+               "....yyyyyyyRyyyyy.",
+               "..RRRRRRRRRRRRRRRRR"], -9, y + 14, { y: "#ffd23f", L: "#fff2a8", R: "#e0a800" });
+  },
+  deerstalker(P, a, y) {                                          // checked tweed, a peak each way, the flaps tied up on top
+    art(P, a, ["..........fFkFf.......",
+               "........ttTTttTTt.....",
+               "......TTttTTttTTttT...",
+               ".....tFfffTTttTTttT...",
+               ".....TFfFfttTTttTTt...",
+               ".BBBBbBBBBBBBBBBBBbBBB"], -11, y + 15,
+        { t: "#b98d5e", T: "#8a6340", f: "#c9a172", F: "#75512f", B: "#75512f", b: "#5d3f24" });
+    P(10, y + 9, 1, 1, "#75512f");                                // the front peak dips over the eyes
+  },
+  propeller(P, a, y, p, t) {                                      // a beanie in four colors and a spinning propeller
+    art(P, a, ["......rryyybbbg...",
+               "....rrryYybbBbgg..",
+               "...rWryyYybbBbggg.",
+               "...rrryyYybbBbggg.",
+               "...RRRMMMMNNNNGGG."], -9, y + 14,
+        { r: "#e74c3c", y: "#f6c915", b: "#3498db", g: "#2ecc71", R: "#b93a2d", M: "#c79d0a", N: "#2678b0", G: "#229a55",
+          Y: "#f9dc5c", B: "#5faee3", W: "#ff9c8f" });
+    P(0, y + 15, 2, 1, "#f6c915"); P(0, y + 16, 1, 1, "#6b6f78");
+    const moving = (p.legF || 0) !== 0 || (p.legB || 0) !== 0;
+    const f = Math.floor(t * 9 * (p.spin || (moving ? 2.2 : 1))) % 4, w = [9, 5, 1, 5][f];
+    if (w > 1) { box(P, 1 - Math.ceil(w / 2), y + 17, Math.floor(w / 2), 1, "#e74c3c"); box(P, 1, y + 17, Math.ceil(w / 2), 1, "#3498db"); }
+    else box(P, 0, y + 17, 1, 1, "#f6c915");
+  },
+};
 
 // ---------- custom sprite parts: pixel maps pinned to an anchor (see SPRITES.md) ----------
 
@@ -603,8 +870,8 @@ function drawMaps(P, a, g, layer, t) {
 }
 
 function crownOf(a) {                             // the top of the hair or hat, above the head's base row
-  return { cap: 13, beanie: 17, hardhat: 14, deerstalker: 15, propeller: 17 }[a.head]
-    || { bigcurly: 17, receding: 13, crop: 12 }[a.style] || 13;
+  return { cap: 15, beanie: 18, hardhat: 14, deerstalker: 16, propeller: 18 }[a.head]
+    || { bigcurly: 18, receding: 14, crop: 13, tousled: 15, spiky: 16 }[a.style] || 14;
 }
 
 // Draws the whole researcher; returns where the hands and head ended up so props can attach.
@@ -620,14 +887,15 @@ function drawBody(P, a, p, t) {
   drawMaps(P, a, g, "back", t);
   if (p.sit) {                                    // on the floor, knees up a little
     const kx = Math.round(a.legs * 0.55), fx = Math.round(a.legs * 0.85);
-    box(P, tl + 1, 1, 6, 4, a.pantsD);
-    limb(P, kx, 6, fx, 3, 4, a.pants); limb(P, 0, 3, kx, 6, 4, a.pants);
-    box(P, fx - 1, 1, 5, 2, a.shoes); P(fx - 1, 1, 5, 1, shade(a.shoes, 0.72));
+    const line = soft(a.pants);
+    box(P, tl + 1, 1, 6, 4, a.pantsD, line);
+    limb(P, kx, 6, fx, 3, 4, a.pants, line); limb(P, 0, 3, kx, 6, 4, a.pants, line);
+    pill(P, fx - 1, 1, 5, 2, a.shoes, soft(a.shoes)); P(fx - 1, 1, 5, 1, a.sneaker ? "#ffffff" : shade(a.shoes, 0.66));
   } else {
     drawLeg(P, a, -3, p.legB || 0, p.liftB, L, true);
     drawLeg(P, a, 1, p.legF || 0, p.liftF, L, false);
   }
-  if (a.legsStyle === "skirt" && !p.sit) { P(tl, hip - 7, a.width, 8, INK); P(tl + 1, hip - 6, a.width - 2, 6, a.skirt); P(tl + 1, hip - 6, a.width - 2, 1, shade(a.skirt, 1.2)); P(tl + 1, hip - 1, 2, 1, shade(a.skirt, 0.8)); }
+  if (a.legsStyle === "skirt" && !p.sit) drawSkirt(P, a, g);
   drawTorso(P, a, g);
   drawMaps(P, a, g, "body", t);
   drawHead(P, a, g, p, t);
@@ -675,10 +943,10 @@ function propShovel(P, hx, hy, down) {
 }
 function propSpyglass(P, g, ext) {
   const y = g.head + 4, n = Math.round(ext * 3);
-  box(P, 6, y, 6, 3, "#b8901c");
-  if (n > 0) box(P, 12, y, 6, 3, "#d4a72c");
-  if (n > 1) box(P, 18, y, 5, 3, "#e8c050");
-  if (n > 2) P(23, y, 1, 3, "#9fd8ff");
+  box(P, 7, y, 6, 3, "#b8901c");
+  if (n > 0) box(P, 13, y, 6, 3, "#d4a72c");
+  if (n > 1) box(P, 19, y, 5, 3, "#e8c050");
+  if (n > 2) P(24, y, 1, 3, "#9fd8ff");
 }
 function propLapLaptop(P, x, glow) {               // on the knees, the screen tipped back toward them
   box(P, x, 8, 10, 2, "#a3a9b1"); P(x + 1, 9, 8, 1, "#c7ccd2");
@@ -1979,12 +2247,12 @@ const QUIRKS = {
       for (let i = 0; i < 7; i++) r.stage.add({ kind: "px", c: GUM, x: ahead(r, 9), y: r.headTop - 10, vx: (Math.random() - 0.5) * 40, vy: Math.random() * 30, g: 90, life: 0.6, fade: true });
     }
     if (s.t < pop) return stand({ carry: true, eyes: "down", mouth: "o", props: rr < 1 ? null : (P, g) => {
-      const R = Math.round(rr), cx = 5 + R, cy = g.head + 2;
+      const R = Math.round(rr), cx = 6 + R, cy = g.head + 2;
       for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (dx * dx + dy * dy <= R * R + R) P(cx + dx, cy + dy, 1, 1, GUM);
       P(cx + Math.max(1, R - 2), cy + Math.max(1, R - 2), 1, 1, WHITE);
     } });
     return stand({ carry: true, eyes: s.t < pop + 0.8 ? "wide" : "down", mouth: s.t < pop + 0.8 ? "o" : "smirk", blush: s.t < pop + 0.8,
-                   props: s.t < pop + 0.8 ? (P, g) => { P(3, g.head + 2, 3, 1, GUM); P(6, g.head + 3, 1, 1, GUM); } : null });
+                   props: s.t < pop + 0.8 ? (P, g) => { P(3, g.head + 2, 4, 1, GUM); P(7, g.head + 3, 1, 1, GUM); } : null });
   } },
   evelyn: { dur: 2.6, run(r, s) {                  // peers over her reading glasses
     if (s.t > 0.8 && !s.said) { s.said = true; if (r.rand() < 0.3) r.say(pick(r.rand, ["Hmm?", "Says who, dear?", "Go on..."])); }
@@ -2240,14 +2508,18 @@ let mask = null;
 function outline(off, comp) {
   const img = off.getImageData(0, 0, OFF_W, OFF_H), d = img.data, n = OFF_W * OFF_H;
   if (!mask) mask = new Uint8Array(n);
-  for (let i = 0, o = 0; i < n; i++, o += 4)
-    mask[i] = !d[o + 3] ? 0 : d[o] === INK_RGB[0] && d[o + 1] === INK_RGB[1] && d[o + 2] === INK_RGB[2] ? 1 : 2;
+  for (let i = 0, o = 0; i < n; i++, o += 4)                      // 0 empty, 1 ink, 2 color, 3 a soft line
+    mask[i] = !d[o + 3] ? 0 : d[o] === INK_RGB[0] && d[o + 1] === INK_RGB[1] && d[o + 2] === INK_RGB[2] ? 1
+      : d[o] < 140 && SOFT.has((d[o] << 16) | (d[o + 1] << 8) | d[o + 2]) ? 3 : 2;
+  const ink = i => { const o = i * 4; d[o] = INK_RGB[0]; d[o + 1] = INK_RGB[1]; d[o + 2] = INK_RGB[2]; d[o + 3] = 255; };
   for (let yy = 0, i = 0; yy < OFF_H; yy++)
     for (let xx = 0; xx < OFF_W; xx++, i++) {
-      if (mask[i]) continue;
-      if ((xx > 0 && mask[i - 1] === 2) || (xx < OFF_W - 1 && mask[i + 1] === 2) ||
-          (yy > 0 && mask[i - OFF_W] === 2) || (yy < OFF_H - 1 && mask[i + OFF_W] === 2)) {
-        const o = i * 4; d[o] = INK_RGB[0]; d[o + 1] = INK_RGB[1]; d[o + 2] = INK_RGB[2]; d[o + 3] = 255;
+      const m = mask[i];
+      if (m === 0) {
+        if ((xx > 0 && mask[i - 1] === 2) || (xx < OFF_W - 1 && mask[i + 1] === 2) ||
+            (yy > 0 && mask[i - OFF_W] === 2) || (yy < OFF_H - 1 && mask[i + OFF_W] === 2)) ink(i);
+      } else if (m === 3) {                                       // a soft line on the edge of the figure is its outline
+        if (xx === 0 || xx === OFF_W - 1 || yy === 0 || yy === OFF_H - 1 || !mask[i - 1] || !mask[i + 1] || !mask[i - OFF_W] || !mask[i + OFF_W]) ink(i);
       }
     }
   comp.putImageData(img, 0, 0);
@@ -2433,7 +2705,7 @@ class Stage {
     const P = (x, y, w, h, c) => { if (c && w > 0 && h > 0 && y + h > peak) peak = y + h; paint(x, y, w, h, c); };
     const g = drawBody(P, r.a, p, r.clock);
     if (r.flower) {                              // tucked behind an ear: a little cross of petals
-      const fx = -5, fy = g.head + 7;
+      const fx = -6, fy = g.head + 7;
       P(fx + 1, fy, 1, 3, r.flower); P(fx, fy + 1, 3, 1, r.flower);
       P(fx + 1, fy + 1, 1, 1, r.flower === "#ffd43b" ? "#e8590c" : "#ffd43b");
     }
@@ -2854,7 +3126,7 @@ function start() {
 // colors, pinned pixel maps and keyframes. Nothing in it runs as code, so a model can write one safely.
 const PARTS = {
   worker: ["assistant", "pi"],
-  style: ["short", "receding", "bob", "bigcurly", "long", "crop", "neat", "spiky"],
+  style: ["short", "tousled", "receding", "bob", "bigcurly", "long", "crop", "neat", "spiky"],
   head: [null, "hijab", "cap", "beanie", "hardhat", "deerstalker", "propeller"],
   outfit: ["labcoat", "suit", "hoodie", "sweater", "cardigan", "vest", "overalls", "jacket", "abaya", "trench", "tshirt"],
   face: [null, "round", "browline", "halfmoon"],
@@ -2877,7 +3149,7 @@ const FAV_ACTIONS = () => Object.keys(ACTIONS).filter(k => !["spawn", "despawn",
 // One size only: these boxes keep every sprite inside the body the animations were drawn for.
 const MAP_BOX = { head: [-9, -3, 10, 22], behindHead: [-9, -3, 10, 22], body: [-12, -9, 10, 16], back: [-12, -9, 10, 16] };
 const PROP_BOX = [-6, -10, 12, 12];
-const FACE_BOX = [0, 1, 5, 7];                    // eyes, brows-to-mouth: drawn by code so faces can act; maps stay off
+const FACE_BOX = [-1, 1, 6, 8];                    // eyes, brows-to-mouth: drawn by code so faces can act; maps stay off
 const SPRITE_KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
