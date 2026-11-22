@@ -18,10 +18,10 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
-  combines approve-combine reject-combine link unlink`
-- Tests: `pytest -q` (expects 548 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
-  custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
-  `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
+  combines approve-combine reject-combine link unlink library`
+- Tests: `pytest -q` (expects 582 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+  custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
+  `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
   providers' keys, the 1F916 and Bluesky servers, the GitHub server and OAuth app, and the site address are looked
   up in `data/settings.json` (the
@@ -78,8 +78,12 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   straight away); when no worker has anything left, the loop rests (`--every` minutes, or until the UI wakes
   it). A step that raises is logged on its mission and skipped until the loop starts again; the others go on.
   `run.py loop` sends its notifications after every model task.
-- Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. One structured call on the
-  Principal Investigator's model, no tools: it reads every epic with its latest missions, the missions in no epic,
+- Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. On the Principal Investigator's
+  model: first it searches the desk's library (see Library below; code looks up the inspiration line itself, then the
+  Theorist may run up to `LOOKUPS` (4) searches of its own, all in `LOOKUP_TIME`, 4 minutes, through the `library` MCP
+  server), then one structured call with what it found (`findings_text`, within `FINDINGS_CHARS`) and no tools. A
+  library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
+  it searched for is `Theory.lookups`, in `data/theory.json` and its notes. It reads every epic with its latest missions, the missions in no epic,
   the latest published articles with the possibilities they left open, the links and combines so far (and the ones
   a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
   why). It looks for patterns inside an epic and themes emerging across epics, and replies with those patterns, the
@@ -133,6 +137,25 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
     is never proposed again. Research on the bigger mission gets each member's topic, objective and brief so far (or
     its last failed brief). A COMBINED mission is out of the flow (no role, not in progress, left out of the
     Theorist's desk) and its page links to the mission that took it over.
+- Library: `library.py` (code, no chat model), retrieval (RAG) over the desk's own work for the Theorist and
+  Researcher Chat, reached by agents only through its MCP server (`library_tools.py`, `library` in `mcp.json`, one
+  tool: `search_library(query, epic, mission)`). Its passages (`library.passages_of`): each mission's topic and
+  objective, its brief's thesis, each claim with the quotes it cites, counterpoint and uncited sources, and its
+  article's title and dek and sections (long ones cut into `CHUNK_CHARS` pieces), each indexed under its mission's
+  topic; nothing from outside the desk, so a passage is background, never a source. Lightweight: one SQLite file
+  (`data/library.db`, on this machine only), plain Python, no vector database or numpy (about 0.6 s a search at 3,600
+  passages with 768-dim vectors). It always ranks by words (BM25) and, with an embedding model, by meaning (cosine),
+  fused by reciprocal rank; no mission fills more than half the list while others match. The embedding model is
+  config (`settings.embed_model`: the Settings page's Library section, then `MISSION_LOOP_EMBED_MODEL`, else none, which
+  ranks by words only): an Ollama model (`/api/embed`) or `<provider>/<model>` for a connected provider with an
+  embeddings API (the OpenAI shape's `/embeddings`; `settings.PROVIDERS` marks Anthropic, DeepSeek and Groq
+  `"embed": False`). The Settings page checks a model with one embedding before saving it. How many passages a search
+  returns is a pick from `settings.TOP_N_CHOICES` (3, 5, 8, 10, 15, 20; default 5, `settings.library_top_n`). Every
+  search first syncs the index with the desk (`library.sync`: new passages added, changed or gone ones dropped, other
+  models' vectors dropped), then embeds what has no vector for at most `EMBED_TIME` (60 s); the rest ranks by words
+  until a later search or Index now on the Settings page (or `python run.py library`) embeds it. A failed embedding
+  call ranks by words and says why. Embedding calls are made there, not in `agents/llm.py` (which is for chat
+  models). Stub runs never embed. `library.TRANSPORT` lets tests block the network.
 - Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
@@ -329,8 +352,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - Tools are MCP servers, always: a new agent tool goes in a small server module registered in `mcp.json`
   (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
   so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`.
-- Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and looks things up on the
-  web: the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
+- Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and the desk's findings, looks
+  things up on the web, and can do everything the Theorist can (read the desk as it does, search the library, evolve
+  the line, propose epics and combines, link missions, queue a mission, ask for its turn), through the Theorist's own
+  checks (`theorist.settle_epic`, `settle_combine`, `settle_links`) and the same orchestrator functions
+  (`orchestrator.propose_epic`, `propose_combine`, `link`, with `by="chat"`; proposals still wait for the human): the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
   `python run.py ask "..." [--model]`. It needs Ollama but not the loop, so it works with the loop stopped. The panel
   has a model picker (installed Ollama models that can call tools; the default is shared with the loop, any other is
   loaded beside it), and keeps the conversation, the unsent draft and a question still being answered in that
@@ -346,11 +372,13 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   short prompt that explains the app, at most 8 tool calls in 3 minutes, tool results cut to 2,500 characters (web
   pages and searches 4,000), only the last 4 messages the page sends back, no memory and nothing saved. Its tools
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
-  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`; `mission_status` names a mission's links and
-  combines, `theorist_notes` the Theorist's last combine and links), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
+  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
+  and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`; `mission_status` names a mission's links and
+  combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
   panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
-  `add_mission` and `set_mission_epic` only read the database, `data/activity.json`, the channels' state files, the
+  `add_mission`, `set_mission_epic` and the Theorist's moves only read the database, `data/activity.json`, the channels' state files, the
   trails and `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the
   UI's Add mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones
   included, in an epic like the Epic field on its page (`orchestrator.assign_epic`). Neither changes a mission's
@@ -491,6 +519,8 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Approve or reject a proposed combine | its card under Needs you on the UI home page, or `python run.py combines`, then `approve-combine <slug>` / `reject-combine <slug>` |
 | Link two missions, or remove a link | Connections on a mission's page, or `python run.py link <a> <b> --why "..."` / `unlink <a> <b>` |
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
+| Search what the desk has found (the library) | `python run.py library "<words>" [--epic "<title>"] [--mission <slug>]`; no words indexes it; or ask Researcher Chat |
+| Pick the library's embedding model or top N | Settings → Library (provider, model, passages per search) |
 | Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
