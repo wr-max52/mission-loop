@@ -1,12 +1,13 @@
 """Bluesky channel: announces each feed entry on Bluesky with a short post (title and dek) and a link card.
 
-Credentials come from .env, which stays on this machine: BLUESKY_HANDLE (e.g. missionloop.bsky.social) and
-BLUESKY_APP_PASSWORD (an app password from Bluesky's Settings > Privacy and security > App passwords, never the
-account password). Without both, the channel is off. BLUESKY_SERVICE overrides the server (default bsky.social).
+Credentials stay on this machine: the UI's Settings page saves them to data/bluesky.json (mode 600), or .env sets
+BLUESKY_HANDLE (e.g. missionloop.bsky.social) and BLUESKY_APP_PASSWORD; the saved file wins. Use an app password
+from Bluesky's Settings > Privacy and security > App passwords, never the account password. Without a handle and
+password, the channel is off. BLUESKY_SERVICE overrides the server (default bsky.social).
 
 A post is at most 300 characters, so it carries only the title and the dek; the full article, with its sources and
 its "Possibility, not verified" labels, is behind the link. The link goes to the article on the published site when
-MISSION_LOOP_SITE_URL is set, else to its 1F916 post if it has one; with neither, the post has no link.
+a site address is set (settings.site_url), else to its 1F916 post if it has one; with neither, the post has no link.
 After each post the channel waits POST_GAP, so a backlog goes out about one a pass instead of all at once.
 The orchestrator decides which entry goes next (see agents/channel.py); this module only talks to Bluesky.
 """
@@ -24,18 +25,43 @@ TEXT_MAX = 300                             # Bluesky counts graphemes; code poin
 POST_GAP = timedelta(minutes=10)           # with a 15-minute loop, one post a pass
 UNCHECKED = "[Failed automated checks]"
 UNCHECKED_MARK = "[Failed automated checks:"  # what render.article_text puts near the top of an unchecked article
+CRED_FILE = Path("data/bluesky.json")      # {"handle", "app_password"}: saved from the Settings page
 STATE_FILE = Path("data/bluesky_state.json")  # {"next_at", "note"}: pacing, and why the last try failed
 TRANSPORT = None                           # tests put an httpx.MockTransport here so nothing leaves the machine
 
 class BadLogin(Exception):
-    """Bluesky doesn't accept the handle and app password. Nothing will post until .env is fixed."""
+    """Bluesky doesn't accept the handle and app password. Nothing will post until they are fixed."""
 
 # ---------- credentials and pacing ----------
 
-def credentials() -> tuple[str, str] | None:
-    handle = os.environ.get("BLUESKY_HANDLE", "").strip().lstrip("@")
-    password = os.environ.get("BLUESKY_APP_PASSWORD", "").strip()
+def _clean(handle: str, password: str) -> tuple[str, str] | None:
+    handle, password = handle.strip().lstrip("@"), password.strip()
     return (handle, password) if handle and password else None
+
+def saved_credentials() -> tuple[str, str] | None:
+    try:
+        data = json.loads(CRED_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    return _clean(str(data.get("handle", "")), str(data.get("app_password", "")))
+
+def credentials() -> tuple[str, str] | None:
+    return saved_credentials() or _clean(os.environ.get("BLUESKY_HANDLE", ""),
+                                         os.environ.get("BLUESKY_APP_PASSWORD", ""))
+
+def save_credentials(handle: str, password: str) -> None:
+    """Write data/bluesky.json readable only by this user. Check them with check_login first."""
+    found = _clean(handle, password)
+    if not found:
+        raise ValueError("a handle and an app password are both needed")
+    CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CRED_FILE.unlink(missing_ok=True)
+    fd = os.open(CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"handle": found[0], "app_password": found[1]}, indent=2) + "\n")
+
+def forget_credentials() -> None:
+    CRED_FILE.unlink(missing_ok=True)
 
 def enabled() -> bool:
     return credentials() is not None
@@ -83,8 +109,8 @@ def post_text(entry: dict) -> str:
 
 def article_link(entry: dict) -> str:
     """Where readers can read the whole article, or "" when there is no public copy."""
-    if settings.SITE_URL:
-        return settings.SITE_URL.rstrip("/") + f"/{entry['slug']}/"
+    if settings.site_url():
+        return settings.site_url().rstrip("/") + f"/{entry['slug']}/"
     m = store.get_mission(entry["slug"])
     f916 = m.channels.get("1f916") if m else None   # 1F916 posts first in a pass, so a fresh one counts
     return f916.where if f916 and f916.where.startswith("https://") else ""
@@ -110,11 +136,11 @@ def _check(r: httpx.Response, what: str) -> dict:
         raise Refused(f"HTTP {r.status_code}: {_error(r)}")
     raise RuntimeError(f"Bluesky answered HTTP {r.status_code} to {what}: {_error(r)}")
 
-def login(c: httpx.Client) -> dict:
+def login(c: httpx.Client, creds: tuple[str, str] | None = None) -> dict:
     """A session: {"did", "handle", "accessJwt", ...}. Raises BadLogin when the app password is wrong."""
-    found = credentials()
+    found = creds or credentials()
     if not found:
-        raise BadLogin("BLUESKY_HANDLE and BLUESKY_APP_PASSWORD are not both set in .env")
+        raise BadLogin("no Bluesky handle and app password: add them on the Settings page or in .env")
     return _check(c.post("/xrpc/com.atproto.server.createSession",
                          json={"identifier": found[0], "password": found[1]}), "login")
 
@@ -150,7 +176,8 @@ def _send(entry: dict, now: datetime) -> str:
                       "the post")
     return web_url(made["uri"], session.get("handle") or session["did"])
 
-def check_login() -> str:
-    """Log in without posting; returns the handle Bluesky knows us by."""
+def check_login(handle: str = "", password: str = "") -> str:
+    """Log in without posting (with the given handle and password, else the configured ones); returns the
+    handle Bluesky knows us by."""
     with _client() as c:
-        return login(c).get("handle", "")
+        return login(c, _clean(handle, password)).get("handle", "")

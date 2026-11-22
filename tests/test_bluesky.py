@@ -158,4 +158,40 @@ def test_ui_and_status_show_the_channel(sky, capsys):
 
 def test_ui_says_how_to_turn_it_on_when_off():
     published("a", T0)
-    assert "check-bluesky" in TestClient(ui.app).get("/").text
+    html = TestClient(ui.app).get("/").text
+    assert "check-bluesky" in html and 'href="/settings"' in html
+
+@pytest.fixture
+def sky_server(monkeypatch):
+    """A fake Bluesky with nothing in .env: the only way on is the Settings page."""
+    fake = FakeBluesky()
+    monkeypatch.setattr(bluesky, "TRANSPORT", httpx.MockTransport(fake))
+    return fake
+
+def test_settings_page_turns_bluesky_on_after_checking_the_login(sky_server):
+    client = TestClient(ui.app)
+    assert 'action="/settings/bluesky"' in client.get("/settings").text and not agents.bluesky_enabled()
+    r = client.post("/settings/bluesky", data={"handle": "@loopdesk.bsky.social", "app_password": "app-pass-test"},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/settings?done=bluesky_on"
+    assert agents.bluesky_enabled() and oct(bluesky.CRED_FILE.stat().st_mode & 0o777) == "0o600"
+    assert "posting as <strong>loopdesk.bsky.social</strong>" in client.get("/settings").text
+    published("a", T0)
+    assert on_bluesky("a") and len(sky_server.posts) == 1   # posted with the saved login
+    client.post("/settings/bluesky", data={"forget": "1"})
+    assert not agents.bluesky_enabled() and not bluesky.CRED_FILE.exists()
+
+def test_a_login_bluesky_refuses_is_never_saved(sky_server):
+    html = TestClient(ui.app).post("/settings/bluesky", data={"handle": "loopdesk.bsky.social",
+                                                              "app_password": "wrong"}).text
+    assert "Bluesky did not accept that login" in html and "Invalid identifier or password" in html
+    assert not bluesky.CRED_FILE.exists() and "wrong" not in html
+
+def test_bluesky_settings_refuse_cross_site_posts(sky_server):
+    r = TestClient(ui.app).post("/settings/bluesky", headers={"origin": "https://evil.example"},
+                                data={"handle": "loopdesk.bsky.social", "app_password": "app-pass-test"})
+    assert r.status_code == 403 and not bluesky.CRED_FILE.exists()
+
+def test_bluesky_links_use_the_site_address_saved_in_settings(sky_server):
+    settings.set_site_url("https://example.com/news/")
+    assert bluesky.article_link({"slug": "a"}) == "https://example.com/news/a/"

@@ -7,15 +7,16 @@ Never commit or push `missions.yaml`, `missions/`, `data/`, `site/`, or `.env`; 
 machine. A local `pre-push` hook blocks commits containing them. Branches started before the repo
 moved to GitHub must be rebased onto `origin/main` before pushing. Publishing writes a static site
 into `site/` on this machine, posts the article text to 1f916.ai only once `data/1f916.json` holds a key, and
-announces it on Bluesky only once `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`.
-That file is the citizen's whole identity (no recovery): never commit, print or move it.
+announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the Settings page) or `.env` has
+`BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole identity (no recovery) and
+`data/bluesky.json` holds an app password: never commit, print or move either.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 205 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
+- Tests: `pytest -q` (expects 216 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
   `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
@@ -58,8 +59,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
     text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)
     and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
-    what makes a mission DONE. Feed links are relative unless `MISSION_LOOP_SITE_URL` is set in `.env`; entry
-    ids are the slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
+    what makes a mission DONE. Feed links are relative unless a site address is set (the UI's Settings page
+    saves it in `data/settings.json`, which wins over `MISSION_LOOP_SITE_URL` in `.env`); entry ids are the
+    slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
     `CHANNELS` in `agents/__init__.py`). At the end of every pass `orchestrator.post_to_channels` gives each
     enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
@@ -72,9 +74,10 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky with a short post (title and dek, at most
     300 characters; a possibility in the dek keeps its "Possibility, not verified" label, and a pushed-through
     article starts with "[Failed automated checks]"). Its link card goes to the article on the site when
-    `MISSION_LOOP_SITE_URL` is set, else to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one
-    counts), else there is no link. On only when `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` (an app
-    password, never the account password; `python run.py check-bluesky` logs in without posting). After each
+    a site address is set (Settings page or `MISSION_LOOP_SITE_URL`), else to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one
+    counts), else there is no link. On only with a handle and app password (never the account password): the
+    Settings page checks them with Bluesky and saves them to `data/bluesky.json` (mode 600, wins over `.env`'s
+    `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. After each
     post it waits `POST_GAP` (10 minutes), so a backlog goes out about one a pass. `data/bluesky_state.json`
     holds that wait and the last failure, which the UI and `status` show.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
@@ -95,7 +98,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
-the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`). `ui.py`
+the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
+Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
+as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
 the agent working at that moment, read from `data/activity.json` (written by `activity.py`).
@@ -118,9 +123,9 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
-| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set `MISSION_LOOP_SITE_URL` once it is hosted |
-| Turn on Bluesky posting | add `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` to `.env`, then `python run.py check-bluesky` |
-| Turn on 1F916 posting | `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
+| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the site address on the Settings page once it is hosted |
+| Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
+| Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a
