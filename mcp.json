@@ -18,5 +18,9 @@
   "loop": {
     "command": "python",
     "args": ["status_tools.py"]
+  },
+  "library": {
+    "command": "python",
+    "args": ["library_tools.py"]
   }
 }
