@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 216 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
+- Tests: `pytest -q` (expects 218 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
   `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.

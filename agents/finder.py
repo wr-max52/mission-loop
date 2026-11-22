@@ -5,6 +5,7 @@ import asyncio, random
 from pydantic import BaseModel, ValidationError
 from contracts import MissionIdea, words
 from agents import llm
+import stopping
 from agents.researcher import tool_loop
 from agents.toolbox import Toolbox
 
@@ -128,7 +129,11 @@ async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[
     messages.append({"role": "user", "content": PROPOSE.format(epics=epic_listing(epics))})
     error = None
     for _ in range(2):                     # one repair attempt for malformed JSON
-        msg = await llm.chat(messages, format=MissionIdeas.model_json_schema())
+        try:
+            msg = await llm.chat(messages, format=MissionIdeas.model_json_schema())
+        except llm.Cut as cut:             # stopped: keep whatever leads got written
+            ideas = stopping.salvage(cut.text, MissionIdeas)
+            return _keep(ideas.missions, results, topics) if ideas else []
         try:
             return _keep(MissionIdeas.model_validate_json(msg.content).missions, results, topics)
         except ValidationError as e:

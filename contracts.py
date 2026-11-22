@@ -35,6 +35,8 @@ class Mission(BaseModel):
     validator_notes: str = ""              # validator failures or human feedback
     rejected_brief: "RejectedBrief | None" = None  # last brief the validator failed; retries revise it
     rejected_article: "RejectedArticle | None" = None  # last article the check failed
+    interrupted_brief: "ResearchBrief | None" = None   # written out when stop was pressed; checked next pass
+    interrupted_article: "Article | None" = None       # same for the writer
     unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
     unchecked_article: str = ""            # same for a failed article
     published_at: datetime | None = None

@@ -1,7 +1,7 @@
 """Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
 import asyncio
 from pydantic import BaseModel, ValidationError
-import activity, related, settings
+import activity, related, settings, stopping
 from contracts import Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
@@ -149,13 +149,19 @@ def _tool_servers(m: Mission) -> list[str]:
 
 async def tool_loop(system: str, tb, budget: int, time_limit: float | None = None) -> list:
     """One run of the small model: search and fetch until it stops or the budget or time runs out.
-    Running out of time works like running out of budget: the run keeps what it found so far."""
+    Running out of time works like running out of budget: the run keeps what it found so far.
+    So does the stop button: the turn in flight may finish, then the run ends without its tool calls."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
     calls = 0
     try:
         async with asyncio.timeout(time_limit) as limit:
-            while calls < budget:
-                msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
+            while calls < budget and not stopping.requested():
+                try:
+                    msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
+                except llm.Cut:
+                    break
+                if msg.tool_calls and stopping.requested():
+                    break                  # its tool calls would never be answered
                 messages.append(msg)
                 if not msg.tool_calls:
                     break
@@ -196,7 +202,7 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
     pocs = None
     async with toolbox_factory(_tool_servers(m)) as tb:
         messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT)
-        if settings.OUTREACH:                  # separate run; a failed check stops here, before the main model
+        if settings.OUTREACH and not stopping.requested():   # separate run; a failed check stops here, before the main model
             activity.begin(m.slug, "contacts")
             pocs = await find_contacts(m, tb)
             messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
@@ -207,13 +213,18 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
     schema = ResearchBrief.model_json_schema()
     error = None
     for _ in range(2):                     # one repair attempt for malformed JSON
-        msg = await llm.chat(messages, format=schema)
+        try:
+            msg = await llm.chat(messages, format=schema)
+        except llm.Cut as cut:             # stop's grace ran out: keep what got written
+            raise stopping.Interrupted(stopping.salvage(cut.text, ResearchBrief))
         try:
             brief = ResearchBrief.model_validate_json(msg.content)
             if pocs is not None:
                 brief.pocs = pocs              # code-checked contacts; the model can't swap them
             return brief
         except ValidationError as e:
+            if stopping.requested():       # no time for a repair round
+                raise stopping.Interrupted(stopping.salvage(msg.content, ResearchBrief))
             error = e
             messages.append({"role": "assistant", "content": msg.content})
             messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})

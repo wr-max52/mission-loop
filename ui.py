@@ -15,7 +15,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, Pl
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, clock, orchestrator, settings, store
+import activity, agents, clock, orchestrator, settings, stopping, store
 from agents import bluesky, f916, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
@@ -38,7 +38,7 @@ MESSAGES = {
     "inspired": "Inspiration saved. The mission finder works from it on every pass.",
     "uninspired": "Inspiration cleared. The mission finder is off.",
     "started": "Loop started.",
-    "stopping": "Stop requested. The loop finishes its current task, then exits.",
+    "stopping": "Stop requested. The agent at work writes out what it has (2 minutes at most), then the loop exits.",
     "woken": "The loop runs a pass now.",
     "epic_set": "Epic saved.",
     "epic_approved": "New epic approved.",
@@ -340,7 +340,7 @@ def agent_strip(now: dict | None) -> str:
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
     if running and stopping:
-        state, dot = "Loop is stopping after its current task", "stopping"
+        state, dot = "Loop is stopping: saving the current work (2 minutes at most)", "stopping"
         controls = ""
     elif running:
         state, dot = "Loop is running", "on"
@@ -907,8 +907,7 @@ async def loop_action(request: Request) -> Response:
         start_loop(every)
         return go(back, done="started")
     if action == "stop":
-        orchestrator.STOP_FLAG.parent.mkdir(parents=True, exist_ok=True)
-        orchestrator.STOP_FLAG.touch()
+        stopping.press(orchestrator.STOP_FLAG)
         return go(back, done="stopping")
     if action == "wake":
         wake()
