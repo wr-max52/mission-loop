@@ -340,6 +340,40 @@ def test_chat_ask_refuses_other_sites_and_reports_failures(monkeypatch):
     monkeypatch.setattr(ui.agents, "chat", broken)
     assert "Is Ollama running?" in client.post("/chat/ask", json={"question": "x"}).json()["answer"]
 
+def test_an_answer_outlives_the_page_that_asked(monkeypatch):
+    """A page that navigates mid-answer hands it on: the next page fetches it by the id the question carried."""
+    import threading
+    go = threading.Event()
+    def slow(q, h, model=None):
+        go.wait(5)
+        return f"answer to {q}"
+    monkeypatch.setattr(ui.agents, "chat", slow)
+    client = TestClient(ui.app)
+    asked = threading.Thread(target=client.post, args=("/chat/ask",), kwargs={"json": {"question": "q1", "id": "abc"}})
+    asked.start()
+    for _ in range(100):
+        if "abc" in ui.CHAT_JOBS:
+            break
+        threading.Event().wait(0.02)
+    go.set()
+    assert client.get("/chat/answer", params={"id": "abc"}).json() == {"answer": "answer to q1"}
+    asked.join()
+    r = client.get("/chat/answer", params={"id": "never-asked"})          # e.g. the UI restarted meanwhile
+    assert r.status_code == 404 and r.json() == {"lost": True}
+
+def test_chat_keeps_only_a_few_finished_answers(monkeypatch):
+    monkeypatch.setattr(ui.agents, "chat", lambda q, h, model=None: "ok")
+    monkeypatch.setattr(ui, "CHAT_JOBS", {})
+    client = TestClient(ui.app)
+    for i in range(ui.CHAT_JOBS_KEPT + 5):
+        client.post("/chat/ask", json={"question": "x", "id": f"q{i}"})
+    assert len(ui.CHAT_JOBS) == ui.CHAT_JOBS_KEPT and f"q{ui.CHAT_JOBS_KEPT + 4}" in ui.CHAT_JOBS
+
+def test_panel_has_copy_and_keeps_the_draft():
+    html = TestClient(ui.app).get("/").text
+    assert 'id="chat-copy"' in html and 'id="chat-clear"' in html
+    assert '"chat-draft"' in html and '"chat-pending"' in html and "/chat/answer" in html
+
 async def test_a_stale_stop_flag_never_cuts_the_assistant_off(monkeypatch):
     """data/STOP can outlive a stopped loop; loop calls are cut after the grace, the chat's are not."""
     import os, stopping

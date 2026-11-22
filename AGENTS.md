@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 413 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 416 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -238,7 +238,11 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   web: the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
   `python run.py ask "..." [--model]`. It needs Ollama but not the loop, so it works with the loop stopped. The panel
   has a model picker (installed Ollama models that can call tools; the default is shared with the loop, any other is
-  loaded beside it), and keeps the conversation in that browser tab only, so the page's refreshes don't wipe it. With
+  loaded beside it), and keeps the conversation, the unsent draft and a question still being answered in that
+  browser tab only (sessionStorage), so refreshes, moving between pages and closing the panel lose nothing; Clear starts
+  over and Copy puts the conversation on the clipboard as text. A question carries an id, and the UI holds the last 20
+  answers in memory (`ui.CHAT_JOBS`, never on disk), so a page that navigates mid-answer hands it to the next page
+  (`/chat/answer`). With
   animations on, a pixel researcher for the picked model walks in at the top of the panel and says which model it
   is (`Guide` in `assets/researchers.js`, sent by the chat's `chatguide` event; the script loads the first time the
   panel opens): a worker's own model brings someone from that worker's crew, any other model the tenured crew from
