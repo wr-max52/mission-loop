@@ -3028,7 +3028,10 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 /* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
 .board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
   pointer-events:none; image-rendering:pixelated; }
-.board-wrap .note[data-lab] { --r:0deg !important; }        /* level ground to walk on */
+.board-wrap:not(.cards-sticky) .note[data-lab] { --r:0deg !important; }   /* level ground to walk on */
+/* sticky notes: the researcher stands inside the card on its bottom edge and tilts with it */
+.board-wrap.cards-sticky .note canvas.lab-stage { bottom:0; }
+.board-wrap.cards-sticky .note[data-lab] { padding-bottom:calc(11px * var(--s) + 46px); }
 
 /* ---------- surface: arcade ---------- */
 .board-wrap.surface-arcade { background-color:#1d2b53; border-radius:0;

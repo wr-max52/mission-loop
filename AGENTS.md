@@ -394,7 +394,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour. A card's colour is its
   stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
   a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
-  researcher from that worker's crew to walk on top of it, as on the mission cards. Laser pulses and holograms
+  researcher from that worker's crew: on a sticky note it stands inside the card on its bottom edge (the busy note
+  grows room there) and tilts with it; on the other styles it walks along the top, which stays level. Laser pulses and holograms
   flicker only while Animations are on. Board notes override the published site's `.note` and `.epic` styles,
   which share their class names.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
