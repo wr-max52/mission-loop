@@ -187,6 +187,8 @@ def set_auto_mode(on: bool) -> None:
 # The Research Assistant runs the small model's legwork (searching and reading pages); the Principal
 # Investigator runs the big model's writing. Each can be turned off, and then the other one does its steps
 # with its own model. With both on, the loop runs them at the same time whenever each has a task.
+# Each worker can also be several of the same kind (its count, 1 to MAX_COUNT): that many tasks for its role
+# run at once, all on its one model. Each copy is a seat: "assistant", "assistant-2", ... (seats()).
 # Which model each uses is this machine's choice, never the code's: settings.json, then .env, else none.
 
 WORKERS = {
@@ -216,6 +218,37 @@ def chat_model() -> str:
     """The chat assistant's default model: settings.json, then MISSION_LOOP_CHAT_MODEL, then the Research
     Assistant's model, so Ollama reuses the copy the loop already loaded."""
     return saved().get("chat_model") or _env("MISSION_LOOP_CHAT_MODEL") or model_for("assistant")
+
+MAX_COUNT = 8                              # copies of one worker at most; Ollama queues what it can't run at once
+
+def worker_count(worker: str) -> int:
+    """How many of this worker run at once (1 unless set), whether or not it is on."""
+    try:
+        n = int(saved().get(f"{worker}_count") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(MAX_COUNT, n))
+
+def set_worker_count(worker: str, n: int) -> None:
+    """Raises ValueError for an unknown worker or a count outside 1 to MAX_COUNT."""
+    if worker not in WORKERS:
+        raise ValueError(f"no worker {worker!r}")
+    if not 1 <= n <= MAX_COUNT:
+        raise ValueError(f"a worker count is 1 to {MAX_COUNT}")
+    save(**{f"{worker}_count": n if n > 1 else ""})     # 1 is not stored
+
+def seats() -> list[str]:
+    """Every copy of every worker that is on, the loop's threads: "assistant", "assistant-2", ..., "pi", ..."""
+    return [w if i == 1 else f"{w}-{i}" for w in WORKERS if worker_on(w) for i in range(1, worker_count(w) + 1)]
+
+def seat_worker(seat: str) -> str:
+    """The worker a seat is a copy of ("assistant-2" -> "assistant"); anything else (the desk) comes back as is."""
+    return seat.split("-", 1)[0]
+
+def seat_name(seat: str) -> str:
+    """"Research Assistant", "Research Assistant 2", ...; "" for a seat that is no worker's."""
+    worker, _, n = seat.partition("-")
+    return f"{WORKERS[worker]} {n}".strip() if worker in WORKERS else ""
 
 def missing_models() -> list[str]:
     """Workers that are on but have no model chosen yet."""
