@@ -326,9 +326,9 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
         changed += 1
     return changed
 
-def _as_worker(worker: str, fn, *args):
-    """Run one task on a worker's thread, so its activity shows under that worker."""
-    activity.work_as(worker)
+def _as_worker(seat: str, fn, *args):
+    """Run one task on a worker's thread, so its activity shows under that seat (a copy of a worker)."""
+    activity.work_as(seat)
     try:
         return fn(*args)
     finally:
@@ -336,7 +336,8 @@ def _as_worker(worker: str, fn, *args):
 
 def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:
     """The farthest-along mission for this worker that hasn't had its turn this round. Once every one has,
-    a new round starts, so a mission whose attempt failed waits while the others get a go."""
+    a new round starts, so a mission whose attempt failed waits while the others get a go. Every copy of a
+    worker shares its rounds."""
     mine = [m for m in waiting if settings.worker_for(role(m)) == worker]
     fresh = [m for m in mine if (worker, m.slug) not in turns]
     if mine and not fresh:
@@ -349,7 +350,8 @@ PASS_EVERY = 300                           # seconds: during long model work, a 
 MAX_TASKS = 500                            # per run: a safety net against a mission that never settles
 
 def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
-    """Run every mission until each is blocked, with the two workers side by side. Missions are read fresh
+    """Run every mission until each is blocked, with the two workers side by side, each as many copies (seats) as
+    its count on the Settings page, read each sweep. Missions are read fresh
     every few seconds, and the order is the same each time:
     1. Every step that needs no model, farthest along first (publish a reviewed article, move an approved brief
        on, ...). Right after the first sweep, whenever one publishes something, whenever a human asks to
@@ -368,9 +370,10 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     seen: set = set()                      # publish requests the last publishing pass already tried
     last_pass = time.monotonic()
     turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
-    running: dict = {}                     # future -> (worker, mission, its state before) or (worker, None, desk task)
+    running: dict = {}                     # future -> (seat, mission, its state before) or (seat, None, desk task)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
-    with ThreadPoolExecutor(max_workers=len(settings.WORKERS), thread_name_prefix="worker") as pool:
+    seats = len(settings.WORKERS) * settings.MAX_COUNT       # threads start only as seats need them
+    with ThreadPoolExecutor(max_workers=seats, thread_name_prefix="worker") as pool:
         while True:
             if not STOP_FLAG.exists() and tasks < max_tasks:
                 busy = {m.slug for _, m, _ in running.values() if m}
@@ -388,24 +391,25 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                 taken = {w for w, _, _ in running.values()}
                 if not theorist_done and not theorist_due(now_fn()):
                     theorist_done = True       # checked once a run; a THINK flag set later waits for the next run
-                for worker in settings.WORKERS:
-                    if worker in taken or not settings.worker_on(worker):
+                for seat in settings.seats():
+                    if seat in taken:
                         continue
+                    worker = settings.seat_worker(seat)
                     if not theorist_done and settings.worker_for("pi") == worker:
                         theorist_done = True
-                        running[pool.submit(_as_worker, worker, think, now_fn())] = (worker, None, "theorist")
+                        running[pool.submit(_as_worker, seat, think, now_fn())] = (seat, None, "theorist")
                         continue
                     m = _pick(worker, waiting, turns)
                     if m:
                         waiting.remove(m)
                         turns.add((worker, m.slug))
-                        running[pool.submit(_as_worker, worker, step, m, now_fn())] = (worker, m, m.state)
+                        running[pool.submit(_as_worker, seat, step, m, now_fn())] = (seat, m, m.state)
                         tasks += 1
                     elif not finder_done and theorist_done and settings.worker_for("assistant") == worker \
                             and not any(role(m) == "assistant" for m in waiting) \
                             and "theorist" not in (task for _, _, task in running.values()):
                         finder_done = True
-                        running[pool.submit(_as_worker, worker, find_new_missions, now_fn())] = (worker, None, "finder")
+                        running[pool.submit(_as_worker, seat, find_new_missions, now_fn())] = (seat, None, "finder")
             if not running:
                 return changed
             done, _ = wait(running, timeout=POLL, return_when=FIRST_COMPLETED)

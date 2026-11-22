@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 416 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 421 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -93,8 +93,14 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   two threads (`orchestrator.work`): each takes the next task for its role (`orchestrator.role`), so one
   mission's search runs while another's article is written; steps with no model run between tasks on the
   main thread. A worker switched off hands its role to the other (`settings.worker_for`), which then works one
-  task at a time; one always stays on. Model choices come from the LLM connection (`llm.connection`: the Ollama at
-  `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per worker.
+  task at a time; one always stays on. Each worker also has a count (1 to `settings.MAX_COUNT`, 8; the − / + stepper
+  or a typed number on its card, saved as `<worker>_count` only above 1): that many copies, seats, run its role at
+  once, each on its own mission and all on its one model (`settings.seats()`: `assistant`, `assistant-2`, ...,
+  `pi`; `seat_worker` and `seat_name` map back). The loop reads the seats every sweep, so a new count applies at its
+  next look for work; every copy shares its worker's rounds in `_pick`, and the Theorist and finder still run once.
+  Ollama runs as many requests at once as its `OLLAMA_NUM_PARALLEL` allows and queues the rest. Model choices come from the LLM connection (`llm.connection`: the Ollama at
+  `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per seat; the UI
+  names an extra seat "Research Assistant 2" and gives it its worker's crew of researchers.
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`, in two
   steps that can be done at different times. `gather` (Research Assistant) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`) and saves the transcript as the mission's `evidence` artifact
@@ -359,7 +365,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
-| Pick each worker's model, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
+| Pick each worker's model, how many of it run at once, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
 | Point at another Ollama | the LLM connection address on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Block a source site | add the domain to `blocked_domains.txt` |
 

@@ -181,5 +181,8 @@ def ready() -> tuple[bool, str]:
         model = settings.worker_model(w)
         if model not in names:
             return False, f"model {model} ({settings.WORKERS[w]}) is not pulled; run: ollama pull {model}"
-    return True, " + ".join(f"{settings.worker_model(w)} ({settings.WORKERS[w]})" for w in working) \
-        + (", in parallel" if len(working) > 1 else "")
+    def who(w):
+        n = settings.worker_count(w)
+        return f"{settings.WORKERS[w]}{f' x{n}' if n > 1 else ''}"
+    return True, " + ".join(f"{settings.worker_model(w)} ({who(w)})" for w in working) \
+        + (", in parallel" if len(settings.seats()) > 1 else "")

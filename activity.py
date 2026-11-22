@@ -1,8 +1,9 @@
 """What the loop is working on right now, so the UI can show it.
 
 The loop and the UI are separate processes and the database only changes when a task ends, so each
-agent's start is recorded in one small file. The two workers (settings.WORKERS) can each be busy at once,
-so the file holds one entry per worker: {"assistant": {...}, "pi": {...}}. Work done outside a worker
+agent's start is recorded in one small file. The two workers (settings.WORKERS) can each be busy at once, each
+as several copies (settings.seats()), so the file holds one entry per seat: {"assistant": {...}, "assistant-2":
+{...}, "pi": {...}}. Work done outside a worker
 (publishing, posting to channels) is filed under "desk". It is display-only: a failure here never stops a
 mission. A killed loop leaves the file behind, so only trust it while the loop holds its lock.
 """
@@ -78,7 +79,7 @@ def reset() -> None:
         _write({})
 
 def working() -> list[dict]:
-    """Every agent at work now, one per worker: [{"worker", "slug", "agent", "since"}], earliest start first."""
+    """Every agent at work now, one per seat: [{"worker" (the seat), "slug", "agent", "since"}], earliest start first."""
     entries = []
     for worker, e in _read().items():
         if isinstance(e, dict) and e.get("agent") in AGENTS:

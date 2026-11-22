@@ -48,15 +48,16 @@ def _since(at: str) -> str:
     return _ago((datetime.now(timezone.utc) - when).total_seconds()) + " ago"
 
 def _working() -> list[dict]:
-    """The agents working this moment, at most one per worker. The record only counts while the loop holds its lock."""
+    """The agents working this moment, at most one per seat (a copy of a worker). The record only counts while the loop holds its lock."""
     return activity.working() if orchestrator.loop_running() else []
 
 def _on(slug: str, now: list[dict]) -> dict | None:
     return next((e for e in now if e["slug"] == slug), None)
 
 def _worker(e: dict) -> str:
-    name = settings.WORKERS.get(e.get("worker", ""))
-    return f" ({name}, {settings.worker_model(e['worker'])})" if name else ""
+    seat = e.get("worker", "")
+    name = settings.seat_name(seat)
+    return f" ({name}, {settings.worker_model(settings.seat_worker(seat))})" if name else ""
 
 def _label(m) -> str:
     if m.state == State.BRIEF_READY and m.approved:

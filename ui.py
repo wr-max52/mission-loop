@@ -66,6 +66,7 @@ MESSAGES = {
     "worker_saved": "Worker saved. It takes its next task with that model.",
     "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
     "worker_off": "Worker off. The other worker does its steps, one task at a time.",
+    "worker_count": "Worker count saved. The loop picks it up the next time it looks for work.",
     "joined": "Joined 1F916. Published articles post there from now on, one a day, newest first.",
     "github_connected": "GitHub connected. Now pick the repo the site goes to.",
     "github_linked": "Site linked. The site was pushed to GitHub; GitHub Pages takes a minute or two to put it online.",
@@ -96,6 +97,7 @@ ERRORS = {
     "ollama_host": "The Ollama address must be a full http:// or https:// address, or empty for the default.",
     "server": "A server address must be a full http:// or https:// address, or empty for the default.",
     "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
+    "worker_count": f"A worker count is a whole number from 1 to {settings.MAX_COUNT}.",
     "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
     "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
@@ -108,7 +110,8 @@ def loop_running() -> bool:
     return orchestrator.loop_running()
 
 def running_now() -> list[dict]:
-    """Every agent working this moment, at most one per worker. The record only counts while the loop is alive."""
+    """Every agent working this moment, at most one per seat (a copy of a worker). The record only counts while the
+    loop is alive."""
     return activity.working() if loop_running() else []
 
 def start_loop(every: float) -> None:
@@ -433,6 +436,19 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .worker ul li { margin:.15rem 0; }
 .worker .note { font-size:.85rem; margin:.2rem 0 .6rem; }
 .worker .grow { flex:1; }
+.stepper { display:flex; align-items:center; flex-wrap:wrap; gap:.3rem .7rem; }
+.stepper .steps { display:inline-flex; align-items:stretch; border:1px solid var(--rule); border-radius:8px;
+                  overflow:hidden; background:var(--bg); }
+.stepper .steps:focus-within { border-color:var(--muted); }
+.stepper button { border:0; border-radius:0; padding:.3rem .8rem; font-size:1.1rem; line-height:1; min-width:2.4rem; }
+.stepper button:hover:not(:disabled) { background:var(--quote); }
+.stepper button:disabled { color:var(--muted); opacity:.45; cursor:default; }
+.stepper input[type=number] { width:3.2rem; padding:.3rem 0; border:0; border-radius:0; text-align:center;
+                              font-weight:700; border-left:1px solid var(--rule); border-right:1px solid var(--rule);
+                              -moz-appearance:textfield; appearance:textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+.stepper input:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.stepper .hint { font-size:.85rem; }
 .crew { position:relative; height:116px; margin:0 -1rem; border-top:1px solid var(--rule);
         background:linear-gradient(var(--quote), var(--quote)) bottom / 100% 9px no-repeat; }
 .crew canvas.lab-stage { bottom:0; height:116px; }
@@ -666,9 +682,9 @@ def doing(e: dict) -> str:
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
 def flow_status(now: list[dict], running: bool) -> str:
-    """The lines under the strip: who is working on what, and for how long. With both workers busy,
+    """The lines under the strip: who is working on what, and for how long. With more than one worker busy,
     one line each, named."""
-    lines = [(f'<span class="who">{settings.WORKERS[e["worker"]]}</span> ' if e["worker"] in settings.WORKERS
+    lines = [(f'<span class="who">{settings.seat_name(e["worker"])}</span> ' if settings.seat_name(e["worker"])
               and len(now) > 1 else "") + doing(e) for e in now]
     return "<br>".join(lines) or ("No agent is working right now." if running else "Loop is off, so every step is idle.")
 
@@ -702,7 +718,7 @@ def flow_strip(state: dict) -> str:
     always drawn; with the loop off nothing on it is lit. assets/flow.js keeps it current without reloading the
     page (and stacks it on a narrow screen), and the pixel researchers stand on its tiles."""
     auto = settings.auto_mode()
-    steps, lit = flow_steps(auto), {e["step"]: e["worker"] for e in state["working"]}
+    steps, lit = flow_steps(auto), {e["step"]: settings.seat_worker(e["worker"]) for e in state["working"]}
     track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you", auto=auto)
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
@@ -921,6 +937,22 @@ def model_options(current: str, conn: dict) -> str:
         opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
     return "".join(opts)
 
+def plural(worker: str) -> str:
+    """"a Research Assistant" or "3 Research Assistants"."""
+    n, name = settings.worker_count(worker), settings.WORKERS[worker]
+    return f"{n} {name}s" if n > 1 else f"the {name}"
+
+def count_stepper(worker: str) -> str:
+    """How many of this worker run at once: − and + (assets: WORKER_COUNT_JS, which waits for the clicks to settle
+    before saving) or a number typed in."""
+    n, top, name = settings.worker_count(worker), settings.MAX_COUNT, settings.WORKERS[worker]
+    hint = "at a time" if n == 1 else f"at a time, each on its own mission"
+    return f"""<label for="{worker}_count">How many</label>
+  <div class="stepper">
+    <span class="steps"><button type="button" data-step="-1" aria-label="One fewer {name}"{" disabled" if n <= 1 else ""}>&minus;</button><input type="number" id="{worker}_count" name="count" value="{n}" min="1" max="{top}" step="1" inputmode="numeric" onchange="this.form.requestSubmit()"><button type="button" data-step="1" aria-label="One more {name}"{" disabled" if n >= top else ""}>+</button></span>
+    <span class="hint">{hint}</span>
+  </div>"""
+
 def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
     name, other_name = settings.WORKERS[worker], settings.WORKERS[other]
@@ -934,8 +966,10 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
         extra = "" if settings.worker_on(other) else (f'<li>and, while the {other_name} is off, every one of '
                                                       "its steps too</li>")
         steps += extra
-        busy = next((e for e in now if e["worker"] == worker), None)
-        note = f'<p class="note">Now: {doing(busy)}</p>' if busy else ""
+        busy = [e for e in now if settings.seat_worker(e["worker"]) == worker]
+        many = settings.worker_count(worker) > 1
+        note = "".join(f'<p class="note">Now{" (" + escape(settings.seat_name(e["worker"])) + ")" if many else ""}: '
+                       f'{doing(e)}</p>' for e in busy)
     checked = " checked" if on else ""
     crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
@@ -945,6 +979,7 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
   <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
   <label for="{worker}_model">Model</label>
   <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn)}</select>
+  {count_stepper(worker)}
   <label>Uses this model for</label>
   <ul>{steps}</ul>
   {note}<div class="grow"></div>
@@ -956,12 +991,16 @@ def workers_section(conn: dict) -> str:
     now = running_now()
     a, p = (f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>" for w in settings.WORKERS)
     if settings.parallel():
-        lead = (f"Both workers are on, so they work at the same time whenever each has a task: the Research "
-                f"Assistant searches with {a} while the Principal Investigator writes with {p}.")
+        ra, pi = plural("assistant"), plural("pi")
+        lead = (f"Both workers are on, so they work at the same time whenever each has a task: {ra} "
+                f"search{'' if ra[0].isdigit() else 'es'} with {a} while {pi} write{'' if pi[0].isdigit() else 's'} "
+                f"with {p}.")
     else:
         w = next(w for w in settings.WORKERS if settings.worker_on(w))
+        n = settings.worker_count(w)
+        pace = "one task at a time" if n == 1 else f"{n} tasks at a time"
         lead = (f"Only the {settings.WORKERS[w]} is on: it does every step with "
-                f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>, one task at a time.")
+                f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>, {pace}.")
     if settings.missing_models():          # the code has no models of its own: this machine picks them
         lead = ("<strong>Choose a model for each worker that is on; the loop won't start until you do.</strong> "
                 "Both on: they work at the same time whenever each has a task.")
@@ -969,7 +1008,26 @@ def workers_section(conn: dict) -> str:
         lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
     cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
     return (f'{heading("people", "Workers")}<p>{lead} The source checker, article checker and publisher are '
-            f'code and use no model.</p><div class="workers">{cards}</div>')
+            f'code and use no model.</p><div class="workers">{cards}</div>{WORKER_COUNT_JS}')
+
+# The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
+# stop for a moment, so three quick clicks are one save, not three page loads.
+WORKER_COUNT_JS = """<script>
+document.querySelectorAll(".stepper").forEach(box => {
+  const input = box.querySelector("input"), lo = +input.min, hi = +input.max;
+  const buttons = box.querySelectorAll("button[data-step]");
+  let timer = null;
+  const show = n => buttons.forEach(b => { b.disabled = +b.dataset.step < 0 ? n <= lo : n >= hi; });
+  buttons.forEach(b => b.addEventListener("click", () => {
+    const n = Math.max(lo, Math.min(hi, (parseInt(input.value, 10) || lo) + +b.dataset.step));
+    if (n === +input.value) return;
+    input.value = n; show(n);
+    clearTimeout(timer);
+    timer = setTimeout(() => input.form.requestSubmit(), 700);
+  }));
+  input.addEventListener("input", () => show(parseInt(input.value, 10) || lo));
+});
+</script>"""
 
 def ollama_form() -> str:
     saved, env = settings.saved().get("ollama_host", ""), settings._env("OLLAMA_HOST")
@@ -1019,8 +1077,15 @@ async def save_worker(request: Request) -> Response:
     model = str(form.get("model") or "").strip()[:200]
     if worker not in settings.WORKERS:
         return go("/settings", error="worker_model")
-    was_on = settings.worker_on(worker)
-    if model != settings.worker_model(worker):
+    was_on, was_count, was_model = settings.worker_on(worker), settings.worker_count(worker), settings.worker_model(worker)
+    if form.get("count") is not None:       # the card's stepper (saved on its own); a form without one leaves it be
+        try:
+            settings.set_worker_count(worker, int(str(form.get("count")).strip()))
+        except ValueError:
+            return go("/settings", error="worker_count")
+    if model == was_model and on == was_on:  # only the count changed: no model to check yet is fine
+        return go("/settings", done="worker_count" if settings.worker_count(worker) != was_count else "worker_saved")
+    if model != was_model:
         conn = await run_in_threadpool(llm.connection)
         if not conn["ok"]:
             return go("/settings", error="ollama")
@@ -1622,7 +1687,8 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
     stage = ""
     if live:                               # researchers only visit while a model works on it, mostly its worker's crew
-        stage = ' data-lab="busy"' + (f' data-worker="{live["worker"]}"' if live["worker"] in settings.WORKERS else "")
+        crew = settings.seat_worker(live["worker"])
+        stage = ' data-lab="busy"' + (f' data-worker="{crew}"' if crew in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
