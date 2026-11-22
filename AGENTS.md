@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 216 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
+- Tests: `pytest -q` (expects 218 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
   `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
@@ -103,7 +103,12 @@ Its Settings page (`/settings`) shows the feeds, saves the site address and join
 as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
-the agent working at that moment, read from `data/activity.json` (written by `activity.py`).
+the agent working at that moment, read from `data/activity.json` (written by `activity.py`). Small pixel
+researchers (`assets/researchers.js`, decorative only) walk in from the side onto in-progress cards and the
+working agent's pill, never more than two on the page at once: each stage has its own random first wait, a
+visitor stays 15-30 s, walks off, and the stage waits 10-20 s; the longest-waiting stage goes next. Visitors
+come from a shuffled cast and their lines from a shuffled deck of ~200 academic quips, so nothing repeats soon.
+The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |
 |---|---|

@@ -49,6 +49,8 @@ MESSAGES = {
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from the next pass.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
+    "animations_on": "Animations on. Researchers will drop by in-progress missions.",
+    "animations_off": "Animations off. The Missions page stays still.",
     "joined": "Joined 1F916. Published articles post there from the next pass, one a day, newest first.",
 }
 ERRORS = {
@@ -259,6 +261,24 @@ select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); borde
          background:var(--bg); color:var(--fg); }
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
 form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
+.card[data-lab] { position:relative; padding-bottom:4rem;
+                  background-image:linear-gradient(var(--rule), var(--rule));
+                  background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
+                  background-repeat:no-repeat; }
+.agents[data-lab] { position:relative; padding-top:3.7rem; }
+canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-rendering:pixelated; width:100%; }
+.card canvas.lab-stage { bottom:0; height:160px; }   /* tall enough for a bubble above the tallest researcher */
+.agents canvas.lab-stage { top:0; }
+.switch { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; margin:0; font-size:1rem; cursor:pointer; }
+.switch input { appearance:none; -webkit-appearance:none; flex:none; width:2.6rem; height:1.5rem; padding:0; margin:0;
+                border-radius:999px; border:1px solid var(--muted); background:var(--rule); position:relative;
+                cursor:pointer; transition:background .15s, border-color .15s; }
+.switch input::after { content:""; position:absolute; top:2px; left:2px; width:calc(1.5rem - 6px); height:calc(1.5rem - 6px);
+                       border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.35); transition:transform .15s; }
+.switch input:checked { background:#237a35; border-color:#237a35; }
+.switch input:checked::after { transform:translateX(1.1rem); }
+.switch input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition:none; } }
 """
 
 ELAPSED_JS = """<script>
@@ -268,6 +288,10 @@ const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e =>
 });
 setInterval(showElapsed, 1000);
 </script>"""
+
+# Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
+RESEARCHERS = '<script src="/assets/researchers.js" defer></script>'
+ASSETS = Path(__file__).parent / "assets"
 
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
@@ -335,7 +359,8 @@ def agent_strip(now: dict | None) -> str:
                   f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
     else:
         status = "No agent is working right now."
-    return f'<div class="agents">{strip}</div><div class="now">{status}</div>'
+    stage = " data-lab" if working and settings.animations() else ""   # a pixel researcher walks on the lit pill
+    return f'<div class="agents"{stage}>{strip}</div><div class="now">{status}</div>'
 
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
@@ -453,7 +478,14 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
   <p><button>Check and turn on Bluesky</button></p>
 </form>"""
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
+    checked = " checked" if settings.animations() else ""
     return f"""{err}<h1>Settings</h1>
+<h2 class="group">Display</h2>
+<form method="post" action="/settings/animations" class="actions">
+  <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
+  Animations <span class="hint">little pixel researchers who drop by in-progress missions on the Missions page</span></label>
+  <noscript><p><button>Save</button></p></noscript>
+</form>
 <h2 class="group">Feed</h2>
 <p>Every published article goes to the site and to its feeds, side by side. Channels post from the feed.</p>
 <p>{feeds} · {count} article{"" if count == 1 else "s"}</p>
@@ -481,6 +513,13 @@ async def save_site_url(request: Request) -> Response:
         return go("/settings", error="site_url")
     orchestrator.refresh_feed()            # the feeds pick up the new address right away
     return go("/settings", done="site_url_saved" if url else "site_url_cleared")
+
+async def save_animations(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    on = (await request.form()).get("animations") == "on"   # an unticked box sends nothing
+    settings.set_animations(on)
+    return go("/settings", done="animations_on" if on else "animations_off")
 
 async def join_1f916(request: Request) -> Response:
     """The same registration as `python run.py join-1f916`, which saves the key before anything else."""
@@ -569,7 +608,14 @@ def epic_list(missions: list[Mission]) -> str:
         for e in active)
     return f'<details><summary>Epics ({len(active)})</summary>{rows}</details>'
 
-def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = None) -> str:
+def lab_mood(m: Mission, now: dict | None) -> str:
+    """How the pixel researcher on an in-progress card behaves: busy while an agent works on this
+    mission, waiting while the loop runs other work, idle (mostly napping) while the loop is off."""
+    if working_on(m, now):
+        return "busy"
+    return "waiting" if loop_running() else "idle"
+
+def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = None, lab: str = "") -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
     working = working_on(m, now)
@@ -577,7 +623,8 @@ def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = No
     if m.state == State.DONE and m.published_at:
         sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
-    return (f'<a class="{classes}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
+    stage = f' data-lab="{lab}"' if lab else ""
+    return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
 
@@ -601,7 +648,8 @@ async def home(request: Request) -> HTMLResponse:
             body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
             if title == "Published":
                 body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
-            body.append("".join(card(m, now, epics) for m in ms))
+            lab = settings.animations() and title == "In progress"
+            body.append("".join(card(m, now, epics, lab_mood(m, now) if lab else "") for m in ms))
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
@@ -619,6 +667,8 @@ async def home(request: Request) -> HTMLResponse:
     if tail:
         body.append('<details><summary>Loop log (data/loop.log)</summary><pre class="notes">'
                     + escape("\n".join(tail)) + "</pre></details>")
+    if settings.animations():
+        body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
 
 def actions_for(m: Mission) -> str:
@@ -921,6 +971,7 @@ app = Starlette(routes=[
     Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/settings", settings_page),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
+    Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/m/{slug}", mission),
@@ -929,5 +980,6 @@ app = Starlette(routes=[
     Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
+    Mount("/assets", StaticFiles(directory=ASSETS)),
     Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),
 ])

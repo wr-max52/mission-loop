@@ -79,3 +79,22 @@ def test_settings_forms_refuse_cross_site_posts(client):
     assert client.post("/settings/site-url", data={"site_url": "https://x.example"}, headers=evil).status_code == 403
     assert client.post("/settings/join-1f916", data={"handle": "loop-desk"}, headers=evil).status_code == 403
     assert settings.site_url() == "" and not f916.KEY_FILE.exists()
+
+def test_animations_toggle_is_on_by_default_and_hides_the_researchers_when_off(client, monkeypatch):
+    store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
+    assert settings.animations() and 'name="animations" value="on" checked' in client.get("/settings").text
+    assert "researchers.js" in client.get("/").text and 'data-lab="idle"' in client.get("/").text
+    r = client.post("/settings/animations", data={}, follow_redirects=False)   # unticked: the box sends nothing
+    assert r.status_code == 303 and "animations_off" in r.headers["location"]
+    assert not settings.animations() and json.loads(settings.SETTINGS_FILE.read_text()) == {"animations": "off"}
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    import activity
+    activity.begin("b", "sources")
+    html = client.get("/").text
+    assert "researchers.js" not in html and 'data-lab' not in html.split("</style>")[1]
+    assert 'value="on" checked' not in client.get("/settings").text
+    client.post("/settings/animations", data={"animations": "on"})
+    assert settings.animations() and settings.saved() == {}              # back on: nothing stored
+    assert '<div class="agents" data-lab>' in client.get("/").text
+    evil = {"origin": "https://evil.example"}
+    assert client.post("/settings/animations", data={}, headers=evil).status_code == 403 and settings.animations()

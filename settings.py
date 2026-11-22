@@ -40,3 +40,10 @@ def set_site_url(url: str) -> str:
             raise ValueError("not an http(s) address")
     save(site_url=url)
     return url
+
+def animations() -> bool:
+    """The little pixel researchers on the Missions page. On unless turned off on the Settings page."""
+    return saved().get("animations") != "off"
+
+def set_animations(on: bool) -> None:
+    save(animations="" if on else "off")   # nothing stored while on, so a fresh install has them
