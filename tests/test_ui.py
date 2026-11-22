@@ -290,4 +290,5 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     assert '<a class="card active" href="/m/q" data-lab="busy" data-worker="pi">' in client.get("/").text
     js = client.get("/assets/researchers.js")
     assert js.status_code == 200 and "class FlowStage" in js.text
-    assert "researchers.js" not in client.get("/m/b").text                 # the mission page stays quiet
+    quiet = client.get("/m/b").text                                       # the mission page stays quiet:
+    assert '<script src="/assets/researchers.js"' not in quiet and ' data-lab' not in quiet   # only the chat's guide, once opened

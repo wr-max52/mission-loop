@@ -359,6 +359,9 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .chat-panel .model { display:flex; gap:.5rem; align-items:center; margin:0; }
 .chat-panel .model select { flex:1; min-width:0; }
 .chat-panel .hint { margin:0; }
+.chat-guide { position:relative; flex:none; height:104px; margin:-1rem -1rem -.6rem; overflow:hidden; }
+.chat-guide canvas.lab-stage { top:0; height:100%; }
+.chat-guide + header { padding-top:0; }
 .chat-log { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:.6rem; padding:.2rem 0; }
 .chat-log .msg { max-width:88%; padding:.6rem .9rem; border-radius:12px; white-space:pre-wrap; line-height:1.5; }
 .chat-log .user { align-self:flex-end; background:var(--accent); color:var(--bg); }
@@ -436,7 +439,8 @@ setInterval(showElapsed, 1000);
 </script>"""
 
 # Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
-RESEARCHERS = '<script src="/assets/researchers.js" defer></script>'
+RESEARCHERS_SRC = "/assets/researchers.js"
+RESEARCHERS = f'<script src="{RESEARCHERS_SRC}" defer></script>'
 ASSETS = Path(__file__).parent / "assets"
 FLOW_JS = '<script src="/assets/flow.js" defer></script>'   # keeps the pipeline strip live
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
@@ -1645,10 +1649,12 @@ async def preview(request: Request) -> Response:
         return PlainTextResponse("No preview yet.", status_code=404)
     return FileResponse(path, media_type="text/html")
 
-# ---------- chat: ask the assistant what the loop is doing ----------
+# ---------- Researcher Chat: ask what the loop is doing, or look something up on the web ----------
 # A bubble on every page opens a panel over the left third. The conversation is kept in this browser tab
 # (sessionStorage) so the page's own refreshes don't wipe it; the assistant itself remembers nothing.
-# It needs only Ollama, not the loop: its tools read what the loop leaves on disk.
+# It needs only Ollama, not the loop: its loop tools read what the loop leaves on disk.
+# With animations on, a pixel researcher for the picked model walks in at the top of the panel (assets/researchers.js,
+# the "chatguide" event): a worker's own model brings that worker's crew, any other model by its size.
 
 SUGGESTIONS = ["What's going on right now?", "What needs me?", "What's taking so long?", "What got parked, and why?"]
 
@@ -1660,7 +1666,7 @@ CHAT_JS = """<script>
   const hint = document.getElementById("chat-hint"), suggest = document.getElementById("chat-suggest");
   const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
-  let history = store("chat-history") || [], loaded = false;
+  let history = store("chat-history") || [], loaded = false, crews = {};
 
   // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
   // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
@@ -1710,7 +1716,21 @@ CHAT_JS = """<script>
     const saved = (() => { try { return localStorage.getItem("chat-model"); } catch (e) { return null; } })();
     pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} (default, shared with the loop)` : m, m)));
     if (data.models.includes(saved)) pickModel.value = saved;
+    crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
+    else if (data.web === false) hint.textContent += " Web search needs a Brave key (BRAVE_API_KEY in .env); it can still read pages you link.";
+    guide();
+  }
+  // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
+  // (unless the page already has it) and picks up window.chatGuide when it starts.
+  function guide() {
+    const model = pickModel.value, c = crews[model] || {}, host = panel.querySelector(".chat-guide");
+    if (!model || !host) return;
+    window.chatGuide = {model, crew: c.crew || "assistant", family: c.family || model.split(":")[0]};
+    document.dispatchEvent(new CustomEvent("chatguide", {detail: window.chatGuide}));
+    if (!window.Researchers && !document.querySelector(`script[src="${host.dataset.sprites}"]`)) {
+      const s = document.createElement("script"); s.src = host.dataset.sprites; document.head.appendChild(s);
+    }
   }
   function setOpen(open) {
     panel.hidden = !open; document.body.classList.toggle("chat-open", open);
@@ -1729,7 +1749,7 @@ CHAT_JS = """<script>
       const r = await fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({question, model, history: history.slice(-4).map(({role, content}) => ({role, content}))})});
       answer = (await r.json()).answer;
-    } catch (e) { answer = "The assistant didn't answer. Is the UI still running?"; }
+    } catch (e) { answer = "Researcher Chat didn't answer. Is the UI still running?"; }
     wait.remove(); show("assistant", answer, model);
     history.push({role: "user", content: question}, {role: "assistant", content: answer, model});
     history = history.slice(-20); store("chat-history", history);
@@ -1739,7 +1759,7 @@ CHAT_JS = """<script>
   document.getElementById("chat-close").addEventListener("click", () => setOpen(false));
   document.getElementById("chat-clear").addEventListener("click", () => { history = []; store("chat-history", history); redraw(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !panel.hidden) setOpen(false); });
-  pickModel.addEventListener("change", () => { try { localStorage.setItem("chat-model", pickModel.value); } catch (e) {} });
+  pickModel.addEventListener("change", () => { try { localStorage.setItem("chat-model", pickModel.value); } catch (e) {} guide(); });
   form.addEventListener("submit", e => { e.preventDefault(); ask(box.value); });
   box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(box.value); } });
   suggest.querySelectorAll("button").forEach(b => b.addEventListener("click", () => ask(b.textContent)));
@@ -1752,13 +1772,15 @@ CHAT_JS = """<script>
 
 def chat_widget() -> str:
     chips = "".join(f'<button type="button">{escape(q)}</button>' for q in SUGGESTIONS)
-    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Ask the loop" aria-expanded="false"
+    guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{RESEARCHERS_SRC}"></div>'
+             if settings.animations() else "")
+    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Researcher Chat" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
-<aside id="chat-panel" class="chat-panel" aria-label="Ask the loop" hidden>
-<header><strong>Ask the loop</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
+<aside id="chat-panel" class="chat-panel" aria-label="Researcher Chat" hidden>{guide}
+<header><strong>Researcher Chat</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
  <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
 <label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
-<p class="hint" id="chat-hint">It reads what the loop is doing, can add a mission or move one to an epic, and works with the loop off.</p>
+<p class="hint" id="chat-hint">It reads what the loop is doing, searches the web, can add a mission or move one to an epic, and works with the loop off.</p>
 <div class="chat-log" id="chat-log" aria-live="polite"></div>
 <div class="suggest" id="chat-suggest">{chips}</div>
 <form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"
@@ -1769,12 +1791,20 @@ def chat_widget() -> str:
 async def chat_models(request: Request) -> JSONResponse:
     """Installed models for the picker. Ollama being closed is reported, not an error page."""
     MODEL = settings.chat_model()
+    web = agents.chat_web()
     try:
-        names = await run_in_threadpool(agents.chat_models)
+        found = await run_in_threadpool(agents.chat_catalog)
     except Exception:
-        return JSONResponse({"models": [MODEL], "default": MODEL,
-                             "error": "Ollama isn't reachable, so the assistant can't answer. Start the Ollama app."})
-    return JSONResponse({"models": names or [MODEL], "default": names[0] if names else MODEL})
+        return JSONResponse({"models": [MODEL], "default": MODEL, "crews": {MODEL: chat_crew(MODEL)}, "web": web,
+                             "error": "Ollama isn't reachable, so Researcher Chat can't answer. Start the Ollama app."})
+    found = found or [{"name": MODEL, **chat_crew(MODEL)}]
+    return JSONResponse({"models": [c["name"] for c in found], "default": found[0]["name"], "web": web,
+                         "crews": {c["name"]: {"crew": c["crew"], "family": c["family"]} for c in found}})
+
+def chat_crew(model: str) -> dict:
+    """Which researcher stands for a model Ollama couldn't describe: its worker's crew, or by the size in its name."""
+    from agents.assistant import crew
+    return {"crew": crew(model), "family": model.split(":")[0]}
 
 async def chat_ask(request: Request) -> Response:
     if not same_origin(request):

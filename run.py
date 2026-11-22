@@ -282,7 +282,8 @@ def status():
 
 @app.command()
 def ask(question: str, model: str = typer.Option("", help="Installed Ollama model; default: the small search model")):
-    """Ask the assistant what the loop is doing. It only reads, so it is safe while the loop runs, and works without it."""
+    """Ask Researcher Chat what the loop is doing, or to look something up on the web. It only reads the loop, so it
+    is safe while the loop runs, and works without it."""
     store.init()
     print(agents.chat(question, model=model or None))
 
