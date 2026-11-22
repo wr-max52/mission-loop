@@ -2,7 +2,7 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity, checkpoint
+import activity, board, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
 from agents import bluesky, f916, github, publisher
@@ -136,6 +136,7 @@ def _write_brief(m: Mission, now) -> str:
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
+        _mentions(m.slug)
         m.unchecked_brief = ""
         path = _write_brief_md(m, brief)
         m.validator_notes = ""
@@ -200,6 +201,7 @@ def step(m: Mission, now) -> str | None:
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
+            _mentions(m.slug)
             m.unchecked_article, m.article_draft = "", None
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
@@ -302,12 +304,14 @@ def push_through(m: Mission, now) -> None:
     before = m.state
     if isinstance(draft, RejectedBrief):
         store.save_artifact(m.slug, "brief", draft.brief)
+        _mentions(m.slug)
         m.unchecked_brief, m.rejected_brief, m.approved = draft.notes, None, False
         _write_brief_md(m, draft.brief)
         m.state = State.BRIEF_READY
         note = "failed brief pushed through by human"
     else:
         store.save_artifact(m.slug, "article", draft.article)
+        _mentions(m.slug)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
         m.article_draft = None
         _write_article_review(m, _brief(m), draft.article)
@@ -357,6 +361,14 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
             break
         changed += 1
     return changed
+
+def _mentions(slug: str) -> None:
+    """The cork board's mentions for a mission whose brief or article was just saved. Display only: a failure is
+    printed and never stops the work."""
+    try:
+        board.find_mentions(slug)
+    except Exception as e:
+        print(f"board mentions for {slug} failed: {type(e).__name__}: {e}", flush=True)
 
 PROGRESS = ("brief_pick", "brief_sources", "article_draft")   # Mission fields an agent saves mid-task
 

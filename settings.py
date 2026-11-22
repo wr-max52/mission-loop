@@ -274,6 +274,65 @@ def set_chat_color(value: str) -> str:
     save(chat_color=value)
     return value
 
+# The cork board's look (board.py, ui.board_page): the surface, the cards, and what joins them. Saved only when
+# not the default (cork, sticky notes, red string), like the theme.
+BOARD_SURFACES = {"cork": "Cork", "paper": "Paper", "grid": "Grid", "dark": "Night", "fridge": "Fridge"}
+BOARD_CARDS = {"sticky": "Sticky notes", "magnets": "Fridge magnets", "hologram": "Hologram"}
+BOARD_STRINGS = {                                # kind -> its colours (a human may also pick any colour)
+    "string": {"Red": "#c0242b", "Black": "#2b2620", "Blue": "#2f5fb0", "Green": "#2f8a4a", "Gold": "#c99a1e"},
+    "laser": {"Red": "#ff3344", "Green": "#39ff88", "Blue": "#3fb8ff", "Violet": "#b45cff"},
+    "wire": {"Copper": "#c87533", "Steel": "#8d99a6", "Brass": "#b5a642"},
+}
+BOARD_STRING_NAMES = {"string": "String", "laser": "Laser", "wire": "Wire"}
+BOARD_DEFAULT = {"surface": "cork", "cards": "sticky", "string": "string", "color": "#c0242b"}
+
+def board_style() -> dict:
+    """The board's surface, cards, string kind and string colour, each checked, with the defaults filled in."""
+    got = saved().get("board_style")
+    got = got if isinstance(got, dict) else {}
+    style = dict(BOARD_DEFAULT)
+    if got.get("surface") in BOARD_SURFACES:
+        style["surface"] = got["surface"]
+    if got.get("cards") in BOARD_CARDS:
+        style["cards"] = got["cards"]
+    if got.get("string") in BOARD_STRINGS:
+        style["string"] = got["string"]
+        style["color"] = next(iter(BOARD_STRINGS[style["string"]].values()))
+    if HEX.fullmatch(str(got.get("color") or "").lower()):
+        style["color"] = got["color"].lower()
+    return style
+
+def set_board_style(surface: str | None = None, cards: str | None = None, string: str | None = None,
+                    color: str | None = None) -> dict:
+    """Change any part of the board's look. A new string kind brings its own first colour unless a colour is given
+    or the current one is a human's own (in no kind's list). Raises ValueError for anything unknown."""
+    style = board_style()
+    if surface is not None:
+        if surface not in BOARD_SURFACES:
+            raise ValueError("not a board surface")
+        style["surface"] = surface
+    if cards is not None:
+        if cards not in BOARD_CARDS:
+            raise ValueError("not a card style")
+        style["cards"] = cards
+    if string is not None:
+        if string not in BOARD_STRINGS:
+            raise ValueError("not a string kind")
+        presets = {c for kind in BOARD_STRINGS.values() for c in kind.values()}
+        if string != style["string"] and style["color"] in presets and color is None:
+            style["color"] = next(iter(BOARD_STRINGS[string].values()))
+        style["string"] = string
+    if color is not None:
+        color = color.strip().lower() or next(iter(BOARD_STRINGS[style["string"]].values()))
+        if not HEX.fullmatch(color):
+            raise ValueError("not a colour")
+        style["color"] = color
+    changed = {k: v for k, v in style.items() if v != BOARD_DEFAULT[k]}
+    if changed.get("string") and style["color"] == next(iter(BOARD_STRINGS[style["string"]].values())):
+        changed.pop("color", None)                 # a kind's own first colour needs no saving
+    save(board_style=changed)
+    return style
+
 def ink_on(color: str) -> str:
     """Dark or white text, whichever reads better on the colour (WCAG relative luminance)."""
     def channel(h: str) -> float:

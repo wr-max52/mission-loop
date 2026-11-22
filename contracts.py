@@ -88,6 +88,26 @@ class Combine(BaseModel):
     at: str = ""
     status: Literal["proposed", "approved", "rejected"] = "proposed"
 
+class BoardNote(BaseModel):
+    """Where a sticky note sits on the cork board (board.py). Only notes code placed or someone moved are stored;
+    a note's size stays None until the Theorist or a human sets one, and the board works it out from the stage."""
+    kind: Literal["mission", "epic"]
+    id: str                                # the mission's or epic's slug ("_unsorted" for missions in no epic)
+    x: float
+    y: float
+    size: float | None = None              # 1.0 = a normal note; None = from its stage and strings
+    by: str = "code"                       # "code", "human" or "theorist"
+    at: str = ""
+
+class Mention(BaseModel):
+    """Two missions code found mentioning each other, stored once per pair and kind, a < b: "source" (both cite
+    the same page), "background" (research was shown one as a related published article) or "name" (a brief or
+    article names the other mission). In its own table, like links, so no worker saves over one."""
+    a: str
+    b: str
+    kind: Literal["source", "background", "name"]
+    detail: str = ""                       # the shared page, the words that matched, or whose research saw the other
+
 class Epic(BaseModel):
     """A long-running line of inquiry: a short thematic title, not a goal. The missions in it describe it,
     so its meaning can drift. The slug never changes; the title can."""
