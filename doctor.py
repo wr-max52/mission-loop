@@ -7,7 +7,7 @@ never-raising call); `deep=True` also asks each cloud provider and is what the l
 The loop writes why it is waiting (data/waiting.json) when it can't work, so the UI can say "Waiting: Ollama isn't
 answering" instead of "Running". Nothing here starts or stops anything.
 """
-import json, time
+import json, os, time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import httpx
@@ -96,8 +96,14 @@ def _work() -> list[Check]:
     return [Check("work", "Something to work on", ok, detail,
                   "" if ok else "Add a mission, or give the mission finder a line of inspiration.")]
 
+def stubs() -> bool:
+    return os.environ.get("MISSION_LOOP_STUBS") == "1"
+
 def checks(deep: bool = False, conn: dict | None = None) -> list[Check]:
     """Everything, in setup order. Never raises."""
+    if stubs():                            # MISSION_LOOP_STUBS=1 needs no model, so play already works
+        return [Check("models", "A model for each worker", True, "Running on stubs (MISSION_LOOP_STUBS=1), no model needed")] \
+            + _tools() + _work()
     conn = conn or llm.connection()
     return _models(conn) + _connection(conn, deep) + _tools() + _work()
 

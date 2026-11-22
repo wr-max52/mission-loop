@@ -21,7 +21,7 @@ from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
-from icons import icon, CSS as ICON_CSS
+from icons import icon, PATHS as ICON_PATHS, CSS as ICON_CSS
 import flowchart
 from flowchart import flow_steps
 
@@ -672,8 +672,7 @@ ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
                  '21.9 13.6 19.1 14.2 18.5 15.5 20.1 17.9 17.9 20.1 15.5 18.5 14.2 19.1 13.6 21.9 10.4 21.9 9.8 19.1 '
                  '8.5 18.5 6.1 20.1 3.9 17.9 5.5 15.5 4.9 14.2 2.1 13.6 2.1 10.4 4.9 9.8 5.5 8.5 3.9 6.1 6.1 3.9 8.5 5.5z"/></svg>')
 
-ICON_BOARD = ('<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/>'
-              '<circle cx="8" cy="9" r="1.3"/><circle cx="16" cy="14" r="1.3"/><path d="m8 9 8 5"/></svg>')
+ICON_BOARD = f'<svg viewBox="0 0 24 24" aria-hidden="true">{ICON_PATHS["board"]}</svg>'   # one drawing, in icons.py
 
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
 
@@ -2228,7 +2227,7 @@ def setup_card(found: list | None = None) -> str:
     check passes or the human hides it; it never blocks anything (Settings → Setup brings it back)."""
     if settings.setup_dismissed():
         return ""
-    conn = llm.connection()
+    conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
     found = found if found is not None else doctor.checks(conn=conn)
     if doctor.done(found):
         return ""
@@ -2400,7 +2399,8 @@ async def home(request: Request) -> HTMLResponse:
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     lab = settings.animations()
-    body = [flash(request), setup_card(), loop_panel("/"), new_mission()]
+    setup = await run_in_threadpool(setup_card)  # it asks Ollama, which may be slow or off: never on the event loop
+    body = [flash(request), setup, loop_panel("/"), new_mission()]
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
@@ -3068,6 +3068,12 @@ def board_style_form() -> str:
         f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
         f'{" checked" if style["color"] == c else ""} onchange="this.form.requestSubmit()"><span class="dab"></span>'
         f'{escape(n)}</label>' for n, c in colors.items())
+    presets = {c for kind in settings.BOARD_STRINGS.values() for c in kind.values()}
+    own = style["color"] not in presets
+    swatches += (f'<label class="swatch own{" set" if own else ""}" style="--c:{style["color"]};--ink:{settings.ink_on(style["color"])}">'
+                 f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="Your own colour" '
+                 f'onchange="this.form.querySelectorAll(\'input[name=color]\').forEach(r => r.checked = false); '
+                 f'this.form.requestSubmit()">Your own</label>')
     return f"""<form method="post" action="/settings/board-style" class="actions display" id="board">
   <h3>{ICON_BOARD}Board</h3>
   <p class="hint">How the <a href="/board">board</a> looks: its surface, its cards, and what joins them. The gear on the
@@ -3097,6 +3103,8 @@ async def save_board_style(request: Request) -> Response:
         return PlainTextResponse("Cross-site request refused.", status_code=403)
     form = await request.form()
     values = {k: form.get(k) for k in ("surface", "cards", "string", "color") if form.get(k)}
+    if "color" not in values and form.get("own"):
+        values["color"] = form.get("own")      # the colour picker: no preset is ticked
     if "string" in values and values["string"] != settings.board_style()["string"]:
         values.pop("color", None)              # a new kind brings its own first colour
     try:

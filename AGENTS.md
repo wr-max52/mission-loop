@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 612 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 638 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -104,8 +104,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. On the Principal Investigator's
   model: first it searches the desk's library (see Library below; code looks up the inspiration line itself, then the
   Theorist may run up to `LOOKUPS` (4) searches of its own, all in `LOOKUP_TIME`, 4 minutes, through the `library` MCP
-  server), then one structured call with what it found (`findings_text`, within `FINDINGS_CHARS`) and no tools. A
-  library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
+  server), then one structured call with what it found (`findings_text`, within `findings_room()`: `FINDINGS_CHARS`,
+  or two searches at the Settings page's Top N, at most `FINDINGS_MAX`) and no tools. Stop is checked before each search,
+  and a search still running past `stopping.TURN_GRACE` is given up. A library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
   it searched for is `Theory.lookups`, in `data/theory.json` and its notes. It reads every epic with its latest missions, the missions in no epic,
   the latest published articles with the possibilities they left open, the links and combines so far (and the ones
   a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
@@ -461,7 +462,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
   tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
   panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
-  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour. A card's colour is its
+  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour (the gear and Settings → Display → Board both have the picker). A card's colour is its
   stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
   a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
   researcher from that worker's crew: on a sticky note it stands inside the card on its bottom edge (the busy note
@@ -528,7 +529,11 @@ step's kind of work, runs after its mission when the mission moves on (sources, 
 ends, moves to another mission or passes to the other worker it says a closing line about where the work went
 (your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
-repeats soon. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
+repeats soon. Nobody is ever on the page twice at once (the chat's guide included), and the last three arrivals wait
+while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
+giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
+the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), `tools/sprites.html` the
+playground, and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
 most bits pass without a word. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.

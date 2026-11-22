@@ -1,6 +1,6 @@
 """The desk's library: passages from the desk's own work, ranked by words (BM25) and, with an embedding model, by
 meaning; its MCP server; the Theorist's lookups; and the chat assistant doing whatever the Theorist does."""
-import json
+import asyncio, json
 from datetime import datetime, timezone
 from pathlib import Path
 import httpx, pytest
@@ -481,3 +481,37 @@ def test_cli_searches_and_indexes():
     assert "passages from 3 missions; ranked by words only" in out
     out = CliRunner().invoke(cli.app, ["library", "regional banks donations", "--epic", "Fed Capture"]).output
     assert "1. [fed-a]" in out and "[dam]" not in out
+
+# ---------- loose ends (#74) ----------
+
+async def test_a_stop_before_the_lookups_skips_them():
+    import stopping
+    box = FakeLibrary()
+    stopping.press()
+    found, note = await theorist.look_up("system", LINE, lambda: box)
+    assert found == [] and box.calls == [] and note == "library not searched: stop was pressed"
+
+async def test_a_search_still_running_past_the_turn_grace_gives_up():
+    import os, time, stopping
+    class SlowLibrary(FakeLibrary):
+        async def call(self, name, args):
+            self.calls.append((name, args))
+            stopping.press()
+            past = time.time() - stopping.TURN_GRACE - 1          # the press was long enough ago
+            os.utime(stopping.FLAG, (past, past))
+            await asyncio.sleep(60)                                # a search that would run on and on
+    box = SlowLibrary()
+    started = time.monotonic()
+    found, note = await theorist.look_up("system", LINE, lambda: box)
+    assert time.monotonic() - started < 5
+    assert found == [] and len(box.calls) == 1 and note == "library: stop was pressed after 0 search(es)"
+
+def test_top_n_passages_get_room_in_chat_and_in_the_findings():
+    class Box:
+        server = {"search_library": assistant.LIBRARY_SERVER}
+    settings.set_library_top_n(20)
+    assert assistant._limit(Box(), "search_library") >= 20 * library.PASSAGE_ROOM
+    assert theorist.findings_room() == min(theorist.FINDINGS_MAX, 2 * 20 * library.PASSAGE_ROOM)
+    settings.set_library_top_n(3)
+    assert assistant._limit(Box(), "search_library") == assistant.MAX_WEB_CHARS
+    assert theorist.findings_room() == theorist.FINDINGS_CHARS

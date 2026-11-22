@@ -11,6 +11,9 @@ PATHS = {
              '<path d="M8 9.5c1 .3 1.8 1 2 2M16 9.5c-1 .3-1.8 1-2 2"/>',
     "pencil": '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
+    # the cork board: a card with two pins and the string between them
+    "board": '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.3"/>'
+             '<circle cx="16" cy="14" r="1.3"/><path d="m8 9 8 5"/>',
     "search": '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
     "list": '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/>'
             '<circle cx="4.5" cy="18" r="1"/>',

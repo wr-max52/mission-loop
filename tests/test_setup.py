@@ -155,7 +155,7 @@ def test_the_card_hides_returns_and_goes_once_everything_is_done(client, monkeyp
     assert client.post("/setup/dismiss", follow_redirects=False).headers["location"] == "/?done=setup_hidden"
     assert 'id="setup"' not in client.get("/").text
     settings_page = client.get("/settings").text
-    assert 'action="/setup/show"' in settings_page and 'id="setup"' in settings_page   # Settings → Setup
+    assert 'action="/setup/show"' in settings_page                    # Settings → Setup brings it back
     client.post("/setup/show")
     assert 'id="setup"' in client.get("/").text
     ready_to_go(monkeypatch)
@@ -252,3 +252,21 @@ def test_the_chat_answers_before_any_worker_has_a_model(no_models, monkeypatch):
         def list(self): raise ConnectionError("no ollama")
     monkeypatch.setattr(ollama, "Client", Down)
     assert assistant.default_model() == "" and assistant.chat("How do I set up?") == assistant.NO_MODEL
+
+def test_a_new_loop_logs_a_reason_an_earlier_one_left(monkeypatch, capsys):
+    doctor.set_waiting("no model chosen")                          # a refused play or a killed loop left it
+    monkeypatch.setattr(agents, "ready", lambda: (False, "no model chosen"))
+    real = cli._ready
+    def once(**k):
+        r = real(**k)
+        orchestrator.STOP_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        orchestrator.STOP_FLAG.touch()                              # one pass is enough
+        return r
+    monkeypatch.setattr(cli, "_ready", once)
+    cli.loop(every=15)
+    assert "waiting: no model chosen" in capsys.readouterr().out
+
+def test_stubs_need_no_model(monkeypatch, no_models):
+    monkeypatch.setenv("MISSION_LOOP_STUBS", "1")
+    found = doctor.checks()
+    assert found[0].key == "models" and found[0].ok and not any(c.key == "connection" for c in found)

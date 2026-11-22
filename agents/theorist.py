@@ -19,7 +19,7 @@ needs an open mission and a reason. The orchestrator applies what is left (orche
 import asyncio, math, re
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
-import board, store, trail
+import board, library, settings, store, trail
 from contracts import Mission, State, ResearchBrief, Article, COMBINABLE, epic_title, is_open, words
 from agents import llm
 from agents.finder import too_similar
@@ -43,6 +43,7 @@ MAX_WHY = 300                              # characters of a link's or a combine
 LOOKUPS = 4                                # library searches the Theorist may run itself, after code's first
 LOOKUP_TIME = 4 * 60                       # seconds for the whole lookup phase
 FINDINGS_CHARS = 14_000                    # what it found, as it goes with the request (about 4.5k tokens)
+FINDINGS_MAX = 24_000                      # the most it may fill when Top N is set high (about 7k tokens)
 LIBRARY, SEARCH = "library", "search_library"   # the MCP server in mcp.json and its tool
 CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"
 
@@ -414,15 +415,39 @@ FINDINGS = """What you found in the desk's library (the desk's own past work, no
 
 Give your theory as JSON matching the schema."""
 
+class _Stopped(Exception):
+    """Stop was pressed while a library search was running past the turn grace."""
+
+async def _search(tb, args: dict) -> str:
+    """One library search that gives up once stop's turn grace runs out, as llm.chat does."""
+    task = asyncio.ensure_future(tb.call(SEARCH, args))
+    try:
+        while True:
+            left = stopping.left(stopping.TURN_GRACE)
+            if left is not None and left <= 0:
+                raise _Stopped()
+            await asyncio.wait({task}, timeout=1 if left is None else min(1, left))
+            if task.done():
+                return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+
 async def look_up(system: str, line: str, toolbox_factory) -> tuple[list[tuple[str, str]], str]:
     """The lookup phase: code searches the library for the line, then the model may search LOOKUPS more times, in
     LOOKUP_TIME. Returns ([(query, result)], note); the note says why it stopped short ("" when it didn't). Never
     raises: a library that won't start or a model that gets stuck leaves what was found so far."""
     found: list[tuple[str, str]] = []
+    if stopping.requested():
+        return found, "library not searched: stop was pressed"
     try:
         async with asyncio.timeout(LOOKUP_TIME), toolbox_factory() as tb:
             tools = [t for t in tb.tools if t["function"]["name"] == SEARCH]
-            first = await tb.call(SEARCH, {"query": line})
+            first = await _search(tb, {"query": line})
             trail.record("tool_result", f"{SEARCH}: {first}")
             found.append((line, first))
             messages = [{"role": "system", "content": system},
@@ -444,21 +469,28 @@ async def look_up(system: str, line: str, toolbox_factory) -> tuple[list[tuple[s
                                          "content": f"Not run: only {SEARCH} with a query, at most {LOOKUPS} times."})
                         continue
                     calls += 1
-                    result = await tb.call(SEARCH, args)
+                    result = await _search(tb, args)
                     trail.record("tool_result", f"{SEARCH}: {result}")
                     found.append((args["query"], result))
                     messages.append({"role": "tool", "tool_name": SEARCH, "content": result})
     except TimeoutError:
         return found, f"library: the lookups ran out of time after {len(found)} search(es)"
+    except _Stopped:
+        return found, f"library: stop was pressed after {len(found)} search(es)"
     except Exception as e:                  # the library server didn't start, or a call broke: carry on without it
         return found, f"library not searched: {type(e).__name__}: {e}"[:300]
     return found, ""
 
+def findings_room() -> int:
+    """What the findings may fill: FINDINGS_CHARS, or two searches at the Settings page's Top N if that is more,
+    never over FINDINGS_MAX (the request still has to fit a local model's context)."""
+    return min(FINDINGS_MAX, max(FINDINGS_CHARS, 2 * settings.library_top_n() * library.PASSAGE_ROOM))
+
 def findings_text(found: list[tuple[str, str]]) -> str:
-    """Each search and what it returned, shared out within FINDINGS_CHARS."""
+    """Each search and what it returned, shared out within findings_room()."""
     if not found:
         return ""
-    each = FINDINGS_CHARS // len(found)
+    each = findings_room() // len(found)
     parts = []
     for query, result in found:
         text = result if len(result) <= each else result[:each].rsplit("\n", 1)[0] + "\n[more passages cut]"

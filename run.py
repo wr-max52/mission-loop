@@ -219,6 +219,7 @@ def loop(every: float = typer.Option(15, help="Minutes to rest when there is not
     """Keep working forever, resting when nothing is left to do. `python run.py stop` ends it after the current task."""
     held = _lock()
     orchestrator.STOP_FLAG.unlink(missing_ok=True)
+    doctor.clear_waiting()                 # a reason left by a refused play or a killed loop: this loop logs its own
     seen: set[tuple[str, str]] = set()
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop started; it rests up to {every:g} min when nothing is left to do", flush=True)
 
