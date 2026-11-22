@@ -116,11 +116,12 @@ KIND_RULE = ("Treat every source above as part truth, part spin. Drop only what 
              "worded \"It is possible that ..., based on ...\". Write at least 3 pointed possibilities, more "
              "than facts, and keep at least one fact. The counterpoint is the strongest case against the thesis: from "
              "a contradicting source if one was found, else the objection a skeptic would raise; never leave it empty.")
+IDS = "Give each source a short id such as s1, s2 (never its URL) and cite sources in claims by that id. "
 FINAL = ("Now output the research brief as JSON matching the schema. "
-         "Use only sources you fetched, with quotes copied exactly from those pages. " + KIND_RULE)
+         "Use only sources you fetched, with quotes copied exactly from those pages. " + IDS + KIND_RULE)
 REVISE_FINAL = ("Now output the revised research brief as JSON matching the schema. "
                 "Use only the verified sources listed above and sources you fetched in this session, "
-                "with quotes copied exactly from those pages. " + KIND_RULE)
+                "with quotes copied exactly from those pages. " + IDS + KIND_RULE)
 
 class ResearchFailed(Exception):
     pass
