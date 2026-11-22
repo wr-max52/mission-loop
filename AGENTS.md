@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 593 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 611 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -500,7 +500,11 @@ step's kind of work, runs after its mission when the mission moves on (sources, 
 ends, moves to another mission or passes to the other worker it says a closing line about where the work went
 (your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
-repeats soon. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
+repeats soon. Nobody is ever on the page twice at once (the chat's guide included), and the last three arrivals wait
+while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
+giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
+the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), `tools/sprites.html` the
+playground, and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
 most bits pass without a word. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
