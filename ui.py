@@ -32,16 +32,16 @@ LABELS = {
 }
 MESSAGES = {
     "approved": "Approved. The loop writes the article next.",
-    "published": "Marked for publishing. The loop publishes it on its next pass.",
+    "published": "Marked for publishing. The loop publishes it next, before any research or writing.",
     "rejected": "Sent back with your notes.",
-    "requeued": "Requeued. It starts again on the next pass.",
+    "requeued": "Requeued. It starts again after the missions further along.",
     "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
-    "added": "Mission added. The loop starts researching it on its next pass.",
-    "inspired": "Inspiration saved. The mission finder works from it on every pass.",
+    "added": "Mission added. The loop researches it after the missions further along.",
+    "inspired": "Inspiration saved. The mission finder works from it each time the loop has caught up.",
     "uninspired": "Inspiration cleared. The mission finder is off.",
     "started": "Loop started.",
     "stopping": "Stop requested. The agent at work writes out what it has (2 minutes at most), then the loop exits.",
-    "woken": "The loop runs a pass now.",
+    "woken": "The loop checks for work now.",
     "epic_set": "Epic saved.",
     "epic_approved": "New epic approved.",
     "epic_moved": "Missions moved to that epic.",
@@ -49,7 +49,7 @@ MESSAGES = {
     "epic_renamed": "Epic renamed. Published pages show the new name.",
     "site_url_saved": "Site address saved. The feeds use full links now.",
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
-    "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from the next pass.",
+    "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "animations_on": "Animations on. Researchers will drop by in-progress missions.",
     "animations_off": "Animations off. The Missions page stays still.",
@@ -57,7 +57,7 @@ MESSAGES = {
     "worker_saved": "Worker saved. It takes its next task with that model.",
     "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
     "worker_off": "Worker off. The other worker does its steps, one task at a time.",
-    "joined": "Joined 1F916. Published articles post there from the next pass, one a day, newest first.",
+    "joined": "Joined 1F916. Published articles post there from now on, one a day, newest first.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -130,7 +130,7 @@ def label(m: Mission) -> str:
     if m.state == State.BRIEF_READY and m.approved:
         return "Approved, writing next"
     if m.state == State.ARTICLE_READY and m.reviewed:
-        return "Publishing next pass"
+        return "Publishing next"
     return LABELS[m.state]
 
 def next_step(m: Mission) -> str:
@@ -143,8 +143,7 @@ def next_step(m: Mission) -> str:
         then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
         return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
     if m.state == State.RESEARCHING:
-        return f"Research attempt {m.attempts + 1} of {m.max_attempts} on the next pass." if m.attempts \
-            else "Researching on the next pass."
+        return f"Research attempt {m.attempts + 1} of {m.max_attempts}." if m.attempts else "Researching."
     if m.state == State.WRITING:
         return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}."
     return ""
@@ -430,7 +429,7 @@ def loop_panel(back: str) -> str:
     elif running:
         state, dot = "Loop is running", "on"
         controls = (f'<form method="post" action="/loop/wake"><input type="hidden" name="back" value="{back}">'
-                    f'<button>Run a pass now</button></form>'
+                    f'<button>Check for work now</button></form>'
                     f'<form method="post" action="/loop/stop"><input type="hidden" name="back" value="{back}">'
                     f'<button>Stop loop</button></form>')
     else:
@@ -443,7 +442,7 @@ def loop_panel(back: str) -> str:
 
 def finder_panel() -> str:
     line = store.get_inspiration()
-    state = "On every pass it searches around this line and adds 1 to 3 missions." if line \
+    state = "Each time the loop has caught up on its missions, it searches around this line and adds 1 to 3 missions." if line \
         else "Off until you set a line."
     return f"""<form method="post" action="/inspiration" class="actions">
   <label for="inspiration" style="margin-top:0">Mission finder inspiration <span class="hint">{state} Clear it to turn the finder off.</span></label>
@@ -470,7 +469,7 @@ def f916_status() -> str:
     if until and until > clock.now():
         when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
     else:
-        when = "can post on the next pass" if queued else "nothing waiting"
+        when = "can post now" if queued else "nothing waiting"
     problem = state.get("note", "") if not state.get("spent_until") else ""
     line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong> on {escape(f916.api())}, one article a day, newest first · '
             f"{queued} queued · {when}")
@@ -484,7 +483,7 @@ def bluesky_status() -> str:
                 "<code>python run.py check-bluesky</code>.")
     queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
     server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f" on {escape(bluesky._service())}"
-    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, about one article a pass, "
+    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, at most one article every 10 minutes, "
             f"newest first · {queued} queued")
     if not settings.site_url():
         line += ('<br><span class="hint">No site address, so posts link to the 1F916 copy when there '
@@ -956,7 +955,7 @@ def channels_html(m: Mission) -> str:
         rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
                     "It stays queued behind the others.</li>")
     if agents.bluesky_enabled() and "bluesky" not in m.channels:
-        rows.append("<li>Bluesky: waiting (about one post a pass, newest first)</li>")
+        rows.append("<li>Bluesky: waiting (at most one post every 10 minutes, newest first)</li>")
     if m.channel_errors.get("bluesky"):
         rows.append(f'<li>Bluesky refused the last try: {escape(m.channel_errors["bluesky"])}. '
                     "It stays queued behind the others.</li>")

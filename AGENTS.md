@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 303 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 309 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
@@ -36,31 +36,44 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
                                                                attempts)
 ```
 
-- Mission finder: `agents/finder.py`, once per pass, after existing missions have run. It works from the
+- Order of work (`orchestrator.work`): there are no fixed passes. The loop works until nothing is left it
+  can do on its own, reading missions fresh every few seconds, always in this order:
+  1. Every code step, farthest along first (`in_flow_order`): publish a reviewed article, move an approved
+     brief on, end the comment wait, start a queued mission. No model is called. Right after the first sweep,
+     and whenever a sweep publishes something, the channels post.
+  2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round
+     (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
+     mid-task is next in line. A failed attempt shows as before and the mission waits until the others with
+     work for that worker have had a turn; then a new round starts from the farthest along.
+  When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
+  straight away); when no worker has anything left, the loop rests (`--every` minutes, or until the UI wakes
+  it). A step that raises is logged on its mission and skipped until the loop starts again; the others go on.
+  `run.py loop` sends its notifications after every model task.
+- Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
   most 3, each resting on a URL the searches returned and not too close to an existing topic. They are
-  queued and researched in the same pass, and still go through human brief review. A finder failure is
-  logged and never stops the pass.
+  queued and researched straight away, and still go through human brief review. A finder failure is
+  logged and never stops the loop.
 - Epics: every mission can sit in one epic, a 1 to 4 word thematic title for a long-running line of
   inquiry (`epics` table; `Mission.epic` is its slug, which never changes when the title does). Humans
   name an epic when adding a mission; a new name makes a new, active epic. The finder sees each active
   epic with a few of its topics and must give every mission the best existing fit. It may also propose
-  a new epic, but code keeps that only when 2+ missions from the same pass share it; the proposal then
+  a new epic, but code keeps that only when 2+ missions from the same search share it; the proposal then
   waits on the UI home page (approve, rename and approve, move to another epic, or reject, which puts
   each mission back in the finder's best fit, `Mission.epic_fallback`). Epics show as pills on the
   board and the published site (approved epics only); renaming redraws the published pages.
 - Workers: two, set on the Settings page (`settings.WORKERS`, saved in `data/settings.json`). The
   Research Assistant (the small model: `assistant_model` in settings.json, else `MISSION_LOOP_SEARCH_MODEL`) does
   the "assistant" role: searching and reading. The Principal Investigator (the big model: `pi_model`, else
-  `MISSION_LOOP_MODEL`) does the "pi" role: the brief, the article and the finder's picks. Each pass runs them on
+  `MISSION_LOOP_MODEL`) does the "pi" role: the brief, the article and the finder's picks. The loop runs them on
   two threads (`orchestrator.work`): each takes the next task for its role (`orchestrator.role`), so one
   mission's search runs while another's article is written; steps with no model run between tasks on the
   main thread. A worker switched off hands its role to the other (`settings.worker_for`), which then works one
   task at a time; one always stays on. Model choices come from the LLM connection (`llm.connection`: the Ollama at
   `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per worker.
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`, in two
-  steps that can land in different passes. `gather` (Research Assistant) runs the search/fetch tool loop
+  steps that can be done at different times. `gather` (Research Assistant) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`) and saves the transcript as the mission's `evidence` artifact
   (`Mission.gathered`); a research attempt counts from here. `write_brief` (Principal Investigator) writes the
   brief from it, then the evidence is dropped. A stop during the search keeps the evidence. `page_tools.py` adds `find_in_page` (exact sentences from the text
@@ -92,18 +105,18 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
     what makes a mission DONE. Feed links are relative unless a site address is set (the UI's Settings page
     saves it in `data/settings.json`, which wins over `MISSION_LOOP_SITE_URL` in `.env`); entry ids are the
-    slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
+    slugs either way. Each time the loop starts working it gives older `meta.json` files their text and rebuilds.
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
-    `CHANNELS` in `agents/__init__.py`). At the end of every pass `orchestrator.post_to_channels` gives each
+    `CHANNELS` in `agents/__init__.py`). When the loop starts and whenever it publishes, `orchestrator.post_to_channels` gives each
     enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
     costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
-    failures lose nothing and are retried next pass. Stub runs have no channels.
+    failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
   - `1f916`: `agents/f916.py` posts the feed entry's title and text to 1F916 as our citizen. The server to join is
     config (`settings.f916_url`: Settings page, `MISSION_LOOP_1F916_URL`, else https://1f916.ai); the key file records
     the server that issued it (`api`) and posting always goes there (`f916.api`). On only
     when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site allows one post per
-    UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out that same
-    pass if the day's post is free, and the rest wait, newest first.
+    UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out right after
+    publishing if the day's post is free, and the rest wait, newest first.
   - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky with a short post (title and dek, at most
     300 characters; a possibility in the dek keeps its "Possibility, not verified" label, and a pushed-through
     article starts with "[Failed automated checks]"). Its link card goes to the article on the site when
@@ -112,7 +125,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     Settings page checks them with Bluesky and saves them to `data/bluesky.json` (mode 600, wins over `.env`'s
     `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
     the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
-    post it waits `POST_GAP` (10 minutes), so a backlog goes out about one a pass. `data/bluesky_state.json`
+    post it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
     holds that wait and the last failure, which the UI and `status` show.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
@@ -179,7 +192,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Stop | `python run.py stop` (finishes the current task first) |
 | Read a brief / article | `python run.py show <slug>`; the article preview is `missions/<slug>/preview.html` |
 | Approve a brief | `python run.py approve <slug>` |
-| Publish an article | `python run.py review <slug>`; it is published on the next pass |
+| Publish an article | `python run.py review <slug>`; while the loop runs it is published within seconds, even mid-task |
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
@@ -193,6 +206,6 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a
-sleeping loop runs its next pass right away instead of waiting out `--every`. Before each pass the loop checks that Ollama
+resting loop looks for work right away instead of waiting out `--every`. Before it starts working the loop checks that Ollama
 is up, so a closed Ollama app doesn't burn every mission's attempts. The loop sends a macOS notification
 when a mission needs you (brief ready, article ready, parked) or was published.

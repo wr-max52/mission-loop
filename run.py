@@ -95,14 +95,15 @@ def rename_epic(name: str, title: str):
 
 @app.command()
 def inspire(line: str = typer.Argument(None, help='The new line; "" clears it and turns the finder off')):
-    """Show or set the inspiration line the mission finder works from on every pass."""
+    """Show or set the inspiration line the mission finder works from each time the loop has caught up on its missions."""
     if line is not None:
         store.set_inspiration(line)
     print(store.get_inspiration() or "no inspiration line set; the mission finder is off")
 
 @app.command()
 def run():
-    """One pass: run every mission until each is blocked or finished, then exit."""
+    """Work until nothing is left the loop can do on its own (quick code steps first, then the farthest-along
+    model work), then exit."""
     held = _lock()
     orchestrator.STOP_FLAG.unlink(missing_ok=True)
     if _ready():
@@ -112,23 +113,27 @@ def run():
     held.close()
 
 @app.command()
-def loop(every: float = typer.Option(15, help="Minutes to sleep between passes")):
-    """Keep running passes forever. `python run.py stop` ends it after the current task."""
+def loop(every: float = typer.Option(15, help="Minutes to rest when there is nothing left to do")):
+    """Keep working forever, resting when nothing is left to do. `python run.py stop` ends it after the current task."""
     held = _lock()
     orchestrator.STOP_FLAG.unlink(missing_ok=True)
     seen: set[tuple[str, str]] = set()
-    print(f"[{clock.now():%Y-%m-%d %H:%M}] loop started; a pass every {every:g} min", flush=True)
+    print(f"[{clock.now():%Y-%m-%d %H:%M}] loop started; it rests up to {every:g} min when nothing is left to do", flush=True)
+
+    def announce():                        # after every model task, so a ready brief never waits on the others
+        for line in notify.announce(store.all_missions(), seen):
+            print(f"[{clock.now():%Y-%m-%d %H:%M}] notice: {line}", flush=True)
+
     while not orchestrator.STOP_FLAG.exists():
         if _ready():
-            n = orchestrator.run_until_idle(clock.now)
+            n = orchestrator.run_until_idle(clock.now, after_task=announce)
             if n:
                 print(f"[{clock.now():%Y-%m-%d %H:%M}] {n} task(s) ran", flush=True)
                 status()
-        for line in notify.announce(store.all_missions(), seen):
-            print(f"[{clock.now():%Y-%m-%d %H:%M}] notice: {line}", flush=True)
+        announce()
         deadline = time.monotonic() + every * 60
         while time.monotonic() < deadline and not orchestrator.STOP_FLAG.exists():
-            if orchestrator.WAKE_FLAG.exists():  # a human acted in the UI: run a pass now
+            if orchestrator.WAKE_FLAG.exists():  # a human acted in the UI: look for work now
                 orchestrator.WAKE_FLAG.unlink(missing_ok=True)
                 break
             time.sleep(2)
@@ -266,7 +271,7 @@ def check_bluesky():
     except Exception as e:
         print(f"Bluesky login failed: {type(e).__name__}: {e}")
         raise typer.Exit(1) from None
-    print(f"logged in to Bluesky as {who}; published articles will be announced there, about one per pass")
+    print(f"logged in to Bluesky as {who}; published articles will be announced there, at most one every 10 minutes")
 
 if __name__ == "__main__":
     app()
