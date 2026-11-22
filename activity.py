@@ -13,6 +13,7 @@ import trail
 FILE = Path("data/activity.json")
 
 AGENTS = {                                 # in pipeline order
+    "theorist": "Theorist",                # looks across the whole desk and evolves the inspiration line; slug ""
     "finder": "Mission finder",            # works for the whole desk, so its slug is ""
     "sources": "Source finder",
     "contacts": "Contact finder",

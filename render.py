@@ -5,6 +5,7 @@ from email.utils import format_datetime
 from html import escape
 from xml.etree import ElementTree as ET
 import wayback
+from icons import icon
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
@@ -149,18 +150,18 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
     refs = lambda ids: "".join(f'<sup><a href="#src-{nums[i]}">[{nums[i]}]</a></sup>' for i in ids if i in nums)
     items = lambda kind: [f"<li>{escape(c.text)}{refs(c.source_ids)}</li>" for c in _claims_of(b, kind)]
     out = [f'<p class="thesis"><span class="stance">Thesis</span><br>{escape(b.thesis)}</p>',
-           f"<h2>{FACTS_HEADING if checked else UNCHECKED_FACTS_HEADING}</h2><ul>"]
+           f"<h2>{icon('check')}{FACTS_HEADING if checked else UNCHECKED_FACTS_HEADING}</h2><ul>"]
     out += items("fact") + ["</ul>"]
     if _claims_of(b, "possibility"):
-        out += [f"<h2>{POSSIBILITIES_HEADING}</h2><ul>"] + items("possibility") + ["</ul>"]
-    out += ["<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}{escape(_unsourced(b))}</p>",
-            '<h2>Sources</h2><ol class="sources">']
+        out += [f"<h2>{icon('bulb')}{POSSIBILITIES_HEADING}</h2><ul>"] + items("possibility") + ["</ul>"]
+    out += [f"<h2>{icon('scale')}Counterpoint</h2>", f"<p>{escape(b.counterpoint)}{escape(_unsourced(b))}</p>",
+            f'<h2>{icon("list")}Sources</h2><ol class="sources">']
     out += [f'<li id="src-{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
             f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>{_archived(s.url)}'
             f'<blockquote>{escape(s.quote)}</blockquote></li>' for s in b.sources]
     out.append("</ol>")
     if b.pocs:
-        out.append("<h2>Points of contact</h2><ul>")
+        out.append(f"<h2>{icon('person')}Points of contact</h2><ul>")
         out += [f"<li>{escape(p.name)}, {escape(p.role)}: {escape(p.email)}</li>" for p in b.pocs]
         out.append("</ul>")
     return "\n".join(out)

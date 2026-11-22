@@ -1687,6 +1687,8 @@ const MOODS = {
 
 // On the pipeline strip the mood is the lit step, so the researcher does that step's kind of work.
 Object.assign(MOODS, {
+  theorist: { chalkboard: 4, corkboard: 3.5, eureka: 2, notebook: 1.5, telescope: 1.5, globe: 1, coffee: 1.2, idle: 0.8,
+              read: 1, chart: 1 },
   finder: { telescope: 4, search: 3, read: 1, eureka: 1.5, notes: 1, idle: 0.5, globe: 2, butterfly: 1.5, corkboard: 1.5, coffee: 0.8 },
   sources: { search: 3, dig: 3, typing: 2, read: 2, scroll: 1.5, telescope: 1, confused: 1, coffee: 1, microscope: 1.5,
              corkboard: 1.5, sneeze: 1, notebook: 1, beaker: 0.8, apple: 0.4, bird: 0.4 },
@@ -1703,6 +1705,7 @@ Object.assign(MOODS, {
   bluesky: { typing: 3, idle: 1, eureka: 1, plane: 2, bird: 1.5, dance: 1 },
 });
 const STEP_LINES = {                             // said on reaching a step
+  theorist: ["Connecting the dots.", "What ties these together?", "Big picture time.", "Red string, please."],
   finder: ["Scanning the horizon.", "Any new leads?", "Mission hunting."],
   sources: ["To the sources!", "Let's dig.", "Who funded this?", "Opening 47 tabs."],
   contacts: ["Who can we ask?", "Finding the experts."],
@@ -1726,6 +1729,7 @@ const CLOSERS = {
   WRITING: ["Didn't pass. Rewrite coming.", "Check said no. New draft soon."],
   AWAITING_COMMENTS: ["Now we wait for replies."],
   finder: ["New missions on the board!", "Leads found. Go get 'em!", "That's the hunt done."],
+  theorist: ["New questions on the board.", "The pattern is clearer now.", "Theory filed. Finder, you're up."],
   posted: ["Posted!", "Out in the world!", "Told the world."],
   handoff: ["Passing the baton.", "Over to my colleague!", "Your turn, colleague."],
   gathered: ["Sources gathered. PI's turn!", "Over to you, Professor.", "Notes are on your desk, Prof."],
@@ -1734,7 +1738,7 @@ const CLOSERS = {
 };
 function closer(c) {
   const key = !c.running ? "off" : c.handoff ? (c.worker === "assistant" ? "gathered" : "handoff")
-    : c.from.step === "finder" ? "finder"
+    : c.from.step === "finder" || c.from.step === "theorist" ? c.from.step
     : ["1f916", "github", "bluesky"].includes(c.from.step) && c.outcome === "DONE" ? "posted"
     : CLOSERS[c.outcome] ? c.outcome : "other";
   return pick(Math.random, CLOSERS[key]);

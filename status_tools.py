@@ -94,7 +94,8 @@ def loop_status() -> str:
             lines.append(f"Working now: {who} on {e['slug']} ({m.topic if m else '?'}), "
                          f"for {_ago(time.time() - e['since'])}")
         else:
-            lines.append(f"Working now: {who}, looking for new missions, for {_ago(time.time() - e['since'])}")
+            task = "looking across the desk for patterns" if e["agent"] == "theorist" else "looking for new missions"
+            lines.append(f"Working now: {who}, {task}, for {_ago(time.time() - e['since'])}")
     if not now and running:
         lines.append("Working now: nothing; the loop is waiting for a human or for its next check")
     counts: dict[str, int] = {}
@@ -169,17 +170,43 @@ def mission_status(slug: str) -> str:
 def agent_steps(slug: str, last: int = 8) -> str:
     """The last few things the agents did on a mission: their thinking, the searches and pages they asked
     for, what came back. Use it to tell what an agent is doing right now and why it is taking long.
-    Use slug "finder" for the mission finder. Read-only: it never interrupts the agent."""
+    Use slug "finder" for the mission finder and "theorist" for the Theorist. Read-only: it never interrupts the agent."""
     slug = slug.strip()
-    key = "" if slug.lower() in ("finder", "mission finder", "") else slug
+    agent = "theorist" if slug.lower() in ("theorist", "the theorist") else "finder"
+    key = "" if slug.lower() in ("finder", "mission finder", "theorist", "the theorist", "") else slug
     if key and not store.get_mission(key):
         return f"No mission '{slug}'. Use search_missions to find its slug."
-    steps = trail.recent(key, max(1, min(int(last), 15)))
+    steps = trail.recent(key, max(1, min(int(last), 15)), agent)
     if not steps:
         return f"No recorded steps for {slug or 'the finder'} yet."
     now = time.time()
     return "\n".join(f"- {_ago(now - s['at'])} ago, {activity.AGENTS.get(s['agent'], s['agent'])}, "
                      f"{s['kind']}: {s['text'][:240]}" for s in steps)
+
+@server.tool()
+def theorist_notes() -> str:
+    """What the Theorist saw on its last turn (patterns inside and across epics), how it evolved the
+    inspiration line and why, the epics and mission it proposed, and the line's recent history."""
+    last = store.last_theory()
+    lines = [f"Inspiration line now: {store.get_inspiration() or '(none; the finder and the Theorist are off)'}"]
+    if not last:
+        lines.append("The Theorist has not had a turn yet.")
+    elif last.get("failed"):
+        lines.append(f"Last turn {_since(last['at'])} failed: {last['failed']}")
+    else:
+        lines.append(f"Last turn {_since(last['at'])}. Why: {last.get('why') or '-'}")
+        lines += [f"- pattern: {p}" for p in last.get("patterns", [])]
+        if last.get("line_before") != last.get("line_after"):
+            lines.append(f"Line before: {last.get('line_before')}")
+        lines += [f"Proposed epic (waits for the human): {t}" for t in last.get("epics", [])]
+        if last.get("mission"):
+            lines.append(f"Proposed mission: {last['mission']}")
+        lines += [f"Code dropped: {n}" for n in last.get("notes", [])]
+    history = store.inspiration_history(5)
+    if history:
+        lines.append("Line history, oldest first:")
+        lines += [f"- {_since(h['at'])}, by the {h['by']}: {h['line'] or '(cleared)'}" for h in history]
+    return "\n".join(lines)
 
 @server.tool()
 def search_missions(query: str) -> str:

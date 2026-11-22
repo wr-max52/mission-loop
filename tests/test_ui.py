@@ -32,8 +32,10 @@ def test_dashboard_groups_missions(client):
     brief_ready("b", "Brief topic")
     store.save_mission(Mission(slug="q", topic="Queued topic"))
     html = client.get("/").text
-    assert "Needs you (1)" in html and "Brief topic" in html
-    assert "In progress (1)" in html and "Queued topic" in html
+    assert '<span>Needs you</span><span class="n" data-n="1">1</span>' in html and "Brief topic" in html
+    assert '<span>In progress</span><span class="n" data-n="1">1</span>' in html and "Queued topic" in html
+    assert '<span>Queued</span><span class="n">1</span></h3>' in html         # grouped by workflow stage
+    assert html.index("Needs you") < html.index("In progress") < html.index("Inspiration") < html.index("New mission")
     assert "Loop is off" in html
 
 def test_mission_page_shows_brief_and_actions(client):
@@ -210,7 +212,7 @@ def test_status_colors_on_cards_and_pills(client):
     for slug, state, color in (("r", State.BRIEF_READY, "review"), ("w", State.ARTICLE_READY, "publish"),
                                ("p", State.PARKED, "parked")):
         store.save_mission(Mission(slug=slug, topic="T", state=state))
-        assert f'<a class="card {color}" href="/m/{slug}">' in client.get("/").text
+        assert f'<div class="ask {color}">' in client.get("/").text          # the same look for every decision
         assert f'<span class="badge {color}">' in client.get(f"/m/{slug}").text
 
 def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeypatch):
@@ -220,7 +222,7 @@ def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeyp
     assert '<script src="/assets/flow.js" defer></script>' in html
     track = html.split('class="flow-track"')[1].split("</section>")[0]
     order = re.findall(r'data-step="([a-z0-9_]+)"', track)
-    assert order == ["finder", "sources", "brief", "source_check", "brief_review",
+    assert order == ["theorist", "finder", "sources", "brief", "source_check", "brief_review",
                      "writer", "article_check", "article_review", "publisher"]   # outreach and channels off
     assert '<span class="check" data-step="source_check"' in track
     assert '<span class="detour"><a class="human review" href="/#needs-you" data-step="brief_review"' in track
@@ -236,7 +238,7 @@ def test_flow_strip_counts_what_waits_on_you_and_what_each_check_parked(client, 
     assert 'class="human review waiting"' in html and '<b class="count">2</b>' in html
     assert 'class="human publish waiting"' in html and '<b class="count">1</b>' in html
     assert '<b class="parked-count" title="1 parked here">1</b>' in html      # parked at the source check
-    assert '<h2 class="group" id="needs-you">Needs you (4)</h2>' in html
+    assert '<h2 class="group" id="needs-you">' in html and '<span>Needs you</span><span class="n" data-n="4">4</span>' in html
     d = client.get("/api/flow").json()
     assert d["running"] is False and d["working"] == []
     assert d["waiting"] == {"brief_review": 2, "article_review": 1}

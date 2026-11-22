@@ -21,6 +21,7 @@ from agents import llm
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
+from icons import icon, CSS as ICON_CSS
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -38,14 +39,15 @@ MESSAGES = {
     "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
     "added": "Mission added. The loop researches it after the missions further along.",
     "inspired": "Inspiration saved. The mission finder works from it each time the loop has caught up.",
-    "uninspired": "Inspiration cleared. The mission finder is off.",
+    "uninspired": "Inspiration cleared. The mission finder and the Theorist are off.",
+    "thinking": "The Theorist goes next: as the loop's next run starts, or when you start the loop.",
     "started": "Loop started.",
     "stopping": "Stop requested. The agent at work writes out what it has (2 minutes at most), then the loop exits.",
     "woken": "The loop checks for work now.",
     "epic_set": "Epic saved.",
     "epic_approved": "New epic approved.",
     "epic_moved": "Missions moved to that epic.",
-    "epic_rejected": "Proposed epic rejected. Its missions went back to the epics the finder picked for them.",
+    "epic_rejected": "Proposed epic rejected. Its missions went back to the epics they were in before.",
     "epic_renamed": "Epic renamed. Published pages show the new name.",
     "site_url_saved": "Site address saved. The feeds use full links now.",
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
@@ -156,7 +158,9 @@ def next_step(m: Mission) -> str:
         then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
         return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
     if m.state == State.RESEARCHING:
-        return f"Research attempt {m.attempts + 1} of {m.max_attempts}." if m.attempts else "Researching."
+        doing = "Writing the brief from its sources." if m.gathered or m.interrupted_brief else "Finding sources."
+        try_ = m.attempts if m.gathered or m.interrupted_brief else m.attempts + 1
+        return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
         return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}."
     if m.state == State.DONE and m.publish_requests:
@@ -230,7 +234,18 @@ nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; st
 @keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
 @keyframes blink { 50% { opacity:.2; } }
 h1 { font-family: Georgia, serif; }
-h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .5rem; }
+h2.group { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
+           color:var(--muted); margin:2.2rem 0 .6rem; }
+h2.group .ico { width:1.05rem; height:1.05rem; color:var(--fg); }
+h2.sec, .doc h2 { display:flex; align-items:center; gap:.5rem; }
+h2.sec .ico, .doc h2 .ico { color:var(--muted); }
+summary .ico { width:.95rem; height:.95rem; margin-right:.4rem; vertical-align:-.15rem; }
+h2 .n, h3.stage .n { font-size:.72rem; font-weight:700; letter-spacing:0; padding:.05rem .45rem; border-radius:999px;
+                     background:var(--quote); color:var(--muted); }
+h2#needs-you .n:not([data-n="0"]) { background:#c92a2a; color:#fff; }
+h3.stage { display:flex; align-items:center; gap:.45rem; font-size:.92rem; margin:1.1rem 0 .45rem; }
+h3.stage .ico { color:var(--muted); }
+.empty { margin:.2rem 0 0; }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
         text-decoration:none; color:var(--fg); }
 .card:hover { border-color:var(--muted); }
@@ -250,7 +265,7 @@ h2.group { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; colo
 button, .btn { font:600 .9rem -apple-system, system-ui, sans-serif; padding:.5rem .9rem; border-radius:8px;
                border:1px solid var(--rule); background:var(--bg); color:var(--fg); cursor:pointer;
                text-decoration:none; display:inline-block; }
-button.primary { background:#8a2b2b; border-color:#8a2b2b; color:#fff; }
+button.primary, .btn.primary { background:var(--tone, #8a2b2b); border-color:var(--tone, #8a2b2b); color:#fff; }
 button:hover, .btn:hover { border-color:var(--muted); }
 input, textarea { font:inherit; padding:.5rem .6rem; border:1px solid var(--rule); border-radius:8px;
                   background:var(--bg); color:var(--fg); width:100%; }
@@ -275,61 +290,84 @@ table.events td.when { color:var(--muted); white-space:nowrap; }
 details summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
 .muted { color:var(--muted); }
 .card .sub .epic { margin-right:.35rem; }
-.epic-review { border-style:dashed; border-color:var(--muted); }
-.epic-review ul { margin:.4rem 0 .8rem; padding-left:1.2rem; }
-.epic-review .buttons form { display:flex; gap:.4rem; align-items:center; margin:0; }
-.epic-review input[type=text], .epic-review select { width:auto; min-width:10rem; }
+.propose { --tone:#7048e8; --tint:rgba(112,72,232,.12); }
+.badge.propose { background:var(--tone); color:#fff; }
+/* a decision waiting on the human: brief, article, parked mission or proposed epic all look alike */
+.ask { border:1px solid var(--tone); background:var(--tint); box-shadow:inset 3px 0 0 var(--tone);
+       border-radius:10px; padding:.85rem 1rem; margin:0 0 .6rem; }
+.ask-head { display:flex; align-items:center; gap:.6rem; }
+.ask-head .ico { width:1.2rem; height:1.2rem; color:var(--tone); }
+.ask-head .topic { flex:1; font-weight:600; color:var(--fg); text-decoration:none; }
+.ask-head a.topic:hover { text-decoration:underline; }
+.ask .sub, .ask > .hint, .ask > ul, .ask-actions { margin-left:1.8rem; }
+.ask .sub { color:var(--muted); font-size:.9rem; margin-top:.25rem; }
+.ask > .hint { margin-top:.35rem; margin-bottom:0; }
+.ask > ul { margin-top:.5rem; margin-bottom:0; padding-left:1.1rem; font-size:.92rem; }
+.ask-actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin-top:.75rem; }
+.ask-actions form { display:flex; gap:.4rem; align-items:center; margin:0; }
+.ask-actions input[type=text], .ask-actions select { width:auto; min-width:9rem; }
+.ask-actions details.send-back { flex-basis:100%; margin:.2rem 0 0; }
+@media (max-width: 560px) { .ask .sub, .ask > .hint, .ask > ul, .ask-actions { margin-left:0; } }
+.epics form.inline { margin:.3rem 0; }
 select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); border-radius:8px;
          background:var(--bg); color:var(--fg); }
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
 form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
 
-/* the pipeline strip: agents on the track, checks as vertical blocks, human reviews as sidesteps below */
+/* the pipeline strip: agents on the track, checks as vertical blocks, human reviews as sidesteps below.
+   It never scrolls: assets/flow.js sets --s to shrink it to the panel's width, and below a readable size it
+   wraps between units (an agent with its check and review), each line starting with the arrow it continues. */
 .flow { flex-basis:100%; min-width:0; margin-top:.3rem; --line:color-mix(in srgb, var(--muted) 60%, transparent); }
-.flow-scroll { overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin; padding-bottom:.25rem; }
-.flow-track { --row:1.6rem; --drop:1rem; --hh:1.45rem; --ch:calc(var(--row) + 1.1rem);
-              display:flex; align-items:flex-start; width:max-content; min-width:100%; position:relative; }
+.flow-scroll { overflow:hidden; padding-bottom:.25rem; }
+.flow-track { --s:1; --u:calc(1rem * var(--s)); --row:calc(var(--u) * 1.6); --drop:var(--u); --hh:calc(var(--u) * 1.45);
+              --ch:calc(var(--row) + var(--u) * 1.1);
+              display:flex; align-items:flex-start; width:100%; position:relative; }
 .flow-track[data-lab] { padding-top:5rem; }          /* headroom for the researchers and their speech bubbles */
-.flow .step { flex:none; height:var(--row); line-height:calc(var(--row) - 2px); padding:0 .65rem; border-radius:999px;
-              border:1px solid var(--rule); background:var(--quote); color:var(--muted);
-              font-size:.78rem; font-weight:600; white-space:nowrap; }
+.flow .unit { display:contents; }
+.flow.wrap .flow-track { flex-wrap:wrap; row-gap:calc(var(--u) * .7); }
+.flow.wrap .unit { display:flex; align-items:flex-start; flex:none; }
+.flow.wrap .join:not(.short) { flex:none; width:calc(var(--u) * 1.5); }
+.flow .step { flex:none; height:var(--row); line-height:calc(var(--row) - 2px); padding:0 calc(var(--u) * .65);
+              border-radius:999px; border:1px solid var(--rule); background:var(--quote); color:var(--muted);
+              font-size:calc(var(--u) * .78); font-weight:600; white-space:nowrap; }
 .flow .step.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
-.flow .join { flex:1 0 1rem; max-width:3.5rem; height:var(--row); position:relative; }   /* stretch to fill the panel */
+.flow .join { flex:1 0 var(--u); max-width:calc(var(--u) * 3.5); height:var(--row); position:relative; }   /* stretch to fill */
 .flow .join::before { content:""; position:absolute; left:2px; right:4px; top:calc(50% - 1px); border-top:2px solid var(--line); }
 .flow .join::after { content:""; position:absolute; right:1px; top:calc(50% - 4px);
                      border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .join.short { flex:none; width:.5rem; } .flow .join.short::after { display:none; } .flow .join.short::before { right:1px; }
-.flow .check { flex:none; position:relative; width:1rem; height:var(--ch); border-radius:4px; overflow:visible;
+.flow .join.short { flex:none; width:calc(var(--u) * .5); } .flow .join.short::after { display:none; }
+.flow .join.short::before { right:1px; }
+.flow .check { flex:none; position:relative; width:var(--u); height:var(--ch); border-radius:4px; overflow:visible;
                border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
                background:repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
-.flow .check .label { writing-mode:vertical-rl; transform:rotate(180deg); font-size:.56rem; font-weight:700;
+.flow .check .label { writing-mode:vertical-rl; transform:rotate(180deg); font-size:calc(var(--u) * .56); font-weight:700;
                       letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
 .flow .check.on { background:#237a35; border-color:#237a35; animation:working 2s ease-out infinite; }
 .flow .check.on .label { color:#fff; }
 .flow .check.on::after { content:""; position:absolute; left:1px; right:1px; height:3px; border-radius:2px;
                          background:#b2f2bb; animation:scan 1.1s ease-in-out infinite alternate; }
-.flow .parked-count { position:absolute; right:calc(100% + 3px); bottom:-1px; min-width:1rem; height:1rem;
-                      border-radius:999px; background:#c92a2a; color:#fff; font-size:.62rem; line-height:1rem;
-                      text-align:center; padding:0 .2rem; }
-.flow .detour { flex:none; position:relative; padding:calc(var(--row) + var(--drop)) .9rem 0; }
-.flow .detour::before { content:""; position:absolute; left:-.5rem; width:calc(1.4rem - 3px); top:var(--ch);
+.flow .parked-count { position:absolute; right:calc(100% + 3px); bottom:-1px; min-width:var(--u); height:var(--u);
+                      border-radius:999px; background:#c92a2a; color:#fff; font-size:calc(var(--u) * .62);
+                      line-height:var(--u); text-align:center; padding:0 calc(var(--u) * .2); }
+.flow .detour { flex:none; position:relative; padding:calc(var(--row) + var(--drop)) calc(var(--u) * .9) 0; }
+.flow .detour::before { content:""; position:absolute; left:calc(var(--u) * -.5); width:calc(var(--u) * 1.4 - 3px); top:var(--ch);
                         height:calc(var(--row) + var(--drop) + var(--hh) / 2 - var(--ch));
                         border-left:2px solid var(--line); border-bottom:2px solid var(--line);
                         border-bottom-left-radius:7px; }
-.flow .detour::after { content:""; position:absolute; right:0; width:.9rem; top:calc(var(--row) / 2 - 1px);
+.flow .detour::after { content:""; position:absolute; right:0; width:calc(var(--u) * .9); top:calc(var(--row) / 2 - 1px);
                        height:calc(var(--row) / 2 + var(--drop) + var(--hh) / 2);
                        border-right:2px solid var(--line); border-bottom:2px solid var(--line);
                        border-bottom-right-radius:7px; }
-.flow .human { position:relative; display:inline-flex; align-items:center; gap:.3rem; height:var(--hh); padding:0 .55rem;
-               border-radius:999px; border:1px dashed var(--line); background:var(--bg); color:var(--muted);
-               font-size:.74rem; font-weight:600; white-space:nowrap; text-decoration:none; }
+.flow .human { position:relative; display:inline-flex; align-items:center; gap:calc(var(--u) * .3); height:var(--hh);
+               padding:0 calc(var(--u) * .55); border-radius:999px; border:1px dashed var(--line); background:var(--bg);
+               color:var(--muted); font-size:calc(var(--u) * .74); font-weight:600; white-space:nowrap; text-decoration:none; }
 .flow .human::before { content:""; position:absolute; left:-6px; top:calc(50% - 4px);
                        border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .human svg { width:.85rem; height:.85rem; fill:none; stroke:currentColor; stroke-width:2.2;
+.flow .human svg { width:calc(var(--u) * .85); height:calc(var(--u) * .85); fill:none; stroke:currentColor; stroke-width:2.2;
                    stroke-linecap:round; stroke-linejoin:round; }
 .flow .human.waiting { border-style:solid; border-color:var(--tone); background:var(--tint); color:var(--fg); }
-.flow .human .count { background:var(--tone); color:#fff; border-radius:999px; font-size:.68rem;
-                      line-height:1.05rem; padding:0 .38rem; }
+.flow .human .count { background:var(--tone); color:#fff; border-radius:999px; font-size:calc(var(--u) * .68);
+                      line-height:calc(var(--u) * 1.05); padding:0 calc(var(--u) * .38); }
 .flow .human.arrived { animation:arrived 1s ease-out 3; }
 .flow [hidden] { display:none; }
 .flow.off .step, .flow.off .check { opacity:.7; }
@@ -466,6 +504,12 @@ ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
 
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
 
+def heading(name: str, title: str, count: int | None = None, anchor: str = "", cls: str = "group") -> str:
+    """A section heading with its icon, e.g. the finger for anything waiting on you."""
+    n = f'<span class="n" data-n="{count}">{count}</span>' if count is not None else ""
+    a = f' id="{anchor}"' if anchor else ""
+    return f'<h2 class="{cls}"{a}>{icon(name)}<span>{escape(title)}</span>{n}</h2>'
+
 def nav_status() -> str:
     """The loop's state for the top bar. It only says Running while the loop really holds the lock."""
     if not loop_running():
@@ -513,7 +557,7 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published site</a>'
@@ -533,6 +577,7 @@ def flash(request: Request) -> str:
 # vertical block right after the agent it checks, and each human review a sidestep below, between the
 # check that leads to it and the agent that follows it. (key, kind, label on the strip)
 FLOW = [
+    ("theorist", "agent", "Theorist"),
     ("finder", "agent", "Finder"),
     ("sources", "agent", "Sources"),
     ("contacts", "agent", "Contacts"),
@@ -560,8 +605,9 @@ def strip_step(agent: str) -> str:
 def doing(e: dict) -> str:
     """What one working agent is doing, e.g. "Source finder is working on <topic> · 2m 3s"."""
     since = f' · <span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>'
-    if not e["slug"]:                      # the mission finder works for the desk, not one mission
-        return f'<strong>{activity.AGENTS[e["agent"]]}</strong> is looking for new missions{since}'
+    if not e["slug"]:                      # the Theorist and the mission finder work for the desk, not one mission
+        task = "is looking across the desk for patterns" if e["agent"] == "theorist" else "is looking for new missions"
+        return f'<strong>{activity.AGENTS[e["agent"]]}</strong> {task}{since}'
     m = store.get_mission(e["slug"])
     return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> is working on '
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
@@ -599,13 +645,13 @@ def flow_strip(state: dict) -> str:
     """The pipeline strip. It is always drawn; with the loop off nothing on it is lit. assets/flow.js
     keeps it current without reloading the page, and the pixel researchers live on its track."""
     steps, lit = flow_steps(), {e["step"]: e["worker"] for e in state["working"]}
-    parts, before = [], None
+    units: list[list[str]] = []
     for key, kind, text in steps:
         on = " on" if key in lit else ""
         cur = f' aria-current="step" data-worker="{lit[key]}"' if on else ""
         if kind == "agent":
-            if before in ("agent", "check", "human"):
-                parts.append('<span class="join" aria-hidden="true"></span>')
+            units.append(['<span class="join" aria-hidden="true"></span>'] if units else [])
+            parts = units[-1]
             parts.append(f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
         elif kind == "check":
             parts.append('<span class="join short" aria-hidden="true"></span>')
@@ -620,13 +666,13 @@ def flow_strip(state: dict) -> str:
             parts.append(f'<span class="detour"><a class="human {tone_}{" waiting" if n else ""}" href="/#needs-you" '
                          f'data-step="{key}" title="{escape(title)}">{ICON_PERSON}{text}'
                          f'<b class="count"{"" if n else " hidden"}>{n}</b></a></span>')
-        before = kind
+    track = "".join(f'<span class="unit">{"".join(u)}</span>' for u in units)
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
     attrs = f'data-shape="{",".join(k for k, _, _ in steps)}" data-working="{escape(working, quote=True)}"'
     off = "" if state["running"] else " off"
     return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
-            f'<div class="flow-scroll"><div class="flow-track"{lab}>{"".join(parts)}</div></div>'
+            f'<div class="flow-scroll"><div class="flow-track"{lab}>{track}</div></div>'
             f'<div class="now" aria-live="polite">{state["now"]}</div></section>')
 
 def loop_panel(back: str) -> str:
@@ -650,13 +696,48 @@ def loop_panel(back: str) -> str:
 
 def finder_panel() -> str:
     line = store.get_inspiration()
-    state = "Each time the loop has caught up on its missions, it searches around this line and adds 1 to 3 missions." if line \
+    state = ("Each time the loop has caught up on its missions, the finder searches around this line and adds 1 to 3 "
+             "missions. The Theorist evolves it as the desk's work grows: questions only, keeping your words.") if line \
         else "Off until you set a line."
-    return f"""<form method="post" action="/inspiration" class="actions">
-  <label for="inspiration" style="margin-top:0">Mission finder inspiration <span class="hint">{state} Clear it to turn the finder off.</span></label>
+    think = ('<button formaction="/theorist" title="Look across the desk and evolve the line on the loop\'s next run">'
+             'Ask the Theorist</button>') if line else ""
+    return heading("brain", "Inspiration") + f"""<form method="post" action="/inspiration" class="actions">
+  <label for="inspiration" style="margin-top:0"><span class="hint">{state} Clear it to turn the finder and the Theorist off.</span></label>
   <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="e.g. Who really decides what the Federal Reserve does?">
-  <p><button>Save inspiration</button></p>
+  <p><button>Save inspiration</button>{think}</p>{theorist_notes()}
 </form>"""
+
+def _when(at: str) -> str:
+    return escape(at[:16].replace("T", " ")) + " UTC" if at else ""
+
+def theorist_notes() -> str:
+    """The Theorist's last turn and how the line got here, folded away under the inspiration box."""
+    last, history = store.last_theory(), store.inspiration_history(6)
+    if not last and not history:
+        return ""
+    parts = []
+    if last.get("failed"):
+        parts.append(f'<p class="muted">Last turn {_when(last["at"])} failed: {escape(last["failed"])}</p>')
+    elif last:
+        parts.append(f'<p class="muted">Last turn {_when(last["at"])}. {escape(last.get("why", ""))}</p>')
+        if last.get("patterns"):
+            parts.append("<p>Patterns it saw:</p><ul>" + "".join(f"<li>{escape(p)}</li>" for p in last["patterns"])
+                         + "</ul>")
+        made = [f"proposed the epic <strong>{escape(t)}</strong> (waiting for you below)" for t in last.get("epics", [])]
+        m = store.get_mission(last["mission"]) if last.get("mission") else None
+        if m:
+            made.append(f'proposed the mission <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>')
+        if made:
+            parts.append(f"<p>It {', and '.join(made)}.</p>")
+        if last.get("notes"):
+            parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+    if history:
+        rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
+                       f'{"you" if h.get("by") == "human" else "the Theorist"}:</span> '
+                       f'{escape(h.get("line") or "(cleared)")}</li>' for h in reversed(history))
+        parts.append(f"<p>The line over time, newest first:</p><ul>{rows}</ul>")
+    return f'<details><summary>{icon("bulb")}Theorist\'s notes</summary>{"".join(parts)}</details>'
+
 
 def f916_status() -> str:
     """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
@@ -784,7 +865,8 @@ ROLE_STEPS = {                             # where each worker's model is used; 
     "assistant": ["<strong>Source finder</strong>: searches the web and reads pages for each mission (up to 15 minutes)",
                   "<strong>Mission finder</strong>: its searches around your inspiration line",
                   "<strong>Contact finder</strong>: looks for people to interview (only while outreach is on)"],
-    "pi": ["<strong>Brief writer</strong>: turns the gathered sources into the research brief",
+    "pi": ["<strong>Theorist</strong>: looks across every epic, post and mission and evolves your inspiration line",
+           "<strong>Brief writer</strong>: turns the gathered sources into the research brief",
            "<strong>Article writer</strong>: writes the article from the approved brief",
            "<strong>Mission finder</strong>: picks the new missions from what the searches found"],
 }
@@ -851,7 +933,7 @@ def workers_section(conn: dict) -> str:
     else:
         lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
     cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
-    return (f'<h2 class="group">Workers</h2><p>{lead} The source checker, article checker and publisher are '
+    return (f'{heading("people", "Workers")}<p>{lead} The source checker, article checker and publisher are '
             f'code and use no model.</p><div class="workers">{cards}</div>')
 
 def ollama_form() -> str:
@@ -867,7 +949,7 @@ def ollama_form() -> str:
 def connection_section(conn: dict) -> str:
     host = escape(conn["host"])
     if not conn["ok"]:
-        return (f'<h2 class="group">LLM connection</h2><p>Ollama at <code>{host}</code> is not reachable '
+        return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> is not reachable '
                 f'({escape(conn["error"])}). Start the Ollama app, or point this at the machine running it; its '
                 "models show here and in the workers' model lists once it answers.</p>" + ollama_form())
     users: dict[str, list[str]] = {}
@@ -879,7 +961,7 @@ def connection_section(conn: dict) -> str:
         f'<td class="size">{"in memory, " + gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
         f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
     count = len(conn["models"])
-    return (f'<h2 class="group">LLM connection</h2><p>Ollama at <code>{host}</code> · connected · '
+    return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> · connected · '
             f'{count} model{"" if count == 1 else "s"}. The workers can use any of them; '
             f'<code>ollama pull &lt;model&gt;</code> adds more.</p>{ollama_form()}'
             f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
@@ -1120,7 +1202,7 @@ def publishing_section() -> str:
     else:
         cards = "".join(channel_card(c) for c in live) or \
             '<p class="muted">No channels yet, so articles stay on the local site. Add one below.</p>'
-    return f"""<h2 class="group" id="publishing">Publishing</h2>
+    return heading("broadcast", "Publishing", anchor="publishing") + f"""
 <p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
 <strong>channels</strong>, everywhere else the articles go. Each channel posts from the local site, newest first, and
 remembers what it has posted. Publish any article again from the <a href="/published">Published</a> page.</p>
@@ -1138,7 +1220,7 @@ def settings_body(request: Request, error: str = "") -> str:
     return f"""{err}<h1>Settings</h1>
 {workers_section(conn)}
 {connection_section(conn)}
-<h2 class="group">Display</h2>
+{heading("monitor", "Display")}
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
@@ -1316,9 +1398,29 @@ def epic_datalist() -> str:
     options = "".join(f'<option value="{escape(e.title, quote=True)}">' for e in store.all_epics("active"))
     return f'<datalist id="epic-names">{options}</datalist>'
 
-def epic_proposals(missions: list[Mission]) -> str:
-    """The finder's proposed epics, each waiting for the human to approve, rename, redirect or reject it."""
+# ---------- anything waiting on a human: one look for every decision ----------
+
+ASK_ACTION = {"review": "Read the brief", "publish": "Read the article", "parked": "See why it stopped"}
+
+def ask(color: str, title: str, badge: str, body: str, actions: str, link: str = "") -> str:
+    """A decision waiting on the human, the same for a brief, an article, a parked mission or a proposed epic:
+    the finger, what it is, a colored badge, what to know, and the buttons that decide it."""
+    name = f'<a class="topic" href="{link}">{escape(title)}</a>' if link else f'<span class="topic">{escape(title)}</span>'
+    tag = f'<span class="badge {color}">{escape(badge)}</span>' if badge else ""
+    return (f'<div class="ask {color}"><div class="ask-head">{icon("touch")}{name}{tag}</div>'
+            f'{body}<div class="ask-actions">{actions}</div></div>')
+
+def mission_ask(m: Mission, epics: dict[str, Epic]) -> str:
+    color, href = tone(m), f"/m/{quote(m.slug)}"
+    return ask(color, m.topic, label(m),
+               f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)} · {escape(next_step(m))}</div>',
+               f'<a class="btn primary" href="{href}">{ASK_ACTION[color]}</a>', href)
+
+def epic_proposals(missions: list[Mission]) -> list[str]:
+    """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
+    or reject it."""
     active = store.all_epics("active")
+    theorist = {t.lower() for t in store.last_theory().get("epics", [])}
     epics = {e.slug: e for e in store.all_epics()}
     out = []
     for e in store.all_epics("proposed"):
@@ -1333,16 +1435,16 @@ def epic_proposals(missions: list[Mission]) -> str:
             options = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>' for a in active)
             move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="Existing epic">'
                     f'{options}</select><button>Move them there</button></form>')
-        out.append(
-            f'<div class="actions epic-review"><p style="margin-top:0">{epic_pill(e.title, proposed=True)} '
-            f'The mission finder proposes a new epic for {len(ms)} missions:</p><ul>{items}</ul>'
-            f'<div class="buttons"><form method="post" action="/epics/{slug}/approve">'
+        who = "The Theorist" if e.title.lower() in theorist else "The mission finder"
+        out.append(ask(
+            "propose", e.title, "New epic",
+            f'<div class="sub">{who} proposes this epic for {len(ms)} missions. Edit the name before approving to '
+            f'rename it; reject puts each mission back in the epic shown beside it.</div><ul>{items}</ul>',
+            f'<form method="post" action="/epics/{slug}/approve">'
             f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
             f'<button class="primary">Approve epic</button></form>{move}'
-            f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form></div>'
-            f'<p class="hint">Edit the name before approving to rename it. Reject puts each mission back in the '
-            f'existing epic the finder picked for it.</p></div>')
-    return "".join(out)
+            f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form>'))
+    return out
 
 def epic_list(missions: list[Mission]) -> str:
     active = store.all_epics("active")
@@ -1353,7 +1455,20 @@ def epic_list(missions: list[Mission]) -> str:
         f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
         f'<span class="hint">{sum(m.epic == e.slug for m in missions)} missions</span><button>Rename</button></form>'
         for e in active)
-    return f'<details><summary>Epics ({len(active)})</summary>{rows}</details>'
+    return heading("layers", "Epics", len(active)) + f'<div class="epics">{rows}</div>'
+
+# In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
+STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("research", "search", "Research"),
+          ("queued", "clock", "Queued")]
+
+def stage_of(m: Mission) -> str:
+    if m.state == State.QUEUED:
+        return "queued"
+    if m.state == State.RESEARCHING:
+        return "research"
+    if m.state in (State.ARTICLE_READY, State.DONE):  # a reviewed article, or one a human asked to publish again
+        return "publishing"
+    return "writing"                       # an approved brief, the comment wait, writing
 
 def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
@@ -1375,34 +1490,43 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
 # ---------- pages ----------
 
 async def home(request: Request) -> HTMLResponse:
+    """The flow chart read from its end: what needs you, then what is in progress closest to published first,
+    grouped by stage; then the inputs (inspiration, epics, a new mission). Published articles live on /published."""
     missions = store.all_missions()
     flow = lambda ms: sorted(ms, key=flow_rank)   # stable: within a step, oldest first
-    groups = [("Needs you", flow(m for m in missions if needs_you(m))),
-              ("In progress", flow(m for m in missions if in_progress(m)))]
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
-    body = [flash(request), loop_panel("/"), finder_panel()]
-    proposals = epic_proposals(missions)
-    if proposals:
-        body.append('<h2 class="group">New epic proposed</h2>' + proposals)
-    if not missions:
-        body.append('<p class="muted">No missions yet. Add one below.</p>')
-    for title, ms in groups:
+    lab = settings.animations()
+    body = [flash(request), loop_panel("/")]
+
+    # Needs you: every decision in one place and one look, closest to published first; new epics before parked
+    asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
+    asks += [(6, a) for a in epic_proposals(missions)]
+    body.append(heading("touch", "Needs you", len(asks), "needs-you"))
+    body.append("".join(a for _, a in sorted(asks, key=lambda a: a[0]))
+                or '<p class="muted empty">Nothing is waiting on you.</p>')
+
+    # In progress, by stage. assets/flow.js relights cards in place; researchers may only visit data-lab-ok groups.
+    going = flow(m for m in missions if in_progress(m))
+    body.append(heading("activity", "In progress", len(going)))
+    if not going:
+        body.append('<p class="muted empty">Nothing in progress. Add a mission below, or set an inspiration line '
+                    'and start the loop.</p>')
+    for key, name, title in STAGES:
+        ms = [m for m in going if stage_of(m) == key]
         if ms:
-            anchor = ' id="needs-you"' if title == "Needs you" else ""
-            body.append(f'<h2 class="group"{anchor}>{title} ({len(ms)})</h2>')
-            lab = settings.animations() and title == "In progress"
-            cards = "".join(card(m, now, epics, lab) for m in ms)
-            # assets/flow.js relights cards in place; researchers may only visit the ones in a data-lab-ok group
-            body.append(f'<div class="cards"{" data-lab-ok" if lab else ""}>{cards}</div>')
+            body.append(f'<h3 class="stage">{icon(name)}<span>{title}</span><span class="n">{len(ms)}</span></h3>'
+                        f'<div class="cards"{" data-lab-ok" if lab else ""}>'
+                        + "".join(card(m, now, epics, lab) for m in ms) + "</div>")
     done = sum(m.state == State.DONE for m in missions)
     body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published site</span>'
                 f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
                 f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
+
+    body.append(finder_panel())
     body.append(epic_list(missions))
-    body.append(epic_datalist() + """<h2 class="group">New mission</h2>
-<form method="post" action="/missions" class="actions">
-  <label for="topic">Topic <span class="hint">what to research, in one line</span></label>
+    body.append(epic_datalist() + heading("pencil", "New mission") + """<form method="post" action="/missions" class="actions">
+  <label for="topic" style="margin-top:0">Topic <span class="hint">what to research, in one line</span></label>
   <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">
   <label for="objective">Objective <span class="hint">optional: the question to answer, what counts as evidence, any hypothesis to test</span></label>
   <textarea id="objective" name="objective" rows="4"></textarea>
@@ -1414,35 +1538,32 @@ async def home(request: Request) -> HTMLResponse:
 </form>""")
     tail = log_tail()
     if tail:
-        body.append('<details><summary>Loop log (data/loop.log)</summary><pre class="notes">'
+        body.append(f'<details><summary>{icon("terminal")}Loop log (data/loop.log)</summary><pre class="notes">'
                     + escape("\n".join(tail)) + "</pre></details>")
-    if settings.animations():
+    if lab:
         body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
 
 def actions_for(m: Mission) -> str:
     slug = quote(m.slug)
     def send_back(what: str, placeholder: str) -> str:
-        return (f'<details><summary>Send it back with notes</summary>'
+        return (f'<details class="send-back"><summary>Send it back with notes</summary>'
                 f'<form method="post" action="/m/{slug}/reject"><label for="notes">What should the {what} fix?</label>'
                 f'<textarea id="notes" name="notes" rows="4" required placeholder="{placeholder}"></textarea>'
                 f'<p><button>Send back to {what}</button></p></form></details>')
     if m.state == State.BRIEF_READY and not m.approved:
-        return (f'<div class="actions"><div class="buttons">'
-                f'<form method="post" action="/m/{slug}/approve"><button class="primary">Approve brief</button></form>'
-                f'</div><p class="hint">Approving sends it to the writer.</p>'
-                + send_back("researcher", "e.g. Find the FAA's own incident report; the thesis overstates the denial.")
-                + "</div>")
+        return ask("review", "Approve the brief, or send it back", "Brief ready",
+                   '<p class="hint">Read it below. Approving sends it to the writer.</p>',
+                   f'<form method="post" action="/m/{slug}/approve"><button class="primary">Approve brief</button></form>'
+                   + send_back("researcher", "e.g. Find the FAA's own incident report; the thesis overstates the denial."))
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        return (f'<div class="actions"><div class="buttons">'
-                f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
-                f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
-                f'</div><p class="hint">Publishing writes it to the local site (site/{escape(m.slug)}/)'
-                + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled()
-                   else "")
-                + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".</p>"
-                + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings.")
-                + "</div>")
+        where = (f"Publishing writes it to the local site (site/{escape(m.slug)}/)"
+                 + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled() else "")
+                 + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".")
+        return ask("publish", "Publish the article, or send it back", "Article ready", f'<p class="hint">{where}</p>',
+                   f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
+                   f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
+                   + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings."))
     if m.state == State.PARKED:
         what = "article" if orchestrator.parked_while_writing(m) else "brief"
         if orchestrator.parked_draft(m):
@@ -1452,10 +1573,10 @@ def actions_for(m: Mission) -> str:
         else:
             push = ""
             push_hint = f"It can't be pushed through because no attempt left a finished {what}."
-        return (f'<div class="actions"><div class="buttons">'
-                f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>{push}'
-                f'</div><p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
-                f'below so the agent can learn from them. {push_hint}</p></div>')
+        return ask("parked", "Requeue it" + (", or push it through" if push else ""), "Parked",
+                   f'<p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
+                   f'below so the agent can learn from them. {push_hint}</p>',
+                   f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>{push}')
     if m.state == State.DONE:
         rows = places(m)
         return (f'<div class="actions"><div class="buttons">'
@@ -1483,10 +1604,10 @@ async def published_page(request: Request) -> HTMLResponse:
     rows += [f"<li>{channel_status(c)}</li>" for c in live]
     if not live:
         rows.append('<li class="muted">No channels yet. Add one on the <a href="/settings#publishing">Settings</a> page.</li>')
-    body.append(f'<h2 class="group">Where articles go</h2><ul class="places">{"".join(rows)}</ul>')
+    body.append(f'{heading("send", "Where articles go")}<ul class="places">{"".join(rows)}</ul>')
     if not loop_running():
         body.append('<p class="flash">The loop is off, so anything you publish here waits until it starts.</p>')
-    body.append('<h2 class="group">Articles</h2>')
+    body.append(heading("newspaper", "Articles"))
     if not missions:
         body.append('<p class="muted">Nothing published yet. Articles show up here once you publish them from the Missions page.</p>')
     for m in missions:
@@ -1530,30 +1651,31 @@ async def mission(request: Request) -> Response:
         title = "Why it was parked" if m.state == State.PARKED else \
                 "Feedback being worked on" if m.validator_notes.startswith("Human reviewer feedback") else \
                 "Last check's notes"
-        body.append(f'<h2>{title}</h2><pre class="notes">{escape(m.validator_notes)}</pre>')
+        name = "alert" if m.state == State.PARKED or not title.startswith("Feedback") else "message"
+        body.append(f'{heading(name, title, cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
     if m.unchecked_brief:
-        body.append('<h2>Brief pushed through despite failing the source check</h2>'
-                    f'<pre class="notes">{escape(m.unchecked_brief)}</pre>')
+        body.append(heading("alert", "Brief pushed through despite failing the source check", cls="sec")
+                    + f'<pre class="notes">{escape(m.unchecked_brief)}</pre>')
     if m.unchecked_article:
-        body.append('<h2>Article pushed through despite failing its check</h2>'
-                    f'<pre class="notes">{escape(m.unchecked_article)}</pre>')
+        body.append(heading("alert", "Article pushed through despite failing its check", cls="sec")
+                    + f'<pre class="notes">{escape(m.unchecked_article)}</pre>')
 
     brief, article = _brief(slug), _article(slug)
     checked = not m.unchecked_brief
     preview = Path("missions") / slug / "preview.html"
     if article and preview.exists() and m.state in (State.ARTICLE_READY, State.DONE, State.WRITING):
-        body.append(f'<h2>Article</h2><iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
+        body.append(f'{heading("newspaper", "Article", cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
     if brief and m.state == State.BRIEF_READY:
-        body.append(f'<h2>Research brief</h2><div class="doc">{brief_html(brief, checked)}</div>')
+        body.append(f'{heading("search", "Research brief", cls="sec")}<div class="doc">{brief_html(brief, checked)}</div>')
     elif brief:
-        body.append(f'<details><summary>Research brief</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
+        body.append(f'<details><summary>{icon("search")}Research brief</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
     rejected = Path("missions") / slug / "brief.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.RESEARCHING, State.QUEUED):
-        body.append('<details><summary>Last brief that failed the source check</summary>'
+        body.append(f'<details><summary>{icon("cross")}Last brief that failed the source check</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
     rejected = Path("missions") / slug / "article.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.WRITING):
-        body.append('<details><summary>Last article that failed its check</summary>'
+        body.append(f'<details><summary>{icon("cross")}Last article that failed its check</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
 
     events = store.events(slug)
@@ -1561,7 +1683,7 @@ async def mission(request: Request) -> Response:
         rows = "".join(f'<tr><td class="when">{escape(e["at"][:16].replace("T", " "))}</td>'
                        f'<td>{escape(LABELS.get(State(e["to_state"]), e["to_state"]))}</td>'
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
-        body.append(f'<h2>History</h2><table class="events">{rows}</table>')
+        body.append(f'{heading("history", "History", cls="sec")}<table class="events">{rows}</table>')
     return page(m.topic, "\n".join(body), poll=True)
 
 async def preview(request: Request) -> Response:
@@ -1839,6 +1961,18 @@ async def save_inspiration(request: Request) -> Response:
         wake()
     return go("/", done="inspired" if line else "uninspired")
 
+async def ask_theorist(request: Request) -> Response:
+    """The Theorist's turn comes next. ui.py never runs agents: the loop sees the flag and does it."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    if not store.get_inspiration():
+        return go("/", done="uninspired")
+    orchestrator.THINK_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    orchestrator.THINK_FLAG.touch()
+    if loop_running():
+        wake()
+    return go("/", done="thinking")
+
 async def epic_action(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -1895,6 +2029,7 @@ app = Starlette(routes=[
     Route("/", home),
     Route("/missions", add_mission, methods=["POST"]),
     Route("/inspiration", save_inspiration, methods=["POST"]),
+    Route("/theorist", ask_theorist, methods=["POST"]),
     Route("/settings", settings_page),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),

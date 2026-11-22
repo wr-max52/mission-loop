@@ -1,6 +1,6 @@
-import fcntl, time
+import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
@@ -13,6 +13,7 @@ from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
 WAKE_FLAG = Path("data/WAKE")             # the UI touches this so a resting loop looks for work now
+THINK_FLAG = Path("data/THINK")           # the UI or `run.py theorize` touches this: the Theorist's turn comes next
 LOCK_FILE = Path("data/loop.lock")         # held by whichever run/loop is working
 
 def loop_running() -> bool:
@@ -337,15 +338,17 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round, so
        writing goes before research, and a brief a human approves mid-task is next in line.
     A worker that is off hands its role to the other, which then does everything one task at a time. The
-    mission finder runs once, when the Research Assistant's role has nothing else to do, and whatever it finds
-    is worked on straight away. after_task, if given, runs after each mission's model task. Returns how many changes."""
+    Theorist, when it is due, is the Principal Investigator's first task, and the finder waits for it so it
+    searches around the evolved line. The mission finder runs once, when the Research Assistant's role has
+    nothing else to do, and whatever it finds is worked on straight away. after_task, if given, runs after each
+    mission's model task. Returns how many changes."""
     changed = tasks = 0
-    finder_done, first = False, True
+    finder_done, theorist_done, first = False, False, True
     failed: set[str] = set()               # steps that raised: skipped until the loop starts again
     seen: set = set()                      # publish requests the last publishing pass already tried
     last_pass = time.monotonic()
     turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
-    running: dict = {}                     # future -> (worker, mission or None for the finder, its state before)
+    running: dict = {}                     # future -> (worker, mission, its state before) or (worker, None, desk task)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
     with ThreadPoolExecutor(max_workers=len(settings.WORKERS), thread_name_prefix="worker") as pool:
         while True:
@@ -362,8 +365,14 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     last_pass = time.monotonic()
                 waiting = [m for m in missions if m.slug not in failed and role(m)]
                 taken = {w for w, _, _ in running.values()}
+                if not theorist_done and not theorist_due(now_fn()):
+                    theorist_done = True       # checked once a run; a THINK flag set later waits for the next run
                 for worker in settings.WORKERS:
                     if worker in taken or not settings.worker_on(worker):
+                        continue
+                    if not theorist_done and settings.worker_for("pi") == worker:
+                        theorist_done = True
+                        running[pool.submit(_as_worker, worker, think, now_fn())] = (worker, None, "theorist")
                         continue
                     m = _pick(worker, waiting, turns)
                     if m:
@@ -371,10 +380,11 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                         turns.add((worker, m.slug))
                         running[pool.submit(_as_worker, worker, step, m, now_fn())] = (worker, m, m.state)
                         tasks += 1
-                    elif not finder_done and settings.worker_for("assistant") == worker \
-                            and not any(role(m) == "assistant" for m in waiting):
+                    elif not finder_done and theorist_done and settings.worker_for("assistant") == worker \
+                            and not any(role(m) == "assistant" for m in waiting) \
+                            and "theorist" not in (task for _, _, task in running.values()):
                         finder_done = True
-                        running[pool.submit(_as_worker, worker, find_new_missions, now_fn())] = (worker, None, None)
+                        running[pool.submit(_as_worker, worker, find_new_missions, now_fn())] = (worker, None, "finder")
             if not running:
                 return changed
             done, _ = wait(running, timeout=POLL, return_when=FIRST_COMPLETED)
@@ -386,6 +396,10 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     if m is None:
                         raise
                     _broke(m, before, e, now_fn(), failed)
+                    continue
+                if before == "theorist":   # applied here, between tasks, so no worker saves over its changes
+                    busy = {m.slug for _, m, _ in running.values() if m}
+                    changed += apply_theory(result, now_fn(), busy) if result else 0
                     continue
                 if m is None:
                     changed += result
@@ -447,6 +461,106 @@ def find_new_missions(now) -> int:
         store.log_event(slug, now, "", State.QUEUED.value, f"found by the mission finder from: {inspiration}{note}")
     print(f"mission finder added {len(ideas)} mission(s)", flush=True)
     return len(ideas)
+
+# ---------- the Theorist: looks across the desk, evolves the line ----------
+
+THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless a human asks (THINK_FLAG)
+
+def desk_fingerprint() -> str:
+    """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
+    A mission merely moving through research doesn't count as news."""
+    missions = [(m.slug, m.epic, m.state == State.DONE) for m in store.all_missions()]
+    epics = [(e.slug, e.title, e.status) for e in store.all_epics()]
+    return hashlib.sha1(json.dumps([missions, epics]).encode()).hexdigest()
+
+def theorist_due(now) -> bool:
+    """Its turn comes when it has a line to evolve and a desk to look at, the desk changed since its last
+    turn, and THEORY_GAP has passed. A human asking (THINK_FLAG) skips the wait."""
+    if not store.get_inspiration() or STOP_FLAG.exists():
+        return False
+    if THINK_FLAG.exists():
+        return True
+    if not store.all_missions():
+        return False
+    last = store.last_theory()
+    if not last:
+        return True
+    if last.get("fingerprint") == desk_fingerprint():
+        return False
+    try:
+        return now - datetime.fromisoformat(last["at"]) >= THEORY_GAP
+    except (KeyError, TypeError, ValueError):
+        return True
+
+def think(now):
+    """The Theorist's turn, on a worker's thread. It only reads; apply_theory makes the changes. A failure is
+    noted, so it waits THEORY_GAP before trying again, and never holds up the loop."""
+    THINK_FLAG.unlink(missing_ok=True)
+    try:
+        activity.begin("", "theorist")
+        return agents.theorize(now)
+    except Exception as e:
+        why = f"{type(e).__name__}: {e}"
+        print(f"theorist failed: {why}", flush=True)
+        store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "failed": why})
+        return None
+    finally:
+        activity.clear()
+
+def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
+    """Make the Theorist's changes, on the main thread between tasks: the evolved line, its proposed epics (they
+    wait for the human like the finder's, and each mission moved keeps its old epic to go back to) and its one
+    new mission. A human edit to the line since the Theorist read it wins. Missions being worked on right now
+    stay where they are. Returns how many changes."""
+    changed, notes = 0, list(theory.dropped)
+    before = store.get_inspiration()
+    if theory.inspiration != before:
+        if before and before == theory.based_on:
+            store.set_inspiration(theory.inspiration, by="theorist", why=theory.why)
+            changed += 1
+        else:
+            notes.append("line kept: the editor changed it while the Theorist was thinking")
+
+    homes, epics = {}, []                  # new epic title (lowercase) -> slug, for the new mission
+    joins = epic_title(theory.new_mission.epic).lower() if theory.new_mission else ""
+    for e in theory.new_epics:
+        members = [m for m in (store.get_mission(s) for s in e.missions) if m and m.slug not in busy]
+        if store.find_epic(e.title):
+            notes.append(f"new epic dropped: {e.title} exists now")
+            continue
+        if len(members) + (joins == e.title.lower()) < MIN_NEW_EPIC_MISSIONS:
+            notes.append(f"new epic dropped: {e.title}, not enough of its missions are free to move")
+            continue
+        epic = store.create_epic(e.title, status="proposed")
+        homes[e.title.lower()] = epic.slug
+        epics.append(epic.title)
+        for m in members:
+            old = store.get_epic(m.epic) if m.epic else None
+            m.epic_fallback = m.epic if old and old.status == "active" else m.epic_fallback
+            m.epic = epic.slug
+            store.save_mission(m)
+            store.log_event(m.slug, now, m.state.value, m.state.value,
+                            f"the Theorist proposes the new epic {epic.title}" + (f": {e.why}" if e.why else ""))
+            changed += 1
+
+    slug = ""
+    if theory.new_mission:
+        idea, missions = theory.new_mission, store.all_missions()
+        home = store.find_epic(idea.epic) if idea.epic else None
+        epic = homes.get(joins) or (home.slug if home and home.status == "active" else "")
+        slug = _new_slug(idea.topic, {m.slug for m in missions})
+        store.save_mission(Mission(slug=slug, topic=idea.topic, epic=epic,
+                                   objective=f"{idea.objective}\n\nProposed by the Theorist from the desk's own work."))
+        store.log_event(slug, now, "", State.QUEUED.value, "proposed by the Theorist"
+                        + (f": {theory.why}" if theory.why else ""))
+        changed += 1
+    _drop_empty_proposals()
+
+    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "patterns": theory.patterns,
+                       "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
+                       "epics": epics, "mission": slug, "notes": notes})
+    print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
+    return changed
 
 # ---------- publishing: the local site, then every channel ----------
 

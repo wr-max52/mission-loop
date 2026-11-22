@@ -95,10 +95,28 @@ def rename_epic(name: str, title: str):
 
 @app.command()
 def inspire(line: str = typer.Argument(None, help='The new line; "" clears it and turns the finder off')):
-    """Show or set the inspiration line the mission finder works from each time the loop has caught up on its missions."""
+    """Show or set the inspiration line the mission finder works from each time the loop has caught up on its
+    missions. The Theorist evolves it as the desk's work grows."""
     if line is not None:
         store.set_inspiration(line)
-    print(store.get_inspiration() or "no inspiration line set; the mission finder is off")
+    print(store.get_inspiration() or "no inspiration line set; the mission finder and the Theorist are off")
+    last = store.last_theory()
+    if last.get("why"):
+        print(f"Theorist, {last['at'][:16].replace('T', ' ')} UTC: {last['why']}")
+
+@app.command()
+def theorize():
+    """Ask the Theorist to look across the desk next: it runs as the loop's next task, or when the loop starts."""
+    if not store.get_inspiration():
+        print("no inspiration line set, so the Theorist has nothing to evolve: set one with `inspire`")
+        raise typer.Exit(1)
+    orchestrator.THINK_FLAG.parent.mkdir(exist_ok=True)
+    orchestrator.THINK_FLAG.touch()
+    if orchestrator.loop_running():
+        orchestrator.WAKE_FLAG.touch()
+        print("the Theorist goes next: when the loop starts its next run (now, if it is resting)")
+    else:
+        print("the Theorist goes first the next time the loop starts")
 
 @app.command()
 def run():

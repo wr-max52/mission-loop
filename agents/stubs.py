@@ -1,5 +1,12 @@
 from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
 
+def theorize(now=None):
+    """Sees a pattern, changes nothing: the line stays, no epics, no mission."""
+    import store
+    from agents.theorist import Theory
+    line = store.get_inspiration()
+    return Theory(patterns=["Stub pattern"], inspiration=line, why="stub: nothing new", based_on=line)
+
 def find_missions(inspiration: str, topics: list[str], now=None, epics=None) -> list[MissionIdea]:
     return [MissionIdea(topic=f"Stub lead {len(topics) + 1} from {inspiration}",
                         objective="Stub objective", source_url="https://a.example.com/lead")]
