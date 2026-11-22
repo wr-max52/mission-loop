@@ -15,8 +15,8 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 218 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
+- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
+- Tests: `pytest -q` (expects 240 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
   `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
@@ -93,6 +93,22 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   that follows, and stays marked as failing its check (`unchecked_brief` / `unchecked_article`), including
   on the published page. This needs a failed draft; if every attempt crashed, only requeue works.
 - `agents/__init__.py` is still the only switchboard. Validators never call the LLM.
+- Tools are MCP servers, always: a new agent tool goes in a small server module registered in `mcp.json`
+  (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
+  so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`.
+- Chat assistant: `agents/assistant.py` answers the human's questions about the loop: the chat bubble at the
+  bottom right of every UI page opens it in a panel over the left third, or `python run.py ask "..." [--model]`.
+  It needs Ollama but not the loop, so it works with the loop stopped. The panel has a model picker (installed
+  Ollama models that can call tools; the default is shared with the loop, any other is loaded beside it), and keeps the
+  conversation in that browser tab only, so the page's refreshes don't wipe it. It is not a worker: a one-paragraph prompt, at most 5 tool calls, tool results cut
+  to 2,500 characters, only the last 4 messages the page sends back, no memory and nothing saved. Its tools come
+  from the `loop` MCP server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`, `agent_steps`,
+  `search_missions`), plus `search` when `BRAVE_API_KEY` is set. They only read the database, `data/activity.json`,
+  the trails and `data/loop.log`, so asking never touches a running agent. By default it uses the small model with
+  the loop's options (`MISSION_LOOP_CHAT_MODEL` overrides), so Ollama reuses the loaded copy instead of reloading it.
+- Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
+  results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder). Only the
+  loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
 
 ## Operating it
 
@@ -131,6 +147,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the site address on the Settings page once it is hosted |
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
+| Ask what is going on | the chat bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

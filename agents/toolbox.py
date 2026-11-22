@@ -32,8 +32,8 @@ class Toolbox:
             env = {**os.environ, **{k: _expand(v) for k, v in spec.get("env", {}).items()}}
             # "python" means this interpreter: launchd's PATH doesn't include the venv
             command = sys.executable if spec["command"] == "python" else spec["command"]
-            params = StdioServerParameters(command=command,
-                                           args=[_expand(a) for a in spec.get("args", [])], env=env)
+            params = StdioServerParameters(command=command, args=[self._local(_expand(a)) for a in spec.get("args", [])],
+                                           env=env)
             read, write = await self._stack.enter_async_context(stdio_client(params))
             session = await self._stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -45,6 +45,11 @@ class Toolbox:
                     "parameters": tool.input_schema,
                 }})
         return self
+
+    def _local(self, arg: str) -> str:
+        """A script named relative to mcp.json (status_tools.py) works from any working directory."""
+        here = Path(self.config_path).resolve().parent / arg
+        return str(here) if arg.endswith(".py") and not os.path.isabs(arg) and here.is_file() else arg
 
     async def __aexit__(self, *exc):
         await self._stack.aclose()

@@ -14,5 +14,9 @@
   "pages": {
     "command": "python",
     "args": ["page_tools.py"]
+  },
+  "loop": {
+    "command": "python",
+    "args": ["status_tools.py"]
   }
 }

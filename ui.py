@@ -5,13 +5,14 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import fcntl, hashlib, os, re, subprocess, sys, time
+import hashlib, os, re, subprocess, sys, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response
+from starlette.responses import (HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response,
+                                 JSONResponse)
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
@@ -71,16 +72,7 @@ ERRORS = {
 # ---------- loop status ----------
 
 def loop_running() -> bool:
-    """True while a run/loop holds the lock. We only test the lock, never keep it."""
-    lock = orchestrator.LOCK_FILE
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a") as f:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(f, fcntl.LOCK_UN)
-        return False
+    return orchestrator.loop_running()
 
 def running_now() -> dict | None:
     """The agent working this moment, or None. The record only counts while the loop is alive."""
@@ -279,6 +271,36 @@ canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-renderi
 .switch input:checked::after { transform:translateX(1.1rem); }
 .switch input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 @media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition:none; } }
+.chat-bubble { position:fixed; right:1.25rem; bottom:1.25rem; z-index:50; width:3.5rem; height:3.5rem; padding:0;
+               border-radius:50%; border:none; background:var(--accent); color:var(--bg); display:grid; place-items:center;
+               box-shadow:0 4px 14px rgba(0,0,0,.25); }
+.chat-bubble:hover { border:none; transform:scale(1.05); }
+.chat-bubble svg { width:1.6rem; height:1.6rem; fill:none; stroke:currentColor; stroke-width:2;
+                   stroke-linecap:round; stroke-linejoin:round; }
+.chat-panel { position:fixed; top:0; left:0; bottom:0; z-index:40; width:max(33.333vw, 20rem); box-sizing:border-box;
+              display:flex; flex-direction:column; gap:.6rem; padding:1rem; background:var(--bg);
+              border-right:1px solid var(--rule); box-shadow:4px 0 18px rgba(0,0,0,.12); }
+.chat-panel[hidden] { display:none; }
+.chat-panel header { display:flex; justify-content:space-between; align-items:center; }
+.chat-panel header strong { font:700 1.2rem Georgia, serif; }
+.chat-panel header button { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
+.chat-panel .model { display:flex; gap:.5rem; align-items:center; margin:0; }
+.chat-panel .model select { flex:1; min-width:0; }
+.chat-panel .hint { margin:0; }
+.chat-log { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:.6rem; padding:.2rem 0; }
+.chat-log .msg { max-width:88%; padding:.6rem .9rem; border-radius:12px; white-space:pre-wrap; line-height:1.5; }
+.chat-log .user { align-self:flex-end; background:var(--accent); color:var(--bg); }
+.chat-log .assistant { align-self:flex-start; background:var(--quote); }
+.chat-log .assistant.wait { color:var(--muted); font-style:italic; }
+.chat-log .model-tag { display:block; margin-top:.3rem; font-size:.75rem; color:var(--muted); }
+.suggest { display:flex; gap:.4rem; flex-wrap:wrap; }
+.suggest[hidden] { display:none; }
+.suggest button { font-size:.82rem; padding:.3rem .7rem; border-radius:999px; }
+.chat-form { display:flex; gap:.5rem; align-items:flex-end; }
+.chat-form textarea { resize:none; min-height:2.6rem; }
+@media (min-width: 761px) { body.chat-open main { margin-left:calc(max(33.333vw, 20rem) + 1.5rem); } }
+@media (max-width: 760px) { .chat-panel { width:100vw; }
+                            body.chat-open .chat-bubble { display:none; } }
 """
 
 ELAPSED_JS = """<script>
@@ -300,6 +322,8 @@ ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12
 ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/>'
                  '<path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>')
 
+ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
+
 def nav_status() -> str:
     """The loop's state for the top bar. It only says Running while the loop really holds the lock."""
     if not loop_running():
@@ -316,7 +340,8 @@ def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
 let sig = "{signature()}";
 setInterval(async () => {{
   const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
-            ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName);
+            ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)
+            || document.body.classList.contains("chat-open");
   if (busy || document.hidden) return;
   try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig) location.reload(); }} catch (e) {{}}
 }}, 5000);
@@ -328,7 +353,7 @@ setInterval(async () => {{
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
-            f"{body}</main>{script}</body></html>")
+            f"{body}</main>{chat_widget()}{script}</body></html>")
     return HTMLResponse(html)
 
 def flash(request: Request) -> str:
@@ -750,6 +775,8 @@ async def mission(request: Request) -> Response:
     step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
+    ask = escape(f"Where is the mission {slug} at, and what is taking so long?", quote=True)
+    body.append(f'<p><button type="button" class="btn" data-ask="{ask}">Ask the assistant about this mission</button></p>')
     body.append(actions_for(m))
     current = epics.get(m.epic)
     hint = " (proposed; approve it on the home page)" if current and current.status == "proposed" else ""
@@ -803,6 +830,121 @@ async def preview(request: Request) -> Response:
     if not SLUG.match(slug) or not store.get_mission(slug) or not path.exists():
         return PlainTextResponse("No preview yet.", status_code=404)
     return FileResponse(path, media_type="text/html")
+
+# ---------- chat: ask the assistant what the loop is doing ----------
+# A bubble on every page opens a panel over the left third. The conversation is kept in this browser tab
+# (sessionStorage) so the page's own refreshes don't wipe it; the assistant itself remembers nothing.
+# It needs only Ollama, not the loop: its tools read what the loop leaves on disk.
+
+SUGGESTIONS = ["What's going on right now?", "What needs me?", "What's taking so long?", "What got parked, and why?"]
+
+CHAT_JS = """<script>
+(() => {
+  const panel = document.getElementById("chat-panel"), bubbleBtn = document.getElementById("chat-bubble");
+  const log = document.getElementById("chat-log"), form = document.getElementById("chat-form");
+  const box = document.getElementById("chat-q"), pickModel = document.getElementById("chat-model");
+  const hint = document.getElementById("chat-hint"), suggest = document.getElementById("chat-suggest");
+  const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
+                                  return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
+  let history = store("chat-history") || [], loaded = false;
+
+  function show(role, text, model, cls = "") {
+    const div = document.createElement("div");
+    div.className = `msg ${role} ${cls}`; div.textContent = text;
+    if (model) { const tag = document.createElement("span"); tag.className = "model-tag"; tag.textContent = model; div.appendChild(tag); }
+    log.appendChild(div); log.scrollTop = log.scrollHeight; return div;
+  }
+  function redraw() {
+    log.replaceChildren(); history.forEach(h => show(h.role, h.content, h.model));
+    suggest.hidden = history.length > 0;
+  }
+  async function loadModels() {
+    if (loaded) return; loaded = true;
+    let data = {models: [], default: ""};
+    try { data = await (await fetch("/chat/models")).json(); } catch (e) {}
+    const saved = (() => { try { return localStorage.getItem("chat-model"); } catch (e) { return null; } })();
+    pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} (default, shared with the loop)` : m, m)));
+    if (data.models.includes(saved)) pickModel.value = saved;
+    if (data.error) hint.textContent = data.error;
+  }
+  function setOpen(open) {
+    panel.hidden = !open; document.body.classList.toggle("chat-open", open);
+    bubbleBtn.setAttribute("aria-expanded", open); store("chat-open", open);
+    if (open) { loadModels(); box.focus(); log.scrollTop = log.scrollHeight; }
+  }
+  async function ask(question) {
+    question = question.trim();
+    if (!question || box.disabled) return;
+    setOpen(true); suggest.hidden = true;
+    const model = pickModel.value;
+    show("user", question); box.value = ""; box.disabled = true;
+    const wait = show("assistant", "Looking…", "", "wait");
+    let answer;
+    try {
+      const r = await fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({question, model, history: history.slice(-4).map(({role, content}) => ({role, content}))})});
+      answer = (await r.json()).answer;
+    } catch (e) { answer = "The assistant didn't answer. Is the UI still running?"; }
+    wait.remove(); show("assistant", answer, model);
+    history.push({role: "user", content: question}, {role: "assistant", content: answer, model});
+    history = history.slice(-20); store("chat-history", history);
+    box.disabled = false; box.focus();
+  }
+  bubbleBtn.addEventListener("click", () => setOpen(panel.hidden));
+  document.getElementById("chat-close").addEventListener("click", () => setOpen(false));
+  document.getElementById("chat-clear").addEventListener("click", () => { history = []; store("chat-history", history); redraw(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !panel.hidden) setOpen(false); });
+  pickModel.addEventListener("change", () => { try { localStorage.setItem("chat-model", pickModel.value); } catch (e) {} });
+  form.addEventListener("submit", e => { e.preventDefault(); ask(box.value); });
+  box.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(box.value); } });
+  suggest.querySelectorAll("button").forEach(b => b.addEventListener("click", () => ask(b.textContent)));
+  document.querySelectorAll("[data-ask]").forEach(b => b.addEventListener("click", () => ask(b.dataset.ask)));
+  redraw();
+  if (store("chat-open")) setOpen(true);
+})();
+</script>"""
+
+def chat_widget() -> str:
+    chips = "".join(f'<button type="button">{escape(q)}</button>' for q in SUGGESTIONS)
+    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Ask the loop" aria-expanded="false"
+ aria-controls="chat-panel">{ICON_CHAT}</button>
+<aside id="chat-panel" class="chat-panel" aria-label="Ask the loop" hidden>
+<header><strong>Ask the loop</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
+ <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
+<label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
+<p class="hint" id="chat-hint">It only reads, so it can't change anything, and it works with the loop off.</p>
+<div class="chat-log" id="chat-log" aria-live="polite"></div>
+<div class="suggest" id="chat-suggest">{chips}</div>
+<form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"
+ placeholder="Where is the grid outage mission at?" aria-label="Your question"></textarea>
+<button class="primary">Ask</button></form>
+</aside>{CHAT_JS}"""
+
+async def chat_models(request: Request) -> JSONResponse:
+    """Installed models for the picker. Ollama being closed is reported, not an error page."""
+    from agents.assistant import MODEL
+    try:
+        names = await run_in_threadpool(agents.chat_models)
+    except Exception:
+        return JSONResponse({"models": [MODEL], "default": MODEL,
+                             "error": "Ollama isn't reachable, so the assistant can't answer. Start the Ollama app."})
+    return JSONResponse({"models": names or [MODEL], "default": names[0] if names else MODEL})
+
+async def chat_ask(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        data = await request.json()
+        question, history = str(data.get("question") or ""), data.get("history") or []
+        model = str(data.get("model") or "")[:100] or None
+        history = history if isinstance(history, list) else []
+    except (ValueError, AttributeError):
+        return JSONResponse({"answer": "That question didn't arrive in one piece. Try again."}, status_code=400)
+    try:
+        answer = await run_in_threadpool(agents.chat, question, [h for h in history if isinstance(h, dict)], model)
+    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
+        answer = f"I couldn't answer just now ({type(e).__name__}: {str(e)[:200]}). Is Ollama running?"
+    return JSONResponse({"answer": answer})
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
@@ -969,6 +1111,8 @@ app = Starlette(routes=[
     Route("/missions", add_mission, methods=["POST"]),
     Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/settings", settings_page),
+    Route("/chat/models", chat_models),
+    Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
