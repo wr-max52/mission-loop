@@ -105,6 +105,6 @@ def test_animations_toggle_is_on_by_default_and_hides_the_researchers_when_off(c
     assert 'class="crew"' not in client.get("/settings").text and "researchers.js" not in client.get("/settings").text
     client.post("/settings/animations", data={"animations": "on"})
     assert settings.animations() and settings.saved() == {}              # back on: nothing stored
-    assert '<div class="agents" data-lab>' in client.get("/").text
+    assert '<div class="flow-track" data-lab>' in client.get("/").text
     evil = {"origin": "https://evil.example"}
     assert client.post("/settings/animations", data={}, headers=evil).status_code == 403 and settings.animations()

@@ -199,6 +199,6 @@ def test_ui_refuses_cross_site_post(client):
     r = client.post("/inspiration", data={"inspiration": "x"}, headers={"origin": "https://evil.example"})
     assert r.status_code == 403 and store.get_inspiration() == ""
 
-def test_agent_strip_shows_the_finder_without_a_mission():
-    html = ui.agent_strip([{"worker": "assistant", "slug": "", "agent": "finder", "since": 0}])
+def test_flow_strip_shows_the_finder_without_a_mission():
+    html = ui.flow_status([{"worker": "assistant", "slug": "", "agent": "finder", "since": 0}], True)
     assert "<strong>Mission finder</strong> is looking for new missions" in html and "/m/" not in html

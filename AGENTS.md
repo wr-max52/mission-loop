@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 309 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 311 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
@@ -168,15 +168,27 @@ the finder's inspiration line and to start, stop or wake the loop (a loop starte
 Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
 as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
-the agent working at that moment, read from `data/activity.json` (written by `activity.py`). Small pixel
-researchers (`assets/researchers.js`, decorative only) walk in from the side onto in-progress cards and the
-working agents' pills, never more than two on the page at once. Each character is in one worker's crew
-(`worker` in `ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and a
-card only gets visitors from the crew of the worker doing its next step (`data-worker`). On the Settings page
-each worker card has its whole crew standing about. each stage has its own random first wait, a
-visitor stays 15-30 s, walks off, and the stage waits 10-20 s; the longest-waiting stage goes next. Visitors
-come from a shuffled cast and their lines from a shuffled deck of ~200 academic quips, so nothing repeats soon.
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always drawn,
+unlit while the loop is off: agents on a track in runtime order, each code check a vertical block right after the
+agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
+check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
+busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
+s and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
+never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on in-progress cards
+and on the strip, never more than two on the page at once. Each character is in one worker's crew (`worker` in
+`ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and a card only gets
+visitors from the crew of the worker doing its next step (`data-worker`); on the Settings page each worker card
+has its whole crew standing about. A card's visitor keeps a timer: a random first wait, 15-30 s on stage, walks
+off, then 10-20 s before the next; the longest-waiting card goes next. Arrivals come one at a time, a random 4-15
+s apart (the strip's newcomer never waits, but pushes the next card arrival back). Each busy worker's lit step
+gets a researcher from that worker's crew, who follows the work instead: it stays on the lit step doing that
+step's kind of work, runs after its mission when the mission moves on (sources, brief, check), and when the work
+ends, moves to another mission or passes to the other worker it says a closing line about where the work went
+(your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
+come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
+repeats soon. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
+typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
+a head or the office cat; naps are rare and mostly while the loop is off.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |

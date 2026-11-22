@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import re
 import pytest
 from starlette.testclient import TestClient
 import activity, agents, orchestrator, run as cli, store, ui
@@ -181,8 +182,9 @@ def test_dashboard_highlights_the_working_agent(client, monkeypatch):
     before = ui.signature()
     activity.begin("b", "brief")
     html = client.get("/").text
-    assert '<span class="agent on" aria-current="step">Brief writer</span>' in html
-    assert html.count('class="agent on"') == 1 and html.count('class="card active"') == 1
+    assert '<span class="step on" data-step="brief" title="Brief writer" aria-current="step" data-worker="desk">Brief</span>' in html
+    assert html.count(' on" data-step') == 1 and html.count('class="card active"') == 1
+    assert 'data-working="[{&quot;worker&quot;: &quot;desk&quot;, &quot;step&quot;: &quot;brief&quot;, &quot;slug&quot;: &quot;b&quot;}]"' in html
     assert "Brief writer is working on this now." in html
     assert "Contact finder" not in html            # outreach is off
     assert ui.signature() != before                # open pages refresh when the agent changes
@@ -193,7 +195,7 @@ def test_stale_record_is_ignored_when_the_loop_is_off(client):
     store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
     activity.begin("b", "writer")
     html = client.get("/").text
-    assert 'class="agent' not in html and "card active" not in html
+    assert 'class="flow off"' in html and ' on" data-step' not in html and "card active" not in html
 
 def test_mission_page_drops_loop_panel_and_nav_shows_loop_state(client, monkeypatch):
     store.save_mission(Mission(slug="b", topic="Outages"))
@@ -210,6 +212,41 @@ def test_status_colors_on_cards_and_pills(client):
         store.save_mission(Mission(slug=slug, topic="T", state=state))
         assert f'<a class="card {color}" href="/m/{slug}">' in client.get("/").text
         assert f'<span class="badge {color}">' in client.get(f"/m/{slug}").text
+
+def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeypatch):
+    """Agents on the track, code checks as blocks right after what they check, human reviews as sidesteps."""
+    html = client.get("/").text
+    assert 'id="flow" class="flow off"' in html and "Loop is off, so every step is idle." in html
+    assert '<script src="/assets/flow.js" defer></script>' in html
+    track = html.split('class="flow-track"')[1].split("</section>")[0]
+    order = re.findall(r'data-step="([a-z0-9_]+)"', track)
+    assert order == ["finder", "sources", "brief", "source_check", "brief_review",
+                     "writer", "article_check", "article_review", "publisher"]   # outreach and channels off
+    assert '<span class="check" data-step="source_check"' in track
+    assert '<span class="detour"><a class="human review" href="/#needs-you" data-step="brief_review"' in track
+    assert client.get("/assets/flow.js").status_code == 200
+
+def test_flow_strip_counts_what_waits_on_you_and_what_each_check_parked(client, monkeypatch):
+    store.save_mission(Mission(slug="r", topic="Ready", state=State.BRIEF_READY))
+    store.save_mission(Mission(slug="s", topic="Ready too", state=State.BRIEF_READY))
+    store.save_mission(Mission(slug="ok", topic="Approved", state=State.BRIEF_READY, approved=True))
+    store.save_mission(Mission(slug="a", topic="Article", state=State.ARTICLE_READY))
+    store.save_mission(Mission(slug="p", topic="Stuck", state=State.PARKED))
+    html = client.get("/").text
+    assert 'class="human review waiting"' in html and '<b class="count">2</b>' in html
+    assert 'class="human publish waiting"' in html and '<b class="count">1</b>' in html
+    assert '<b class="parked-count" title="1 parked here">1</b>' in html      # parked at the source check
+    assert '<h2 class="group" id="needs-you">Needs you (4)</h2>' in html
+    d = client.get("/api/flow").json()
+    assert d["running"] is False and d["working"] == []
+    assert d["waiting"] == {"brief_review": 2, "article_review": 1}
+    assert d["parked"] == {"source_check": 1, "article_check": 0}
+    assert d["states"]["r"] == "BRIEF_READY" and d["states"]["p"] == "PARKED"
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    activity.work_as("pi"); activity.begin("ok", "writer"); activity.work_as(activity.DESK)
+    d = client.get("/api/flow").json()
+    assert [(e["worker"], e["step"], e["slug"]) for e in d["working"]] == [("pi", "writer", "ok")]
+    assert "<strong>Article writer</strong>" in d["now"]
 
 def test_unknown_mission(client):
     assert "No such mission" in client.get("/m/nope").text
@@ -237,13 +274,13 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     assert '<script src="/assets/researchers.js" defer></script>' in html
     assert '<a class="card" href="/m/b" data-lab="idle" data-worker="assistant">' in html   # loop off: they nap
     assert 'href="/m/r" data-lab' not in html                             # only in-progress cards get one
-    assert "data-lab>" not in html                                        # no agent working, no pill stage
+    assert '<div class="flow-track" data-lab>' in html                    # the strip is a stage even when unlit
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     activity.begin("b", "sources")
     html = client.get("/").text
     assert '<a class="card active" href="/m/b" data-lab="busy" data-worker="assistant">' in html
     assert '<a class="card" href="/m/q" data-lab="waiting" data-worker="pi">' in html   # writing: tenured visitors
-    assert '<div class="agents" data-lab>' in html
+    assert 'data-step="sources" title="Source finder" aria-current="step" data-worker="desk">' in html
     js = client.get("/assets/researchers.js")
-    assert js.status_code == 200 and "class Researcher" in js.text
+    assert js.status_code == 200 and "class FlowStage" in js.text
     assert "researchers.js" not in client.get("/m/b").text                 # the mission page stays quiet
