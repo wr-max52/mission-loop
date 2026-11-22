@@ -386,3 +386,16 @@ def test_each_workers_trail_stays_with_its_own_mission():
     assert [s["text"] for s in trail.recent("r") if s["kind"] == "said"] == ["sources on r"]
     assert [s["text"] for s in trail.recent("w") if s["kind"] == "said"] == ["writer on w"]
     assert activity.working() == []
+
+def test_a_rushed_mission_is_searched_first():
+    """"Add and start loop" marks a mission rush: the Research Assistant takes it ahead of missions further along,
+    and the mark is dropped once it has had its turn."""
+    old = [Mission(slug=s, topic="t", state=State.RESEARCHING) for s in ("a", "b")]
+    new = Mission(slug="n", topic="t", state=State.RESEARCHING, rush=True)
+    turns: set = set()
+    assert orchestrator._pick("assistant", old + [new], turns) is new
+    assert orchestrator._pick("assistant", old, turns) is old[0]
+    researching("r"); store.save_mission(Mission(slug="n", topic="Rushed", rush=True))
+    orchestrator.work(lambda: T0, max_tasks=1)
+    first = store.get_mission("n")
+    assert first.gathered and not first.rush and not store.get_mission("r").gathered

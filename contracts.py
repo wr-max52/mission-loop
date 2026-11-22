@@ -53,6 +53,7 @@ class Mission(BaseModel):
     epic_fallback: str = ""                # finder's best existing epic, used if its proposed new epic is rejected
     combines: list[str] = []               # the missions this one was made from (a combine the human approved)
     combined_into: str = ""                # set with State.COMBINED: the bigger mission that took this one over
+    rush: bool = False                     # a human asked for its research next ("Add and start loop"); cleared once picked
 
 # Before writing starts, a mission can still be folded into a bigger one; after that it is nearly an article.
 COMBINABLE = {State.QUEUED, State.RESEARCHING, State.BRIEF_READY, State.PARKED}

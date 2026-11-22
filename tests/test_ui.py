@@ -46,6 +46,7 @@ def test_add_mission_is_a_card_that_opens_the_wizard(client):
     wizard = html.split('<dialog id="wizard"')[1].split("</dialog>")[0]
     assert 'action="/missions"' in wizard and wizard.count('class="wiz-step"') == 3
     assert all(f'name="{f}"' in wizard for f in ("topic", "objective", "epic", "slug"))
+    assert 'name="go" value="start"' in wizard and "Add and start loop" in wizard   # the second way to submit
     assert 'dialog[open]' in html                       # the page's refresh holds off while it is open
 
 def test_mission_page_shows_brief_and_actions(client):
@@ -126,6 +127,24 @@ def test_add_mission_makes_slug_from_topic(client):
     assert r.headers["location"] == "/m/who-funds-the-transit-levy?done=added"
     m = store.get_mission("who-funds-the-transit-levy")
     assert m.state == State.QUEUED and m.objective == "o"
+
+def test_add_and_start_loop_rushes_the_mission(client, monkeypatch):
+    started = []
+    monkeypatch.setattr(ui, "start_loop", lambda every: started.append(every))
+    r = client.post("/missions", data={"topic": "Who owns the dam", "go": "start"}, follow_redirects=False)
+    assert r.headers["location"] == "/m/who-owns-the-dam?done=added_started" and started
+    assert store.get_mission("who-owns-the-dam").rush
+    monkeypatch.setattr(ui, "loop_running", lambda: True)        # running already: it goes next, nothing restarts
+    r = client.post("/missions", data={"topic": "Who built the dam", "go": "start"}, follow_redirects=False)
+    assert r.headers["location"].endswith("done=added_next") and len(started) == 1
+    assert "Add and research next" in client.get("/").text
+    client.post("/missions", data={"topic": "Who drained the dam"})
+    assert not store.get_mission("who-drained-the-dam").rush and len(started) == 1
+
+def test_play_button_pulses_while_the_loop_is_off(client, monkeypatch):
+    assert 'class="play off"' in client.get("/").text
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    assert 'class="play off"' not in client.get("/").text
 
 def test_add_mission_validation(client):
     assert "error=topic" in client.post("/missions", data={"topic": ""}, follow_redirects=False).headers["location"]
@@ -351,7 +370,7 @@ def test_play_pause_sits_beside_auto_on_every_page(client, monkeypatch):
     for route in ("/", "/published", "/settings", "/m/b"):
         top = nav(client.get(route).text)
         assert top.index('class="auto"') < top.index('class="loop-ctl"') < top.index("Missions")
-        assert 'action="/loop/start"' in top and 'class="play "' in top and "Loop off" in top
+        assert 'action="/loop/start"' in top and 'class="play off"' in top and "Loop off" in top
     html = client.get("/").text
     assert "Start loop" not in html and "Stop loop" not in html          # no longer in the Missions panel
     monkeypatch.setattr(ui, "loop_running", lambda: True)
