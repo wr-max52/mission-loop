@@ -45,7 +45,9 @@ but they are different things and must never be blurred.
    drop it.
 Rules:
 - The thesis is one specific, provocative, defensible statement: the boldest conclusion the evidence can
-  carry. Word it "It is possible that ..." unless the record directly shows it.
+  carry. Word it "It is possible that ..." unless the record directly shows it. It must be checkable:
+  name who, what, when or how much, so a document, number or record could show it wrong. A thesis so
+  broad that nothing could count against it is too vague; narrow it.
 - No claim may be an opinion, endorsement or moral judgement. Apply the same skepticism to every side.
 - Aim provocation at what the evidence leaves open: official accounts, institutions, incentives, numbers
   and gaps. Do not use a possibility to suggest that a named person committed a crime or acted in bad
@@ -74,9 +76,11 @@ Rules:
 - For every source, copy one exact sentence from that page as its quote, character for character. The
   sentences find_in_page returns are safest. Never paraphrase, shorten or merge sentences. Code checks
   every quote against the page.
-- Find at least 3 supporting sources on 3 different websites, and at least 1 source making the strongest
-  case against the thesis (often the official or mainstream account), on a different website from all
-  the supporting sources.
+- Find at least 3 supporting sources on 3 different websites.
+- Test the thesis: search for the strongest case against it (often the official or mainstream account)
+  and cite it with stance "contradicts" if you find one. If no source pushes back, do not invent one or
+  mislabel a supporting source: write the counterpoint as the strongest objection a skeptic would raise,
+  and say what evidence would show the thesis wrong.
 {pocs}- When you have enough evidence, stop calling tools and reply with the word DONE.
 {notes}"""
 
@@ -110,7 +114,8 @@ KIND_RULE = ("Treat every source above as part truth, part spin. Drop only what 
              "every remaining claim: \"fact\" only for what the record directly shows (what a document says, "
              "what someone said, what an outlet reported), \"possibility\" for what the evidence leaves open, "
              "worded \"It is possible that ..., based on ...\". Write at least 3 pointed possibilities, more "
-             "than facts, and keep at least one fact.")
+             "than facts, and keep at least one fact. The counterpoint is the strongest case against the thesis: from "
+             "a contradicting source if one was found, else the objection a skeptic would raise; never leave it empty.")
 FINAL = ("Now output the research brief as JSON matching the schema. "
          "Use only sources you fetched, with quotes copied exactly from those pages. " + KIND_RULE)
 REVISE_FINAL = ("Now output the revised research brief as JSON matching the schema. "

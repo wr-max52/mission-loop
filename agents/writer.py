@@ -32,7 +32,9 @@ Rules:
   needs one.
 - Only use source ids listed in the brief. Never write URLs or Markdown links.
 - Put words in quotation marks only when they are copied exactly from a source quote below.
-- Include a section that fairly presents the strongest counterpoint, citing the contradicting source(s).
+- Include a section that fairly presents the brief's counterpoint. Cite the sources with stance "contradicts"
+  if the brief has any; if it has none, say plainly that no source found makes this case, and cite the
+  sources whose evidence it questions.
 - 3 to 5 sections, each with a short heading. The first section states the thesis plainly.
 - title: specific and provocative, but if it rests on a possibility, word it as a question or say
   "possible". dek: one sentence summarising the finding, saying so if it is unverified.

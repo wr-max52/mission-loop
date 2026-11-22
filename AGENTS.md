@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 355 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 357 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -175,6 +175,11 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   a document says, what someone said). Code can't verify a possibility, so it enforces the label instead:
   possibilities must say "It is possible that", a brief needs at least one fact, and the article marks
   each one "Possibility, not verified".
+- The thesis must be checkable (who, what, when, how much). Research must look for the case against it,
+  but a contradicting source is optional, since a broad thesis often has none: any it cites is verified
+  like every source, and the brief always needs a counterpoint. Without a contradicting source the
+  counterpoint is the skeptic's objection, marked "No source found makes this case" in the brief, and the
+  article says so. The hard gate is the claims: cited, quotes found on the page, 3 supporting websites.
 - A parked mission can be pushed through: its last failed brief or article moves to the human review
   that follows, and stays marked as failing its check (`unchecked_brief` / `unchecked_article`), including
   on the published page. This needs a failed draft; if every attempt crashed, only requeue works.

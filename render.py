@@ -23,6 +23,12 @@ def _archived(url: str) -> str:
 def _has_possibility(a: Article) -> bool:
     return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
 
+UNSOURCED = " (No source found makes this case.)"
+
+def _unsourced(b: ResearchBrief) -> str:
+    """A counterpoint with no contradicting source behind it is a skeptic's objection; say so."""
+    return "" if any(s.stance == "contradicts" for s in b.sources) else UNSOURCED
+
 def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
     claim_lines = lambda kind: [f"- {c.text} [{', '.join(c.source_ids)}]" for c in _claims_of(b, kind)]
     heading = FACTS_HEADING if checked else UNCHECKED_FACTS_HEADING
@@ -30,7 +36,7 @@ def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
     lines += claim_lines("fact")
     if _claims_of(b, "possibility"):
         lines += ["", f"## {POSSIBILITIES_HEADING}"] + claim_lines("possibility")
-    lines += ["", f"## Counterpoint", b.counterpoint, "", "## Sources"]
+    lines += ["", f"## Counterpoint", b.counterpoint + _unsourced(b), "", "## Sources"]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
     if b.pocs:
         lines += ["", "## Points of contact"]
@@ -147,7 +153,7 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
     out += items("fact") + ["</ul>"]
     if _claims_of(b, "possibility"):
         out += [f"<h2>{POSSIBILITIES_HEADING}</h2><ul>"] + items("possibility") + ["</ul>"]
-    out += ["<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}</p>",
+    out += ["<h2>Counterpoint</h2>", f"<p>{escape(b.counterpoint)}{escape(_unsourced(b))}</p>",
             '<h2>Sources</h2><ol class="sources">']
     out += [f'<li id="src-{nums[s.id]}"><span class="stance">{s.stance}</span><br>'
             f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>{_archived(s.url)}'
