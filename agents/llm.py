@@ -139,15 +139,20 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
         client = ollama.AsyncClient(host=settings.ollama_host())   # new client per call: safe across asyncio.run()
         kw = dict(model=name, messages=fit(messages, reply_tokens), tools=tools, format=format,
                   options={**OPTIONS, "num_predict": reply_tokens}, keep_alive="24h")
-        if format is None:
-            response = await client.chat(**kw)
-            if response.done_reason == "length" and not response.message.tool_calls:
-                raise Overrun(f"tool turn ran past {reply_tokens} tokens", response.message.content or "")
-            return response.message
-        async for chunk in await client.chat(**kw, stream=True):
-            parts.append(chunk.message.content or "")
-            if chunk.done and chunk.done_reason == "length":
-                raise Overrun(f"reply ran past {reply_tokens} tokens", "".join(parts))
+        try:
+            if format is None:
+                response = await client.chat(**kw)
+                if response.done_reason == "length" and not response.message.tool_calls:
+                    raise Overrun(f"tool turn ran past {reply_tokens} tokens", response.message.content or "")
+                return response.message
+            async for chunk in await client.chat(**kw, stream=True):
+                parts.append(chunk.message.content or "")
+                if chunk.done and chunk.done_reason == "length":
+                    raise Overrun(f"reply ran past {reply_tokens} tokens", "".join(parts))
+        except ollama.ResponseError as e:  # Ollama gives up on a model repeating itself: that is stuck, not broken
+            if "repeat" not in str(e).lower():
+                raise
+            raise Overrun("the model got stuck repeating itself", "".join(parts)) from e
         return ollama.Message(role="assistant", content="".join(parts))
 
     grace = stopping.GRACE if format is not None else stopping.TURN_GRACE
@@ -171,6 +176,33 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
                 await task
             except BaseException:
                 pass
+
+async def ask(messages: list, schema: type, who: str, failure: type[Exception] = RuntimeError,
+              model: str | None = None):
+    """One structured reply on the Principal Investigator's model (unless `model`), as a `schema` object.
+    Malformed JSON gets one repair round. A reply that overruns keeps the valid part it wrote before (if
+    none, `failure` is raised); a stop raises stopping.Interrupted with whatever valid part got out."""
+    messages, error = list(messages), None
+    for _ in range(2):
+        try:
+            msg = await chat(messages, format=schema.model_json_schema(), **({"model": model} if model else {}))
+        except Cut as cut:                 # stop's grace ran out: keep what got written
+            raise stopping.Interrupted(stopping.salvage(cut.text, schema))
+        except Overrun as e:               # stuck: keep what it wrote before, if that holds an answer
+            got = stopping.salvage(e.text, schema)
+            if got is None:
+                raise failure(f"the {who} got stuck: {e}")
+            print(f"{who}: {e}; keeping what it wrote before that", flush=True)
+            return got
+        try:
+            return schema.model_validate_json(msg.content)
+        except Exception as e:             # pydantic's ValidationError
+            if stopping.requested():       # no time for a repair round
+                raise stopping.Interrupted(stopping.salvage(msg.content, schema))
+            error = e
+            messages += [{"role": "assistant", "content": msg.content},
+                         {"role": "user", "content": invalid(e) if hasattr(e, "errors") else str(e)}]
+    raise failure(f"the {who} could not produce valid JSON: {error}")
 
 def connection(timeout: float = 2) -> dict:
     """What the Ollama connection offers: {"host", "ok", "error", "models": [{"name", "size"}], "loaded": {name: size}}.

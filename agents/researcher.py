@@ -1,16 +1,19 @@
 """Research agent, in two steps that can run in different passes and side by side with other missions:
 gather (the Research Assistant's model finds sources, and contacts) and write_brief (the Principal
 Investigator's model writes a ResearchBrief from what was gathered)."""
-import asyncio
+import asyncio, json, re, time
+from urllib.parse import urlparse
 from pydantic import BaseModel, ValidationError
-import activity, related, settings, stopping, trail
-from contracts import Evidence, Mission, ResearchBrief, POC
+import activity, checkpoint, related, settings, stopping, trail
+from contracts import ClaimSet, Evidence, Mission, POC, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
 from agents import llm
 from checks import validator
 from agents.toolbox import Toolbox
 
 MAX_TOOL_CALLS = 40                        # sources run
 MAX_CONTACT_CALLS = 20                     # contacts run (outreach only)
+MAX_REFUSED = 3                            # calls refused in a row (repeats, unreadable sites) before the run ends
+LOW_BUDGET = 10                            # from here on every result says how many calls are left
 SOURCE_TIME_LIMIT = 15 * 60                # seconds the source finder may run before it must stop
 
 SYSTEM = """You are a skeptical, nonpartisan political investigator. Your job is to find the edge of what
@@ -117,11 +120,23 @@ KIND_RULE = ("Treat every source above as part truth, part spin. Drop only what 
              "than facts, and keep at least one fact. The counterpoint is the strongest case against the thesis: from "
              "a contradicting source if one was found, else the objection a skeptic would raise; never leave it empty.")
 IDS = "Give each source a short id such as s1, s2 (never its URL) and cite sources in claims by that id. "
-FINAL = ("Now output the research brief as JSON matching the schema. "
-         "Use only sources you fetched, with quotes copied exactly from those pages. " + IDS + KIND_RULE)
-REVISE_FINAL = ("Now output the revised research brief as JSON matching the schema. "
-                "Use only the verified sources listed above and sources you fetched in this session, "
-                "with quotes copied exactly from those pages. " + IDS + KIND_RULE)
+SOURCE_ROUNDS = 3                          # source checks: the first pick, then up to 2 rounds of fixes
+CLAIM_ROUNDS = 3                           # claim checks: the first draft, then up to 2 rounds of fixes
+PICK = ("The search is over. The brief is written in two steps; this is step 1 of 2: choose its sources. Output "
+        "JSON matching the schema: the thesis (follow the rules on the thesis above), and every page you fetched "
+        "whose evidence bears on it, each with its stance and one sentence copied character for character from "
+        "that page as its quote. Sources that passed verification last time count as fetched. Do not write claims "
+        "yet. Code checks every quote against its page before step 2, and step 2 may cite only sources that pass. "
+        "Include at least 3 supporting sources on 3 different websites, and any page that contradicts the thesis. " + IDS)
+CLAIMS = """Step 2 of 2: write the claims and the counterpoint. Code checked the quotes of the sources
+below against their pages, and these passed. Cite only these ids.
+Thesis: {thesis}
+Verified sources:
+{sources}
+{kind_rule} Every claim cites the verified source ids whose pages show it. Write each claim once.{revise}
+Output JSON matching the schema."""
+REVISE_CLAIMS = (" The last brief failed its check: its claims and the problems found are in the instructions "
+                 "above. Keep the claims that held up and fix the rest.")
 
 class ResearchFailed(Exception):
     pass
@@ -160,24 +175,137 @@ def _tool_servers(m: Mission) -> list[str]:
     """Saved missions list only search and fetch, so anything that can fetch also gets the page tools."""
     return m.tools + ["pages"] if "fetch" in m.tools and "pages" not in m.tools else m.tools
 
-async def tool_loop(system: str, tb, budget: int, time_limit: float | None = None) -> list:
+STATUS = re.compile(r"status(?: code)? (\d{3})")
+BUDGET_NOTE = re.compile(r"\n\[\d+ tool calls? left[^\]]*\]$")
+
+def _domain(url) -> str:
+    return (urlparse(str(url or "")).hostname or "").removeprefix("www.")
+
+class Guard:
+    """Code's side of the search loop. A small model learns little from a bare error and often repeats the
+    call that failed, so calls that can't help are answered before they run (with what to do instead), and a
+    failed fetch says what it means for the rest of the search."""
+    def __init__(self, tool_names: list[str]):
+        self.archive = "wayback_versions" in tool_names
+        self.finder = "find_in_page" in tool_names
+        self.blocked = validator.blocked_domains()
+        self.refused: dict[str, str] = {}  # site -> why it can't be read, learned this run
+        self.searches: set[str] = set()
+        self.last = None
+        self.in_a_row = 0                  # calls refused since the last one that ran
+        self.paging_tip = True
+
+    def _instead(self) -> str:
+        return ("its Wayback Machine copy (wayback_versions), or " if self.archive else "") + "another site"
+
+    def refuse(self, name: str, args: dict) -> str | None:
+        """Why this call won't run, or None to run it."""
+        key = json.dumps([name, args], sort_keys=True, default=str)
+        site = _domain(args.get("url")) if name == "fetch" else ""
+        why = None
+        if key == self.last:
+            why = ("Not run: this is the same call you just made, and its result is above. Use what it found: "
+                   "fetch a page from it, or search with different words.")
+        elif "search" in name and key in self.searches:
+            why = "Not run: you already ran this exact search and its results are above. Search with different words."
+        elif site and validator._is_blocked(site, self.blocked):
+            why = f"Not run: {site} is on the blocked list, so it can't be cited. Use {self._instead()}."
+        elif site in self.refused:
+            why = f"Not run: {site} {self.refused[site]} earlier in this search. Use {self._instead()}."
+        if why:
+            self.in_a_row += 1
+            return why
+        self.last, self.in_a_row = key, 0
+        if "search" in name:
+            self.searches.add(key)
+        return None
+
+    def explain(self, name: str, args: dict, result: str) -> str:
+        """The result, with what a failure means and what to try next."""
+        if name != "fetch":
+            return result
+        if not result.startswith("ERROR"):
+            if args.get("start_index") and self.paging_tip and self.finder:
+                self.paging_tip = False
+                return result + ("\n[Tip: find_in_page searches a whole page for the words you need, "
+                                 "so you don't have to page through it.]")
+            return result
+        site, low = _domain(args.get("url")), result.lower()
+        found = STATUS.search(low)          # the status the site answered with, not digits in its address
+        status = found.group(1) if found else ""
+        if status in ("401", "403") or "received status 403" in low:
+            self.refused[site] = "refused automated reading"
+            hint = (f"{site} refuses automated reading, so none of its pages can be read or cited. Don't fetch it "
+                    f"again. Use {self._instead()}.")
+        elif "autonomous fetching" in low:   # robots.txt rules out this page, maybe not the whole site
+            hint = f"This site doesn't allow this page to be read automatically. Use {self._instead()}."
+        elif "timed out" in low or "timeout" in low:
+            hint = f"The page took too long to load. Use {self._instead()}."
+        elif status in ("404", "410"):
+            hint = "There is no page at this address. Check the address" + (
+                ", or look for an archived copy with wayback_versions." if self.archive else ".")
+        else:
+            hint = f"This page can't be read. Use {self._instead()}."
+        return result.splitlines()[0][:300] + "\n" + hint
+
+def _budget_note(left: int, time_limit: float | None, started: float) -> str:
+    """Once the budget runs low, each result says what is left, so the model wraps up instead of being cut off."""
+    minutes = None if time_limit is None else max(0, (time_limit - (time.monotonic() - started)) / 60)
+    if left > LOW_BUDGET and (minutes is None or minutes > time_limit / 60 / 3):
+        return ""
+    when = f"; about {minutes:.0f} minutes left" if minutes is not None else ""
+    return f"\n[{left} tool call{'s' if left != 1 else ''} left{when}. Read what matters most, then reply DONE.]"
+
+class SearchRun:
+    """How far a search got: tool calls run, seconds spent, and whether the stop button ended it (so it
+    carries on next time instead of counting as done)."""
+    def __init__(self, calls: int = 0, seconds: float = 0):
+        self.calls, self.seconds, self.stopped = calls, seconds, False
+
+CARRY_ON = ("(The search was paused here and now carries on. Continue from where you were: you have the results "
+            "above; don't repeat calls you already made.)")
+
+def _calls_made(messages: list) -> int:
+    """Tool calls that ran in a saved transcript (refused ones didn't use the budget)."""
+    return sum(1 for m in messages if m.get("role") == "tool" and not (m.get("content") or "").startswith("Not run:"))
+
+async def tool_loop(system: str, tb, budget: int, time_limit: float | None = None, *, start: list | None = None,
+                    run: SearchRun | None = None, saved=None) -> list:
     """One run of the small model: search and fetch until it stops or the budget or time runs out.
     Running out of time works like running out of budget: the run keeps what it found so far.
-    So does the stop button: the turn in flight may finish, then the run ends without its tool calls."""
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
-    calls = 0
+    So does the stop button: the turn in flight may finish, then the run ends without its tool calls, and
+    run.stopped says so. start carries on a saved transcript, with the budget and time it has left (run.calls,
+    run.seconds); saved(messages), if given, is called after every tool result, so a killed loop loses nothing."""
+    run = run or SearchRun()
+    if start:
+        messages = list(start) + [{"role": "user", "content": CARRY_ON}]
+    else:
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
+    calls, spent = run.calls, run.seconds
+    guard = Guard([t["function"]["name"] for t in tb.tools])
+    started = time.monotonic() - spent
+    left = None if time_limit is None else max(time_limit - spent, 1)
     try:
-        async with asyncio.timeout(time_limit) as limit:
-            while calls < budget and not stopping.requested():
+        async with asyncio.timeout(left) as limit:
+            while calls < budget:
+                if stopping.requested():
+                    run.stopped = True
+                    break
+                if guard.in_a_row >= MAX_REFUSED:   # stuck on calls that can't run: end the run with what it found
+                    print("search stopped: it kept making calls that can't help; continuing with what it found", flush=True)
+                    trail.record("note", "search stopped: it kept making calls that can't help")
+                    break
                 messages = llm.compact(messages, llm.TURN_TOKENS, llm.model_for("assistant"))   # kept cut: the next turns reuse the prompt cache
                 try:
                     msg = await llm.chat(messages, tools=tb.tools, model=llm.model_for("assistant"))
                 except llm.Cut:
+                    run.stopped = True
                     break
                 except llm.Overrun as e:   # a stuck turn ends the run; what it found is kept
                     print(f"search stopped: {e}; continuing with what it found", flush=True)
                     break
                 if msg.tool_calls and stopping.requested():
+                    run.stopped = True
                     break                  # its tool calls would never be answered
                 messages.append(msg)
                 if not msg.tool_calls:
@@ -187,15 +315,25 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                         messages.append({"role": "tool", "tool_name": tc.function.name,
                                          "content": "Not run: the tool budget is used up."})
                         continue
+                    args = dict(tc.function.arguments or {})
+                    if why := guard.refuse(tc.function.name, args):   # answered without running: it can't help
+                        trail.record("note", why)
+                        messages.append({"role": "tool", "tool_name": tc.function.name, "content": why})
+                        continue
                     calls += 1
-                    result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
+                    result = guard.explain(tc.function.name, args, await tb.call(tc.function.name, args))
                     trail.record("tool_result", f"{tc.function.name}: {result}")
-                    messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
+                    messages.append({"role": "tool", "tool_name": tc.function.name,
+                                     "content": result + _budget_note(budget - calls, time_limit, started)})
+                run.calls, run.seconds = calls, time.monotonic() - started
+                if saved:
+                    saved(messages)        # every answered turn is on disk before the next one starts
     except TimeoutError:
         if not limit.expired():            # some other timeout inside the call: a real failure
             raise
         print(f"search stopped at its {time_limit / 60:g}-minute limit; continuing with what it found", flush=True)
         trail.record("note", f"search stopped at its {time_limit / 60:g}-minute limit")
+    run.calls, run.seconds = calls, time.monotonic() - started
     return messages
 
 async def find_contacts(m: Mission, tb) -> list[POC]:
@@ -232,6 +370,8 @@ def _for_brief(messages: list) -> list:
         m = {k: v for k, v in m.items() if k != "thinking"}   # evidence saved before thinking was dropped
         text = m.get("content") or ""
         if m.get("role") == "tool":
+            text = BUDGET_NOTE.sub("", text)   # for the search, not the brief
+            m["content"] = text
             if text.startswith(FAILED):
                 m["content"] = text.splitlines()[0][:200]
             elif text in seen:
@@ -240,63 +380,192 @@ def _for_brief(messages: list) -> list:
         out.append(m)
     return out
 
-async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox) -> Evidence:
-    """The Research Assistant's step: search and read until done, out of budget or time, or stopped."""
+async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox, resume: Evidence | None = None) -> Evidence:
+    """The Research Assistant's step: search and read until done, out of budget or time, or stopped. The
+    transcript is saved after every tool result; a search the stop button (or a killed loop) cut short comes
+    back unfinished and carries on from it next time (resume), with the budget and time it has left."""
     today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
                            past=related.reference_block(m),
                            pocs=POCS_LATER if settings.OUTREACH else NO_POC_RULE)
+    start = resume.messages if resume and resume.messages else None
+    run = SearchRun(_calls_made(start) if start else 0, resume.seconds if start else 0)
+    if start:
+        trail.record("note", f"search carries on after {run.calls} tool call(s)")
+
+    def evidence(messages, finished: bool, pocs=None) -> Evidence:
+        return Evidence(messages=[_plain(x) for x in messages], pocs=pocs, finished=finished,
+                        attempt=m.attempts, seconds=run.seconds)
+
     pocs = None
     async with toolbox_factory(_tool_servers(m)) as tb:
-        messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT)
+        messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT, start=start, run=run,
+                                   saved=lambda msgs: checkpoint.save(m, evidence=evidence(msgs, False)))
+        if run.stopped:
+            return evidence(messages, False)
         if settings.OUTREACH and not stopping.requested():   # separate run; a failed check stops here, before the main model
             activity.begin(m.slug, "contacts")
             pocs = await find_contacts(m, tb)
-    return Evidence(messages=[_plain(x) for x in messages], pocs=pocs)
+    return evidence(messages, True, pocs)
+
+def _unique(claims: list) -> list:
+    """Claims with repeats left out, first copy kept."""
+    out, seen = [], set()
+    for c in claims:
+        key = " ".join(c.text.split())
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+class BriefFailed(ResearchFailed):
+    """The brief can't pass: brief is the draft so far (kept for the next attempt and for humans), notes
+    say why in the validator's words."""
+    def __init__(self, brief: ResearchBrief, notes: str):
+        super().__init__(notes)
+        self.brief, self.notes = brief, notes
+
+def _source_lines(sources) -> str:
+    return "\n".join(f'- {s.id} ({s.stance}) {s.title} - {s.url}\n  quote: "{s.quote}"' for s in sources)
+
+def _source_feedback(passed: list, failed: list[str]) -> str:
+    return ("Code checked every quote against its page.\n"
+            f"Passed, and kept exactly as they are: {', '.join(s.id for s in passed) or 'none'}.\n"
+            "Failed:\n" + "\n".join(f"- {p}" for p in failed) + "\n"
+            "For each failed source, return a fixed version (same id) or a replacement (a new id) from another "
+            "page you fetched, or leave it out to drop it. A quote is one sentence copied character for "
+            "character from the page; where the check shows the closest sentence actually on the page, copy that "
+            "sentence if it still shows what you need. Return only the fixed or replacement sources, as JSON "
+            "matching the schema.")
+
+def _save_pick(m: Mission, thesis: str, sources: list) -> None:
+    """The source pick as it stands, saved before the (slow, network-bound) checks, so a stop or a killed loop
+    resumes by checking it again instead of asking the model again."""
+    m.brief_pick = SourcePick(thesis=thesis, sources=sources)
+    checkpoint.save(m)
+
+async def _pick_sources(m: Mission, messages: list) -> SourcePick:
+    """Step 1: the thesis and its sources. Code checks every quote straight away; the failed ones go back
+    with what the check found (the closest real sentence, an archived copy) for SOURCE_ROUNDS - 1 rounds of
+    fixes, then the ones still failing are dropped. Too few left is a failed attempt: the search must find more.
+    A pick saved by an earlier, stopped run (Mission.brief_pick) is checked without asking the model again."""
+    messages = messages + [{"role": "user", "content": PICK}]
+    if m.brief_pick:
+        pick = m.brief_pick
+        trail.record("note", "brief step 1: checking the sources picked before the stop")
+    else:
+        trail.record("note", "brief step 1: choosing the sources")
+        pick = await llm.ask(messages, SourcePick, "source picker", ResearchFailed)
+        _save_pick(m, pick.thesis, pick.sources)
+    blocked, passed, failed = validator.blocked_domains(), [], []
+    todo = pick.sources
+    for round in range(SOURCE_ROUNDS):
+        seen = {s.id for s in passed}
+        failed = []
+        for s in todo:
+            if s.id in seen:
+                continue                   # a passed source can't be swapped out by a fix
+            if stopping.requested():       # each check can take seconds: stop between them, the pick is saved
+                raise stopping.Interrupted(None)
+            seen.add(s.id)
+            problem, url = validator.source_problem(s, blocked, archive=True)
+            if problem:
+                failed.append((s, problem))
+            else:
+                passed.append(s.model_copy(update={"url": url}))   # an archived copy if the live page refused us
+        if not failed or round == SOURCE_ROUNDS - 1:
+            break
+        if stopping.requested():           # no fix round now; the pick so far is saved and checked next time
+            raise stopping.Interrupted(None)
+        trail.record("note", f"{len(failed)} source(s) failed the check; asking for fixes")
+        messages += [{"role": "assistant", "content": SourcePick(thesis=pick.thesis, sources=todo).model_dump_json()},
+                     {"role": "user", "content": _source_feedback(passed, [p for _, p in failed])}]
+        todo = (await llm.ask(messages, SourceFix, "source picker", ResearchFailed)).sources
+        _save_pick(m, pick.thesis, passed + todo)   # passed ones are checked again on a resume: cheap, and certain
+    domains = validator.support_domains(passed)
+    if len(domains) < validator.MIN_SUPPORT_DOMAINS:
+        notes = [p for _, p in failed] + [
+            f"Only {len(domains)} verified supporting domain(s); need {validator.MIN_SUPPORT_DOMAINS}. Find "
+            "supporting pages on other websites, and copy each quote exactly from the page"]
+        draft = ResearchBrief(thesis=pick.thesis, sources=passed + [s for s, _ in failed], counterpoint="", claims=[])
+        raise BriefFailed(draft, "\n".join(notes))
+    if failed:
+        trail.record("note", f"dropped {len(failed)} source(s) that still failed: {', '.join(s.id for s, _ in failed)}")
+    return SourcePick(thesis=pick.thesis, sources=passed)
+
+def _settle_claims(claims: ClaimSet, ids: set[str], final: bool) -> tuple[ClaimSet, list[str]]:
+    """Code's part of step 2. What it can fix safely it fixes: repeats go, and a claim worded as a
+    possibility is labeled one (never the other way). The rest is fed back; on the final round, claims that
+    still break a rule are dropped rather than failing the brief over them."""
+    kept = []
+    for c in _unique(claims.claims):
+        if c.kind == "fact" and POSSIBILITY.search(c.text):
+            c = c.model_copy(update={"kind": "possibility"})
+        broken = (not c.source_ids or any(i not in ids for i in c.source_ids)
+                  or (c.kind == "possibility" and not POSSIBILITY.search(c.text)))
+        if not (final and broken):
+            kept.append(c)
+    claims = claims.model_copy(update={"claims": kept})
+    problems = validator.claim_problems(claims.claims, ids)
+    if not claims.counterpoint.strip():
+        problems.append(validator.EMPTY_COUNTERPOINT)
+    return claims, problems
+
+async def _write_claims(m: Mission, messages: list, pick: SourcePick) -> ClaimSet:
+    """Step 2: claims and the counterpoint, from the transcript and only the sources that passed."""
+    trail.record("note", f"brief step 2: writing claims from {len(pick.sources)} verified sources")
+    ids = {s.id for s in pick.sources}
+    ask = CLAIMS.format(thesis=pick.thesis, sources=_source_lines(pick.sources), kind_rule=KIND_RULE,
+                        revise=REVISE_CLAIMS if m.rejected_brief else "")
+    messages = messages + [{"role": "user", "content": ask}]
+    for round in range(CLAIM_ROUNDS):
+        final = round == CLAIM_ROUNDS - 1
+        claims = await llm.ask(messages, ClaimSet, "claim writer", ResearchFailed)
+        claims, problems = _settle_claims(claims, ids, final)
+        if not problems or final or stopping.requested():
+            return claims
+        trail.record("note", f"claims: {len(problems)} problem(s); asking for a fix")
+        messages += [{"role": "assistant", "content": claims.model_dump_json()},
+                     {"role": "user", "content": "Code found these problems:\n" + "\n".join(f"- {p}" for p in problems)
+                      + "\nReturn the whole JSON again with every problem fixed."}]
+    return claims
 
 async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
-    """The Principal Investigator's step: write the brief from the gathered transcript."""
+    """The Principal Investigator's step, in two parts so neither reply is long and the first is kept:
+    choose and check the sources (saved on the mission as brief_sources), then write the claims citing only
+    those. A stop or crash after the first part resumes at the second."""
     activity.begin(m.slug, "brief")
     messages = _for_brief(evidence.messages)
+    pick = m.brief_sources
+    if pick is None:
+        try:
+            pick = await _pick_sources(m, messages)
+        except stopping.Interrupted:
+            raise stopping.Interrupted(None)   # the saved pick (if the model got one out) is checked next time
+        m.brief_sources, m.brief_pick = pick, None
+        checkpoint.save(m)                 # step 1 is done and on disk
+        if stopping.requested():           # don't start step 2 only for the grace to cut it off
+            raise stopping.Interrupted(None)
+    try:
+        claims = await _write_claims(m, messages, pick)
+    except stopping.Interrupted as stop:   # a part-written claim set still makes a draft worth checking
+        raise stopping.Interrupted(_brief(pick, stop.draft, evidence) if stop.draft else None)
+    return _brief(pick, claims, evidence)
+
+def _brief(pick: SourcePick, claims: ClaimSet, evidence: Evidence) -> ResearchBrief:
+    brief = ResearchBrief(thesis=pick.thesis, sources=pick.sources, counterpoint=claims.counterpoint,
+                          claims=_unique(claims.claims))
     if evidence.pocs is not None:
-        messages.append({"role": "user", "content": "Verified points of contact. Use exactly these as pocs:\n"
-                         + Contacts(contacts=evidence.pocs).model_dump_json()})
-    messages.append({"role": "user", "content": REVISE_FINAL if m.rejected_brief else FINAL})
-    schema = ResearchBrief.model_json_schema()
-    error = None
-    for _ in range(2):                     # one repair attempt for malformed JSON
-        try:
-            msg = await llm.chat(messages, format=schema)
-        except llm.Cut as cut:             # stop's grace ran out: keep what got written
-            raise stopping.Interrupted(stopping.salvage(cut.text, ResearchBrief))
-        except llm.Overrun as e:           # stuck: keep what it wrote before, if that holds a brief
-            brief = stopping.salvage(e.text, ResearchBrief)
-            if brief is None:
-                raise ResearchFailed(f"the brief writer got stuck: {e}")
-            print(f"brief writer: {e}; the validator checks what it wrote before that", flush=True)
-            if evidence.pocs is not None:
-                brief.pocs = evidence.pocs
-            return brief
-        try:
-            brief = ResearchBrief.model_validate_json(msg.content)
-            if evidence.pocs is not None:
-                brief.pocs = evidence.pocs     # code-checked contacts; the model can't swap them
-            return brief
-        except ValidationError as e:
-            if stopping.requested():       # no time for a repair round
-                raise stopping.Interrupted(stopping.salvage(msg.content, ResearchBrief))
-            error = e
-            messages.append({"role": "assistant", "content": msg.content})
-            messages.append({"role": "user", "content": llm.invalid(e)})
-    raise ResearchFailed(f"model could not produce a valid brief: {error}")
+        brief.pocs = evidence.pocs         # code-checked contacts; the model can't swap them
+    return brief
 
 async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:
     """Both steps back to back."""
     return await run_write_brief(m, await run_gather(m, now, toolbox_factory))
 
-def gather(m: Mission, now=None) -> Evidence:
+def gather(m: Mission, now=None, resume: Evidence | None = None) -> Evidence:
     """Sync entry point the orchestrator calls on the Research Assistant's worker."""
-    return asyncio.run(run_gather(m, now))
+    return asyncio.run(run_gather(m, now, resume=resume))
 
 def write_brief(m: Mission, evidence: Evidence, now=None) -> ResearchBrief:
     """Sync entry point the orchestrator calls on the Principal Investigator's worker."""

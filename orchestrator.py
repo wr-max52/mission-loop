@@ -2,7 +2,7 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity
+import activity, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
 from agents import bluesky, f916, github, publisher
@@ -80,14 +80,29 @@ def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str
 
 def _gather(m: Mission, now) -> str:
     """The Research Assistant's half of a research attempt: find and read sources. What it found is saved,
-    so the Principal Investigator can write the brief from it now or after a restart."""
-    m.attempts += 1                    # an attempt starts with its search
+    so the Principal Investigator can write the brief from it now or after a restart. The search saves its
+    transcript as it goes; one a stop or a killed loop cut short carries on from it, as the same attempt."""
+    saved = store.load_artifact(m.slug, "evidence")
+    paused = Evidence(**saved) if saved and not m.gathered else None
+    if paused and paused.finished:     # the loop was killed after the search was saved but before it was marked
+        m.attempts, m.gathered, m.search_paused = max(m.attempts, paused.attempt, 1), True, False
+        return "sources found before the restart are kept; the brief is next"
+    if paused:
+        m.attempts = max(m.attempts, paused.attempt, 1)   # the same attempt, carried on (a killed loop never saved it)
+    else:
+        m.attempts += 1                # an attempt starts with its search
     try:
         activity.begin(m.slug, "sources")
-        evidence = agents.gather(m, now)
+        evidence = agents.gather(m, now, paused) if paused else agents.gather(m, now)
     except Exception as e:             # model, tool or network failure counts as a failed attempt
+        store.delete_artifact(m.slug, "evidence")   # the next attempt searches afresh
+        m.search_paused = False
         return _research_failed(m, None, f"research crashed: {type(e).__name__}: {e}")
     store.save_artifact(m.slug, "evidence", evidence)
+    m.search_paused = not evidence.finished
+    if not evidence.finished:          # the stop button cut the search short: it carries on next start
+        calls = sum(1 for x in evidence.messages if x.get("role") == "tool")
+        return f"stopped mid-search after {calls} tool result(s); the search carries on when the loop starts again"
     m.gathered = True
     if stopping.requested():
         return "stopped after finding sources; the brief is written from them when the loop starts again"
@@ -110,10 +125,14 @@ def _write_brief(m: Mission, now) -> str:
         m.interrupted_brief = e.draft
         if e.draft:                    # the draft replaces the sources; without one, the brief is rewritten from them
             _drop_evidence(m)
-        saved = "its draft is checked" if e.draft else "the brief is written again from the same sources"
+        saved = ("its draft is checked" if e.draft else
+                 "its checked sources are kept and the claims are written" if m.brief_sources else
+                 "its picked sources are kept and checked" if m.brief_pick else
+                 "the brief is written again from the same sources")
         return f"stopped mid-brief; {saved} when the loop starts again"
     except Exception as e:             # a crash is a failed attempt; the next one searches again
-        brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
+        ok = False                         # a brief that can't pass (too few sources held up) brings its draft
+        brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {type(e).__name__}: {e}"
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
@@ -126,7 +145,8 @@ def _write_brief(m: Mission, now) -> str:
     return _research_failed(m, brief, notes)
 
 def _drop_evidence(m: Mission) -> None:
-    m.gathered = False
+    """The attempt is over: its search transcript and the brief's saved first step go."""
+    m.gathered, m.search_paused, m.brief_pick, m.brief_sources = False, False, None, None
     store.delete_artifact(m.slug, "evidence")
 
 def step(m: Mission, now) -> str | None:
@@ -172,13 +192,15 @@ def step(m: Mission, now) -> str | None:
         except stopping.Interrupted as e:
             m.write_attempts -= 1
             m.interrupted_article = e.draft
-            saved = "its draft is checked" if e.draft else "nothing usable was written; writing restarts"
+            saved = ("its draft is checked" if e.draft else
+                     f"writing resumes after its {len(m.article_draft.sections)} saved section(s)" if m.article_draft
+                     else "nothing usable was written; writing restarts")
             return f"stopped mid-writing; {saved} when the loop starts again"
         except Exception as e:             # same rule as research: a crash is a failed attempt
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
-            m.unchecked_article = ""
+            m.unchecked_article, m.article_draft = "", None
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
             m.rejected_article = None
@@ -215,6 +237,7 @@ def reject(m: Mission, notes: str, now) -> None:
         m.state, m.attempts, m.approved = State.RESEARCHING, 0, False
     elif m.state == State.ARTICLE_READY:
         m.state, m.write_attempts, m.reviewed = State.WRITING, 0, False
+        m.article_draft = None             # written again from the feedback, not patched
     else:
         raise ValueError(f"{m.slug} is {m.state.value}; only BRIEF_READY or ARTICLE_READY can be rejected")
     m.validator_notes = f"Human reviewer feedback: {notes}"
@@ -278,6 +301,7 @@ def push_through(m: Mission, now) -> None:
     else:
         store.save_artifact(m.slug, "article", draft.article)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
+        m.article_draft = None
         _write_article_review(m, _brief(m), draft.article)
         m.state = State.ARTICLE_READY
         note = "failed article pushed through by human"
@@ -326,12 +350,27 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
         changed += 1
     return changed
 
+PROGRESS = ("brief_pick", "brief_sources", "article_draft")   # Mission fields an agent saves mid-task
+
+def save_progress(m: Mission, artifacts: dict) -> None:
+    """A checkpoint from inside a task (checkpoint.save): the artifacts given, and the mission's progress
+    fields written onto the stored mission. Only those fields: the rest of the mission is saved when the task
+    ends, as always, so a checkpoint never writes half a task's changes."""
+    for kind, obj in artifacts.items():
+        store.save_artifact(m.slug, kind, obj)
+    stored = store.get_mission(m.slug)
+    if stored is not None and any(getattr(stored, f) != getattr(m, f) for f in PROGRESS):
+        store.save_mission(stored.model_copy(update={f: getattr(m, f) for f in PROGRESS}))
+
 def _as_worker(seat: str, fn, *args):
-    """Run one task on a worker's thread, so its activity shows under that seat (a copy of a worker)."""
+    """Run one task on a worker's thread, so its activity shows under that seat (a copy of a worker) and its
+    progress is saved."""
     activity.work_as(seat)
+    checkpoint.use(save_progress)
     try:
         return fn(*args)
     finally:
+        checkpoint.use(None)
         activity.clear()
 
 def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:

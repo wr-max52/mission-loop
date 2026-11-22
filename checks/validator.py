@@ -92,55 +92,92 @@ def poc_problems(pocs) -> list[str]:
             problems.append(f"POC {p.name}: name not found on {p.contact_source_url}")
     return problems
 
+EMPTY_COUNTERPOINT = ("Counterpoint is empty; give the strongest case against the thesis, from a source if you "
+                      "found one, else as the objection a skeptic would raise")
+
+def support_domains(sources) -> set[str]:
+    """The websites among these sources that support the thesis."""
+    return {_domain(s.url) for s in sources if s.stance == "supports"}
+
+def claim_problems(claims, ids: set[str]) -> list[str]:
+    """What is wrong with the claims, each problem once, naming the claims (numbered from 1) it applies to:
+    fifty claims citing a missing source is one fix, not fifty."""
+    found: dict[tuple[str, str], list[int]] = {}       # (said of one claim, said of several) -> claim numbers
+    listed = ", ".join(sorted(ids)) or "none"
+    for n, c in enumerate(claims, 1):
+        if not c.source_ids:
+            found.setdefault(("cites no source", "cite no source"), []).append(n)
+        for sid in c.source_ids:
+            if sid not in ids:
+                found.setdefault((f"cites unknown source id '{sid}'", f"cite unknown source id '{sid}'"), []).append(n)
+        worded_as_possibility = bool(POSSIBILITY.search(c.text))
+        if c.kind == "possibility" and not worded_as_possibility:
+            found.setdefault(("is a possibility, so must be worded 'It is possible that ...'",
+                              "are possibilities, so must be worded 'It is possible that ...'"), []).append(n)
+        if c.kind == "fact" and worded_as_possibility:
+            found.setdefault(("is worded as a possibility but its kind is 'fact'; set kind to 'possibility'",
+                              "are worded as possibilities but their kind is 'fact'; set kind to 'possibility'"),
+                             []).append(n)
+    problems = []
+    for (one, several), ns in found.items():
+        who = f"Claim {ns[0]} {one}" if len(ns) == 1 else f"Claims {', '.join(map(str, ns))} {several}"
+        if "source" in one:
+            who += f"; cite only the brief's source ids ({listed})"
+        problems.append(who)
+    if not any(c.kind == "fact" for c in claims):
+        problems.append("No claim of kind 'fact'; verify at least one fact alongside any possibilities")
+    return problems
+
+def source_problem(s, blocked: set[str] | None = None, archive: bool = False) -> tuple[str | None, str]:
+    """Whether one source holds up: (None, url) if its quote is on its page, else (what is wrong, url).
+    With archive=True a page that can't be fetched is checked against its Wayback copy, and the url
+    returned is that copy's address when its quote is there."""
+    blocked = blocked_domains() if blocked is None else blocked
+    if _is_blocked(_domain(s.url), blocked):
+        return f"{s.id}: {_domain(s.url)} is on the blocked list (blocked_domains.txt); use another source", s.url
+    url, page = s.url, fetch(s.url)
+    if page is None and archive and not wayback.original(s.url):
+        try:
+            found = wayback.snapshot(s.url)
+        except wayback.Unavailable:
+            found = None
+        if found and (copy := fetch(found[1])) is not None and _quote_score(s.quote, copy[1]) >= QUOTE_MATCH:
+            return None, found[1]          # the live page is gone or refuses us; the archived copy says it
+    if page is None:
+        return f"{s.id}: could not fetch {s.url}{archived_copy_hint(s.url)}", url
+    if not _norm(page[1]):
+        return f"{s.id}: no readable text at {s.url}", url
+    if len(_norm(s.quote)) < MIN_QUOTE_CHARS:
+        return f"{s.id}: quote is too short to verify; copy a full sentence", url
+    score = _quote_score(s.quote, page[1])
+    if score < QUOTE_MATCH:
+        hint = closest_sentence(s.quote, page[1])
+        return (f"{s.id}: quote not found on {s.url} (best match {score:.0f}%)"
+                + (f". Closest sentence actually on the page: \"{hint}\"" if hint else ""), url)
+    return None, url
+
+def _quote_score(quote: str, page_text: str) -> float:
+    return fuzz.partial_ratio(_norm(quote), _norm(page_text)[:MAX_TEXT_CHARS])
+
 def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     problems: list[str] = []
     ids = {s.id for s in brief.sources}
 
-    # 1. Every claim cites at least one real source id
-    for c in brief.claims:
-        if not c.source_ids:
-            problems.append(f"Claim cites no sources: '{c.text[:80]}'")
-        for sid in c.source_ids:
-            if sid not in ids:
-                problems.append(f"Claim cites unknown source id '{sid}'")
-        # Code can't verify a possibility, but it can make sure one is never passed off as a fact
-        worded_as_possibility = bool(POSSIBILITY.search(c.text))
-        if c.kind == "possibility" and not worded_as_possibility:
-            problems.append(f"Possibility must be worded 'It is possible that ...': '{c.text[:80]}'")
-        if c.kind == "fact" and worded_as_possibility:
-            problems.append(f"Claim is worded as a possibility but its kind is 'fact'; set kind to "
-                            f"'possibility': '{c.text[:80]}'")
-    if not any(c.kind == "fact" for c in brief.claims):
-        problems.append("No claim of kind 'fact'; verify at least one fact alongside any possibilities")
+    # 1. Every claim cites real source ids, and a possibility is never passed off as a fact
+    problems += claim_problems(brief.claims, ids)
 
     # 2 + 3. Every source is allowed, fetches, and its quote appears on the page
     blocked = blocked_domains()
     verified: set[str] = set()
     for s in brief.sources:
-        if _is_blocked(_domain(s.url), blocked):
-            problems.append(f"{s.id}: {_domain(s.url)} is on the blocked list (blocked_domains.txt); use another source")
-            continue
-        page = fetch(s.url)
-        if page is None:
-            problems.append(f"{s.id}: could not fetch {s.url}{archived_copy_hint(s.url)}")
-            continue
-        text = _norm(page[1])[:MAX_TEXT_CHARS]
-        quote = _norm(s.quote)
-        if not text:
-            problems.append(f"{s.id}: no readable text at {s.url}")
-        elif len(quote) < MIN_QUOTE_CHARS:
-            problems.append(f"{s.id}: quote is too short to verify; copy a full sentence")
+        problem, _ = source_problem(s, blocked)
+        if problem:
+            problems.append(problem)
         else:
-            score = fuzz.partial_ratio(quote, text)
-            if score < QUOTE_MATCH:
-                hint = closest_sentence(s.quote, page[1])
-                problems.append(f"{s.id}: quote not found on {s.url} (best match {score:.0f}%)"
-                                + (f". Closest sentence actually on the page: \"{hint}\"" if hint else ""))
-            else:
-                verified.add(s.id)
+            verified.add(s.id)
 
     # 4. At least 3 distinct domains among verified supporting sources
-    domains = {_domain(s.url) for s in brief.sources if s.stance == "supports" and s.id in verified}
+    domains = support_domains([s for s in brief.sources if s.id in verified])
     if len(domains) < MIN_SUPPORT_DOMAINS:
         problems.append(f"Only {len(domains)} verified supporting domain(s); need {MIN_SUPPORT_DOMAINS}")
 
@@ -148,8 +185,7 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     #    source that answers it, so a contradicting source is optional: any it cites is checked like the rest
     #    (above), and without one the counterpoint is shown as unsourced.
     if not brief.counterpoint.strip():
-        problems.append("Counterpoint is empty; give the strongest case against the thesis, from a source "
-                        "if you found one, else as the objection a skeptic would raise")
+        problems.append(EMPTY_COUNTERPOINT)
 
     # 6. Outreach only: 3+ POCs, and every POC's name and email appear on their contact page
     if settings.OUTREACH and len(brief.pocs) < MIN_POCS:
@@ -157,4 +193,5 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     if settings.OUTREACH:
         problems += poc_problems(brief.pocs)
 
+    problems = list(dict.fromkeys(problems))   # each problem once: 100 claims citing 's9' is one fix
     return (not problems, "\n".join(problems))
