@@ -69,6 +69,12 @@ async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRec
             msg = await llm.chat(messages, format=schema)
         except llm.Cut as cut:             # stop's grace ran out: keep what got written
             raise stopping.Interrupted(stopping.salvage(cut.text, Article))
+        except llm.Overrun as e:           # stuck: keep what it wrote before, if that holds an article
+            article = stopping.salvage(e.text, Article)
+            if article is None:
+                raise WritingFailed(f"the writer got stuck: {e}")
+            print(f"writer: {e}; the article check reads what it wrote before that", flush=True)
+            return article
         try:
             return Article.model_validate_json(msg.content)
         except ValidationError as e:

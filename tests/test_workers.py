@@ -127,7 +127,8 @@ class FakeOllama:
     def list(self):
         return type("L", (), {"models": [type("M", (), {"model": n}) for n in self.names]})
     async def chat(self, **kw):
-        return type("R", (), {"message": ollama.Message(role="assistant", content="hi " + kw["model"])})
+        return type("R", (), {"message": ollama.Message(role="assistant", content="hi " + kw["model"]),
+                             "done_reason": "stop"})
 
 def test_ready_names_both_workers(monkeypatch):
     monkeypatch.setattr(ollama, "Client", FakeOllama)
