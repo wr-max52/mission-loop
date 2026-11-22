@@ -5,7 +5,8 @@ and the loop log. add_mission queues a new mission exactly like the UI's Add mis
 brief review) and set_mission_epic puts a mission in an epic like the Epic field on its page. The rest give the chat
 assistant everything the Theorist can do, through the same checks (agents/theorist.py) and the same orchestrator
 functions: desk_overview reads the desk as the Theorist does, set_inspiration changes the line, propose_epic and
-propose_combine propose (they wait for the human), link_missions links two missions, and ask_theorist asks for the
+propose_combine propose (they wait for the human), link_missions links two missions, board_overview and
+arrange_board read and arrange the cork board as the Theorist's board turn does, and ask_theorist asks for the
 Theorist's turn. None of them changes a mission's stage or work. No tool takes the
 loop's lock or talks to a model, so asking never slows or redirects the work. Answers are short on purpose:
 the assistant has a small context.
@@ -15,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, agents, doctor, orchestrator, settings, store, trail
+import activity, agents, board, doctor, i18n, orchestrator, settings, store, trail
 from agents import bluesky, f916, github, theorist
 from contracts import Mission, State, epic_title, words
 
@@ -376,7 +377,8 @@ def setup_status() -> str:
     """This machine's setup, as the Settings page's Setup section shows it: a model for each worker and whether it
     answers, the web search key, npx and uvx for the research tools, and something to work on. Each item not done
     says how to fix it. Call this when the human asks how to set up, or why nothing is happening."""
-    found = doctor.checks()
+    with i18n.english():
+        found = doctor.checks()
     lines = [("done: " if c.ok else "TO DO: ") + f"{c.title}: {c.detail}" + (f" Fix: {c.fix}" if c.fix else "")
              for c in found]
     waiting = doctor.waiting() if orchestrator.loop_running() else None
@@ -496,6 +498,30 @@ def link_missions(mission: str, to: str, why: str) -> str:
     except ValueError as err:
         return f"Not done: {err}."
     return f"Linked {k.mission} <-> {k.to}: {k.why}"
+
+@server.tool()
+def board_overview() -> str:
+    """The cork board as the Theorist reads it on a board turn: every note (id, stage, title, x, y, size), every
+    string between them, and a rough picture of where the clusters sit. Read it before arrange_board."""
+    return theorist.board_text(theorist.board_desk())
+
+@server.tool()
+def arrange_board(moves: list[theorist.NoteMove], why: str = "") -> str:
+    """Move or resize notes on the cork board, as the Theorist does on a board turn, so a human reading it sees how
+    the work hangs together. Only when the human asks. moves: each {"id": a note id from board_overview ("m:<slug>"
+    or "e:<slug>"), "x", "y", "size" (optional, about 0.6 to 1.8; leave it out to keep the size)}, at most 12.
+    Notes dropped on another are nudged to the nearest free spot. Changes nothing but the board."""
+    data = theorist.board_desk()
+    tidy = theorist.settle_board(theorist.BoardReply(moves=moves, why=why), data)
+    moved, notes = 0, list(tidy.dropped)
+    for mv in tidy.moves:
+        prefix, _, slug = mv.id.partition(":")
+        try:
+            board.move("epic" if prefix == "e" else "mission", slug, mv.x, mv.y, mv.size, by="chat")
+            moved += 1
+        except ValueError as e:
+            notes.append(f"{mv.id}: {e}")
+    return f"Moved {moved} note(s) on the board." + (f" {_dropped(notes)}" if notes else "")
 
 if __name__ == "__main__":
     server.run()

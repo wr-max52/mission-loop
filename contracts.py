@@ -99,7 +99,7 @@ class BoardNote(BaseModel):
     x: float
     y: float
     size: float | None = None              # 1.0 = a normal note; None = from its stage and strings
-    by: str = "code"                       # "code", "human" or "theorist"
+    by: str = "code"                       # "code", "human", "theorist" or "chat"
     at: str = ""
 
 class Mention(BaseModel):

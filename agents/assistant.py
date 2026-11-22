@@ -9,7 +9,9 @@ the desk's own work by meaning and words, the same library the Theorist searches
 tools, "fetch" and "pages" (page_tools.py: find_in_page, page_links, wayback_versions), plus "search" (Brave web and
 news search) when a Brave key is set. It can do everything the Theorist can: read the desk as the Theorist does
 (desk_overview), search the library, change the inspiration line, propose epics and combines (they wait for the
-human), link missions, queue a mission and ask for the Theorist's turn, through the Theorist's own checks. Nothing
+human), link missions, arrange the cork board, queue a mission and ask for the Theorist's turn, through the
+Theorist's own checks. The same tools are what Settings -> MCP server shares with other apps on this network
+(mcp_share.py). Nothing
 here can change an existing mission's work: add_mission only queues a new one and set_mission_epic only moves a
 mission between epics. By default it runs on the Research
 Assistant's model with the loop's options (settings.chat_model; config, never a name in code), so Ollama uses
@@ -70,12 +72,12 @@ failing every attempt is parked; the human can requeue it or push its draft thro
 record shows) or possibilities (labelled, not verified). The mission finder adds missions from the human's inspiration line; the Theorist
 looks across the desk, evolves the line, proposes epics (themes), missions and combines, and links missions.
 Loop tools: loop_status, list_missions, mission_status, agent_steps, search_missions, publication_status,
-list_epics, theorist_notes, desk_overview, setup_status (setup questions, or when
-nothing happens). search_library finds what the desk's briefs and articles say (claims,
+list_epics, theorist_notes, desk_overview, board_overview, setup_status (setup questions, or
+when nothing happens). search_library finds what the desk's briefs and articles say (claims,
 quotes, sections). Web tools: search, fetch, find_in_page, wayback_versions. Link every web page you rely on as
 [title](url); never invent a URL.
 Change things only when asked: add_mission (search_missions first), set_mission_epic, set_inspiration,
-propose_epic, propose_combine, link_missions, ask_theorist. Proposals and new briefs wait for the human.
+propose_epic, propose_combine, link_missions, arrange_board, ask_theorist. Proposals and new briefs wait for the human.
 Approve, publish, start and stop are UI buttons, not your tools.
 Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know."""
 
@@ -158,6 +160,12 @@ def _limit(tb, name: str) -> int:
         return max(MAX_WEB_CHARS, settings.library_top_n() * library.PASSAGE_ROOM)
     return MAX_WEB_CHARS if server and server != LOOP_SERVER else MAX_TOOL_CHARS
 
+def _language() -> str:
+    """The UI's language (Settings page), so replies come in it. English adds nothing."""
+    import settings
+    code = settings.language()
+    return "" if code == "en" else f"\nAlways answer in {settings.LANGUAGE_NAMES[code]}."
+
 def _history(history: list[dict] | None) -> list[dict]:
     turns = [h for h in history or [] if h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip()]
     return [{"role": h["role"], "content": str(h["content"])[:MAX_MESSAGE_CHARS]} for h in turns[-MAX_TURNS:]]
@@ -167,7 +175,8 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
     question = " ".join(question.split())[:MAX_MESSAGE_CHARS]
     if not question:
         return "Ask me what the loop is doing, or where a mission is."
-    messages = [{"role": "system", "content": SYSTEM}, *_history(history), {"role": "user", "content": question}]
+    messages = [{"role": "system", "content": SYSTEM + _language()}, *_history(history),
+                {"role": "user", "content": question}]
     model = model or default_model()
     if not model:
         return NO_MODEL

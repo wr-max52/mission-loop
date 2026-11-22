@@ -11,7 +11,24 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys and `data/search.json` the Brave Search key: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+`data/providers.json` the cloud model providers' API keys, `data/search.json` the Brave Search key and
+`data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
+copy): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+
+## How a task becomes a merged PR (coding agents, this repo only)
+
+The written issue is what Will approves; nothing after it waits on him until the merge.
+
+1. **Issue first.** Given a task, write the issue (the write-issue skill's format) and show it. Once Will okays it,
+   create it.
+2. **Then roll.** Build it on its own branch off the latest `origin/main` without stopping to ask, and open a PR that
+   closes the issue. Opening that PR is the push the approved issue asked for.
+3. **Ready to merge, not a draft.** The PR is ready for review when opened: `pytest -q` passes, AGENTS.md (and its
+   test count) says what changed, the branch merges cleanly into `main`, and the description says what was checked
+   and what wasn't. This replaces the write-issue skill's "open it as a draft" here.
+4. **Watch it until it's merged.** For a few hours after opening it, watch the PR for review comments (in the Claude
+   desktop app, turn on the PR monitor's comment handling instead of polling) and answer or fix each one on the same
+   branch, keeping it ready to merge. Will merges; don't merge it yourself unless he asks.
 
 ## Running
 
@@ -19,9 +36,9 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
-- CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+- CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 691 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 729 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -123,7 +140,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
   away. It runs when it has a line and missions, the desk changed
   since its last turn (`desk_fingerprint`: missions, their epics, which are published or combined, the epics, links and combines) and 6 hours
-  have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
+  have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Run Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
   Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
@@ -410,6 +427,20 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty (the
   search server's `BRAVE_API_KEY`, which `settings.search_key` also reads from `data/search.json`). `Toolbox.skipped`
   says which and why; the finder stops with that reason instead of searching with no tool.
+- Sharing the tools on this network (`mcp_share.py`, Settings -> MCP server): every tool Researcher Chat has, and so
+  every tool the Theorist and the other agents use, as one MCP server other apps connect to (Claude Code, Claude
+  Desktop through `mcp-remote`, Cursor, VS Code, LM Studio, another machine's agent). No tool is written twice: the
+  gateway opens exactly the chat's servers (`assistant.servers()`, so a new server or tool there is shared too)
+  through `agents/toolbox.py` and serves their tools over MCP's streamable HTTP at `http://<LAN address>:<port>/mcp`
+  (`settings.mcp_port`, default 8780). LAN only, no cloud: it listens on every interface, `Guard` refuses any client
+  address not on this network (`on_this_network`: loopback, private, link-local; never public nor 100.64/10) and any
+  request without `Authorization: Bearer <settings.mcp_token()>` (made on first use, `data/mcp_share.json` mode 600,
+  read each request, so New token takes effect at once). Off unless switched on (`settings.mcp_share`, saved only
+  while on). The UI runs it on a thread beside itself (`mcp_share.start`/`stop`; started when `ui` starts if on),
+  restarts it when the web search key changes (the tool list is read at start), and the section shows the address,
+  the token (hidden until Show), the tools it shares and what it skips, and ready-to-paste setups
+  (`ui.mcp_setups`). `python run.py mcp` runs it alone in the foreground. Writes go through the chat's checks;
+  approving, publishing, start and stop stay UI buttons, never tools.
 - Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and the desk's findings, looks
   things up on the web, and can do everything the Theorist can (read the desk as it does, search the library, evolve
   the line, propose epics and combines, link missions, queue a mission, ask for its turn), through the Theorist's own
@@ -432,7 +463,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
   `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
   and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
-  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`, and
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`,
+  `board_overview` and `arrange_board` (the Theorist's board turn: the board as it reads it, and moves held by
+  `theorist.settle_board`, saved `by="chat"`), and
   `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and
   combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
@@ -480,7 +513,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   each server start (`find_all_mentions`: each mission read once, pairs checked once, one transaction; an artifact
   that won't load is skipped); and `background` (research was shown a related
   published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
-  transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
+  transform for pan and zoom, strings in SVG, kept cheap so a zoomed board never shows flat patches: one shadow or
+  glow on the whole strings layer, sized to the strings, never one per string; the laser pulse fades that layer, never
+  each string; strings are kept and only moved ones rewritten; the view's `--gx/--gy/--gz` don't inherit; a look that
+  didn't change draws nothing): wheel or pinch zooms round the pointer, every fit glides, a drag moves
   a note and its corner resizes it (`POST /board/move`, saved `by="human"`; only a resize fixes the size; the Theorist's board turn may move it later), a
   mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
   the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more
@@ -505,7 +541,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (`activity.fail(e)` from the orchestrator's excepts, an `Interrupted` counting as stopped; `activity.outcome` for a
   failed source or article check or a paused search; the first outcome given stands). Under the pipeline strip
   (`ui.flow_status`, served in `/api/flow`'s `now`) the agents at work come first, then the last `RECENT_STEPS` (3)
-  finished steps with how long each took and when (`activity.recent` reads only the log's end), then Full log, which
+  finished steps, each "Agent · mission · took 4m 12s · 3m ago" (`activity.recent` reads only the log's end), then Full log, which
   opens `/log` (`ui.log_page`): every step newest first, `LOG_PAGE` (200) a page, the ones at work on top, `?m=<slug>`
   for one mission (a mission page's History links to it). Display-only, like the activity file.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
@@ -528,7 +564,7 @@ the Published page. Published articles are not listed there, only the Published 
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
 order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
-between looks for work, Model providers, Research (web search and the library), Display (appearance, chat colour, board,
+between looks for work, Model providers, Research (web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
@@ -585,7 +621,7 @@ most bits pass without a word. They work through about 40 bits weighted by mood 
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
-The Settings page's Display section also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
+The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Page scripts get theirs as `window.I18N`: the shared few in `ui.JS_STRINGS`, and the board's and avatar studio's from every string literal inside their `tr(...)` calls (`ui.script_strings`, so no list to keep). The setup checks (`doctor.py`) are wrapped too; `run.py doctor` and Researcher Chat's `setup_status` read them in English. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
 when not System) and the chat colour (the app's red, seven pastels in `settings.CHAT_COLORS`, or any colour picked;
 `settings.chat_color()`). Both go on the UI's `<html>` from the server (`ui.html_attrs`: `data-theme` and the
 `--chat`/`--chat-ink` variables, the ink picked for contrast by `settings.ink_on`), so there is no theme switch in the
@@ -597,6 +633,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
+| Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
 | Set the published site's name, tagline and About statement | Settings → Publication |
 | Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |
@@ -609,7 +646,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
 | Search what the desk has found (the library) | `python run.py library "<words>" [--epic "<title>"] [--mission <slug>]`; no words indexes it; or ask Researcher Chat |
 | Pick the library's embedding model or top N | Settings → Library (provider, model, passages per search) |
-| Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
+| Have the Theorist look across the desk now | Run Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
 | Stop | `python run.py stop` (the piece in flight finishes or is cut at the grace; everything finished is already saved) |

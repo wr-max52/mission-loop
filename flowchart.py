@@ -10,6 +10,7 @@ to fit and relights it; assets/researchers.js puts researchers on it, each on it
 """
 from html import escape
 import activity, settings
+from i18n import _
 from contracts import Mission
 from icons import icon, CSS as ICON_CSS
 
@@ -41,37 +42,33 @@ TILES = {   # key -> (icon, the line under its name on the strip)
     "publisher": ("broadcast", "site and channels"),
 }
 REVIEW_SUB = {"epic_review": "you approve", "brief_review": "you approve", "article_review": "you publish"}
-HUMAN_STEPS = {"epic_review": ("Epic review: you approve, rename, move or reject the epics the Theorist and "
-                               "the finder propose, and approve or reject the Theorist's combines", "propose"),   # the purple of the New epic card
-               "brief_review": ("Brief review: you approve the brief or send it back", "review"),
-               "article_review": ("Article review: you publish the article or send it back", "publish")}
+HUMAN_STEPS = {"epic_review": ("Epic review: approve, rename, move or reject proposed epics; approve or reject "
+                               "combines", "propose"),   # the purple of the New epic card
+               "brief_review": ("Brief review: approve or send back", "review"),
+               "article_review": ("Article review: publish or send back", "publish")}
 # Auto mode takes over exactly these two reviews (key -> its label and title then); publishing is never automatic.
-AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: the epics the Theorist and the finder propose, "
-                              "and the Theorist's combines, are approved for you"),
-              "brief_review": ("Auto-approve brief", "Auto mode: every brief that passed its check is approved for you")}
-RETRY = "A failure is another try; after {n} tries the mission is parked for you."
+AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: proposed epics and combines are approved"),
+              "brief_review": ("Auto-approve brief", "Auto mode: briefs that pass the check are approved")}
+RETRY = "Failures retry; parked after {n}."
 CHECKS = {   # every code check on the strip: what it holds the step before it to
-    "theorist_check": "Theorist check: code, no model. The line must still ask questions and keep at least half its "
-                      "words, a new epic needs 2+ missions and a new name, the new mission must be new to the desk, "
-                      "a combine takes 2 to 4 missions not yet being written, and a link needs an open mission, a "
-                      "reason and a pair not linked before. Whatever fails is dropped; nothing is parked.",
-    "finder_check": "Finder check: code, no model. It keeps at most 3 missions, each resting on a page the searches "
-                    "found and unlike any topic the desk has, and a new epic only when 2+ of them share it. Whatever "
-                    "fails is dropped; nothing is parked.",
-    "contact_check": "Contact check: code, no model. Each contact's name and email must be on the pages read. " + RETRY,
-    "source_check": "Source check: code, no model. Every claim cited, its quotes found on the page, 3 supporting "
-                    "websites, at least one fact and a counterpoint. " + RETRY,
-    "article_check": "Article check: code, no model. Every paragraph cited to a checked source in the approved brief, "
-                     "quotes copied from those sources, no outside links, the opposing view cited. " + RETRY,
-    "rating_check": "Rating check: code. The Research Assistant scores the claim and its logic, the intrigue and the "
-                    "sources' credibility, 1 to 10 each; a total of 20 or less sends the article back to the writer "
-                    "with the reasons. " + RETRY,
+    "theorist_check": "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and "
+                      "a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link "
+                      "needs an open mission, a reason and a new pair. Failures are dropped.",
+    "finder_check": "Finder check (code): up to 3 missions, each backed by a found page and unlike existing topics; "
+                    "new epic needs 2+ missions. Failures are dropped.",
+    "contact_check": "Contact check (code): names and emails must be on the pages read.",
+    "source_check": "Source check (code): every claim cited, quotes on the page, 3 sites, 1+ fact, a counterpoint.",
+    "article_check": "Article check (code): every paragraph cited to the brief's sources, exact quotes, no outside "
+                     "links, opposing view cited.",
+    "rating_check": "Rating check (code): the Research Assistant scores the claim and logic, intrigue and sources "
+                    "1-10 each; 20 or less goes back to the writer with the reasons.",
 }
+PARKS = {"contact_check", "source_check", "article_check", "rating_check"}   # the checks that retry and then park; the rest drop
 
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
     """The strip's steps for this setup: contacts and their check only while outreach is on, and with auto (the
     UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
-    return [(k, "auto", AUTO_STEPS[k][0]) if auto and k in AUTO_STEPS else (k, kind, text)
+    return [(k, "auto", _(AUTO_STEPS[k][0])) if auto and k in AUTO_STEPS else (k, kind, _(text))
             for k, kind, text in FLOW if k not in ("contacts", "contact_check") or settings.OUTREACH]
 
 def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
@@ -100,24 +97,26 @@ def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], 
         cur = f' aria-current="step" data-worker="{lit[key]}"' if on else ""
         if kind == "check":
             n = parked.get(key, 0)
-            return (f'<span class="check{on}" data-step="{key}" title="{escape(CHECKS[key].format(n=parked_n))}"{cur}>'
+            title = escape(_(CHECKS[key]) + (" " + _(RETRY).format(n=parked_n) if key in PARKS else ""))
+            return (f'<span class="check{on}" data-step="{key}" title="{title}"{cur}>'
                     f'{icon("shield")}<span class="label">{text}</span>'
-                    f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
+                    f'<b class="parked-count" title="{escape(_("{n} parked here").format(n=n))}"{"" if n else " hidden"}>{n}</b></span>')
         name, sub = TILES[key]
-        return (f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{icon(name)}'
-                f'<span class="text"><span class="name">{text}</span><span class="sub">{sub}</span></span></span>')
+        return (f'<span class="step{on}" data-step="{key}" title="{escape(_(activity.AGENTS[key]))}"{cur}>{icon(name)}'
+                f'<span class="text"><span class="name">{text}</span><span class="sub">{_(sub)}</span></span></span>')
 
     def review(key: str, kind: str, text: str, place: str) -> str:
         if kind == "auto":
-            return (f'<span class="human auto" data-step="{key}" title="{escape(AUTO_STEPS[key][1])}" style="{place}">'
+            return (f'<span class="human auto" data-step="{key}" title="{escape(_(AUTO_STEPS[key][1]))}" style="{place}">'
                     f'{icon("bolt")}<span class="text"><span class="name">{text}</span>'
-                    f'<span class="sub">auto mode</span></span></span>')
+                    f'<span class="sub">{_("auto mode")}</span></span></span>')
         title, tone = HUMAN_STEPS[key]
+        title = _(title)
         n = waiting.get(key, 0)
         tag, href = ("a", f' href="{escape(review_href)}"') if review_href else ("span", "")
         return (f'<{tag} class="human {tone}{" waiting" if n else ""}"{href} data-step="{key}" '
                 f'title="{escape(title)}" style="{place}">{icon("person")}<span class="text"><span class="name">{text}</span>'
-                f'<span class="sub">{REVIEW_SUB[key]}</span></span><b class="count"{"" if n else " hidden"}>{n}</b></{tag}>')
+                f'<span class="sub">{_(REVIEW_SUB[key])}</span></span><b class="count"{"" if n else " hidden"}>{n}</b></{tag}>')
 
     out = []
     for i, run in enumerate(runs):

@@ -201,4 +201,4 @@ def test_ui_refuses_cross_site_post(client):
 
 def test_flow_strip_shows_the_finder_without_a_mission():
     html = ui.flow_status([{"worker": "assistant", "slug": "", "agent": "finder", "since": 0}], True)
-    assert "<strong>Mission finder</strong> is looking for new missions" in html and "/m/" not in html
+    assert "<strong>Mission finder</strong> · new missions" in html and "/m/" not in html

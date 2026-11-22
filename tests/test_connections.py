@@ -268,8 +268,8 @@ def client():
 def test_ui_asks_about_the_combine_and_approving_opens_the_new_mission(client):
     c = proposed()
     html = client.get("/").text
-    assert "Combine missions" in html and "Combine them" in html and "Keep them separate" in html
-    assert "The Theorist proposes combining these 2 missions" in html
+    assert "Combine missions" in html and ">Combine</button>" in html and "Keep separate" in html
+    assert "Theorist proposes combining 2 missions into one." in html
     r = client.post(f"/combines/{c.slug}/approve", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith(f"/m/{c.slug}?done=combined")
     page = client.get(f"/m/{c.slug}").text
@@ -301,7 +301,7 @@ def test_theorist_notes_and_the_chat_assistant_name_the_connections(client):
     orchestrator.apply_theory(Theory(patterns=["p"], inspiration=LINE, based_on=LINE, combine=combine(),
                                      links=[NewLink(mission="dam", to="old", why="Same money.")]), T0)
     html = client.get("/").text
-    assert "proposed combining 2 missions into <strong>" in html and "linked <a href=\"/m/dam\">" in html
+    assert "Proposed combining 2 missions into <strong>" in html and "Linked <a href=\"/m/dam\">" in html
     notes = status_tools.theorist_notes()
     assert "Proposed combining memo, lobby into:" in notes and "Linked: dam <-> old" in notes
     assert "Linked to old by the theorist: Same money." in status_tools.mission_status("dam")

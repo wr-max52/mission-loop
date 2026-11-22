@@ -167,14 +167,14 @@ def test_ui_and_status_show_where_it_was_published(joined, capsys):
     published("a", T0)
     published("b", T0 + timedelta(hours=1))
     client = TestClient(ui.app)
-    assert "posting as <strong>loop-desk</strong>" not in client.get("/").text   # the Missions page only links there
+    assert "1F916: <strong>loop-desk</strong>" not in client.get("/").text   # the Missions page only links there
     pub = client.get("/published").text
-    assert "posting as <strong>loop-desk</strong>" in pub and "1 queued" in pub
-    assert "<strong>1F916</strong>: waiting, #1 of 1 in the queue" in pub
+    assert "1F916: <strong>loop-desk</strong>" in pub and "1 queued" in pub
+    assert "<strong>1F916</strong>: queued, #1 of 1" in pub
     assert "<strong>1F916</strong>: posted" in pub and "https://1f916.ai/api/post/101" in pub
     page = client.get("/m/a").text
     assert "https://1f916.ai/api/post/101" in page and "site/a/index.html" in page
-    assert "#1 of 1 in the queue" in client.get("/m/b").text
+    assert "queued, #1 of 1" in client.get("/m/b").text
     cli.status()
     out = capsys.readouterr().out
     assert "published: Local site, 1F916" in out and "1F916 as loop-desk: 1 queued, next post after" in out

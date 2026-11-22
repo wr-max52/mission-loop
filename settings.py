@@ -111,7 +111,7 @@ PROVIDERS = {
                  "blurb": "Open models in the cloud."},
     "custom": {"name": "OpenAI-compatible server", "api": "openai", "url": "", "key_env": "MISSION_LOOP_COMPAT_KEY",
                "url_env": "MISSION_LOOP_COMPAT_URL", "keys": "", "optional_key": True,
-               "blurb": "Anything that speaks the OpenAI API: LM Studio, vLLM, llama.cpp, LiteLLM, a company gateway."},
+               "blurb": "Any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, LiteLLM."},
 }
 LOCAL = "ollama"
 PROVIDERS_FILE = Path("data/providers.json")
@@ -299,6 +299,19 @@ def animations() -> bool:
 
 def set_animations(on: bool) -> None:
     save(animations="" if on else "off")   # nothing stored while on, so a fresh install has them
+
+# The UI's language (i18n.py). English is the default and stores nothing; the published site stays English.
+LANGUAGES = {"en": "English", "zh": "中文", "fr": "Français", "es": "Español", "pt": "Português", "de": "Deutsch"}
+LANGUAGE_NAMES = {"en": "English", "zh": "Chinese", "fr": "French", "es": "Spanish", "pt": "Portuguese",
+                  "de": "German"}                   # in English, for the chat model's prompt
+
+def language() -> str:
+    return saved().get("language") if saved().get("language") in LANGUAGES else "en"
+
+def set_language(code: str) -> None:
+    if code not in LANGUAGES:
+        raise ValueError("not a language")
+    save(language="" if code == "en" else code)
 
 THEMES = ("system", "light", "dark")
 
@@ -575,6 +588,47 @@ def save_search_key(key: str) -> None:
 
 def forget_search_key() -> None:
     SEARCH_FILE.unlink(missing_ok=True)
+
+# ---------- sharing the tools on this network (mcp_share.py) ----------
+# Every tool Researcher Chat has, served as one MCP server to other apps on this network (Settings -> MCP server).
+# Off unless switched on; the switch and the port are saved in data/settings.json, the token every client must send
+# in data/mcp_share.json (mode 600, never committed or printed: the Settings page shows it to the owner to copy).
+
+MCP_PORT_DEFAULT = 8780                    # clear of the UI (8770, or 8771 when that is taken)
+MCP_TOKEN_FILE = Path("data/mcp_share.json")
+
+def mcp_share() -> bool:
+    return saved().get("mcp_share") == "on"
+
+def set_mcp_share(on: bool) -> None:
+    save(mcp_share="on" if on else "")
+
+def mcp_port() -> int:
+    try:
+        port = int(saved().get("mcp_port") or MCP_PORT_DEFAULT)
+    except (TypeError, ValueError):
+        return MCP_PORT_DEFAULT
+    return port if 1024 <= port <= 65535 else MCP_PORT_DEFAULT
+
+def set_mcp_port(port: int) -> None:
+    if not 1024 <= int(port) <= 65535:
+        raise ValueError("a port from 1024 to 65535")
+    save(mcp_port="" if int(port) == MCP_PORT_DEFAULT else int(port))
+
+def mcp_token() -> str:
+    """The token every client sends (Authorization: Bearer <token>); made the first time it is asked for."""
+    try:
+        found = str(json.loads(MCP_TOKEN_FILE.read_text()).get("token") or "")
+    except (OSError, ValueError, AttributeError):
+        found = ""
+    return found or new_mcp_token()
+
+def new_mcp_token() -> str:
+    """A fresh token; clients holding the old one are refused from their next request."""
+    import secrets
+    token = secrets.token_urlsafe(24)
+    _write_private(MCP_TOKEN_FILE, {"token": token})
+    return token
 
 # ---------- first run and personalization ----------
 

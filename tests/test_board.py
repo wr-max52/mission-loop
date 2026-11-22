@@ -217,6 +217,22 @@ def test_the_gear_and_the_settings_page_change_the_same_look(client):
     assert client.post("/board/style", json={"cards": "tarot"}).status_code == 400
     assert client.post("/board/style", json={"cards": "sticky"}, headers={"origin": "https://evil.example"}).status_code == 403
 
+def test_the_board_stays_cheap_to_draw(client):
+    """What made the board glitch: a shadow on every string, a laser pulse that repainted the whole board every frame,
+    and view offsets every note inherited. And its tools are drawn icons, so they sit in the middle of their buttons."""
+    html = client.get("/board").text
+    css = ui.BOARD_CSS
+    for var in ("--gx", "--gy", "--gz"):
+        assert f"@property {var} {{" in css and "inherits:false" in css.split(f"@property {var} {{")[1].split("}")[0]
+    lines = [l for l in css.splitlines() if ".str .line" in l or ".str .core" in l]
+    assert lines and not any("filter:" in l or "animation:" in l for l in lines)   # on svg.strings, once
+    assert ".board-wrap.str-laser.animate svg.strings { animation:laser" in css
+    assert "backdrop-filter" not in css
+    tools = html.split('<div class="board-tools">')[1].split("</div>")[0]
+    assert tools.count("<button") == 4 == tools.count("<svg") and "−" not in tools and ">+<" not in tools
+    assert ".board-tools button { width:38px; height:38px; padding:0;" in css
+    assert ".board-wrap:is(.surface-dark, .surface-arcade) :is(.board-crumb, .board-legend, .board-tools button, .board-style)" in css
+
 def test_a_note_a_model_works_on_names_whose_crew_visits_it(client, monkeypatch):
     import activity
     store.save_mission(Mission(slug="w", topic="Being written", state=State.WRITING))
@@ -364,7 +380,7 @@ def test_the_notes_say_what_a_board_turn_moved(client):
                        "moved": [{"id": "m:b", "x": 1, "y": 2, "size": 1.2}], "notes": [],
                        "ideas": {"at": "2026-11-01T09:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["Old pattern"]}})
     html = client.get("/").text
-    assert "tidied the" in html and "moved 1 note, resizing 1" in html and "Grouped the grid." in html
+    assert "tidied the" in html and "moved 1 note, resized 1" in html and "Grouped the grid." in html
     assert "Old pattern" in html
     import status_tools
     text = status_tools.theorist_notes()

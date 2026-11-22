@@ -267,9 +267,9 @@ def test_ui_shows_the_notes_and_the_line_over_time(client):
     html = client.get("/").text
     assert "Theorist&#x27;s notes" in html or "Theorist's notes" in html
     assert "<li>A &lt;pattern&gt;</li>" in html and "Because." in html
-    assert "proposed the epic <strong>Permit Money</strong>" in html
-    assert "the Theorist:</span> " + EVOLVED in html and "you:</span> " + LINE in html
-    assert "The Theorist proposes this epic for 2 missions" in html
+    assert "Proposed epic <strong>Permit Money</strong>" in html
+    assert "Theorist:</span> " + EVOLVED in html and "you:</span> " + LINE in html
+    assert "Proposed by Theorist · 2 missions" in html
 
 def test_ui_asks_the_theorist(client):
     store.set_inspiration(LINE)
@@ -283,7 +283,7 @@ def test_ui_refuses_cross_site_ask(client):
 
 def test_flow_strip_shows_the_theorist():
     html = ui.flow_status([{"worker": "pi", "slug": "", "agent": "theorist", "since": 0}], True)
-    assert "<strong>Theorist</strong> is looking across the desk for patterns" in html
+    assert "<strong>Theorist</strong> · all missions" in html
 
 def test_trail_and_chat_tools():
     desk()

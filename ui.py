@@ -17,15 +17,16 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, doctor, library, mcp_share, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
                        RATING_FACTORS, RATING_FAIL_AT, RATING_SCALE)
 from render import CSS, brief_html, epic_pill
 from icons import icon, PATHS as ICON_PATHS, CSS as ICON_CSS
-import flowchart
+import flowchart, i18n
 from flowchart import flow_steps
+from i18n import _, _n
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -37,104 +38,111 @@ LABELS = {
     State.COMBINED: "Combined",
 }
 MESSAGES = {
-    "approved": "Approved. The loop writes the article next.",
-    "published": "Marked for publishing. The loop publishes it next, before any research or writing.",
-    "rejected": "Sent back with your notes.",
-    "requeued": "Requeued. It starts again after the missions further along.",
-    "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
-    "added": "Mission added. The loop researches it after the missions further along.",
-    "added_next": "Mission added. The Research Assistant takes it next.",
-    "added_started": "Mission added and the loop started. The Research Assistant takes it first.",
-    "inspired": "Inspiration saved. The mission finder works from it each time the loop has caught up.",
-    "uninspired": "Inspiration cleared. The mission finder and the Theorist are off.",
-    "thinking": "The Theorist goes next: as the loop's next run starts, or when you start the loop.",
+    "approved": "Brief approved.",
+    "published": "Article approved for publishing.",
+    "rejected": "Sent back with notes.",
+    "requeued": "Requeued.",
+    "pushed": "Pushed through to review.",
+    "added": "Mission added.",
+    "added_next": "Mission added. Research Assistant takes it next.",
+    "added_started": "Mission added. Loop started.",
+    "inspired": "Inspiration saved.",
+    "uninspired": "Inspiration cleared. Mission finder and Theorist off.",
+    "thinking": "Theorist runs next.",
     "started": "Loop started.",
-    "stopping": "Stop requested. The agent at work writes out what it has (2 minutes at most), then the loop exits.",
-    "woken": "The loop checks for work now.",
+    "stopping": "Stopping after the current task.",
+    "woken": "Checking for work.",
     "epic_set": "Epic saved.",
-    "epic_approved": "New epic approved.",
-    "epic_moved": "Missions moved to that epic.",
-    "epic_rejected": "Proposed epic rejected. Its missions went back to the epics they were in before.",
-    "epic_renamed": "Epic renamed. Published pages show the new name.",
-    "combined": "Combine approved. The bigger mission is queued; the missions it combines have stopped.",
-    "combine_rejected": "Combine rejected. The missions carry on separately, and the Theorist won't propose it again.",
-    "linked": "Linked. Each mission's research sees the other from its next search.",
-    "unlinked": "Link removed. The Theorist won't draw it again.",
-    "site_url_saved": "Site address saved. The feeds use full links now.",
-    "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
-    "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
-    "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
-    "every_saved": "Saved. The next loop you start rests that long between looks for work.",
-    "library_saved": "Library settings saved. The Theorist and the chat use them on their next search.",
-    "library_indexing": "Indexing the library in the background. Refresh in a minute to see how far it got.",
-    "auto_on": "Auto mode on. Briefs and new epics are approved for you; articles still wait for you to publish them.",
-    "auto_off": "Auto mode off. Every brief and new epic waits for you again.",
-    "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
-    "animations_off": "Animations off. The Missions page stays still.",
+    "epic_approved": "Epic approved.",
+    "epic_moved": "Missions moved.",
+    "epic_rejected": "Epic rejected. Missions moved back.",
+    "epic_renamed": "Epic renamed.",
+    "combined": "Combine approved. Combined mission queued.",
+    "combine_rejected": "Combine rejected.",
+    "linked": "Missions linked.",
+    "unlinked": "Link removed.",
+    "site_url_saved": "Site address saved.",
+    "site_url_cleared": "Site address cleared.",
+    "bluesky_on": "Bluesky connected.",
+    "bluesky_off": "Bluesky disconnected.",
+    "every_saved": "Rest time saved. Applies when the loop next starts.",
+    "auto_on": "Auto mode on.",
+    "auto_off": "Auto mode off.",
+    "animations_on": "Animations on.",
+    "animations_off": "Animations off.",
+    "library_saved": "Library settings saved.",
+    "library_indexing": "Indexing the library. Refresh in a minute.",
     "theme_saved": "Appearance saved.",
+    "language_saved": "Language saved.",
     "chat_color_saved": "Chat colour saved.",
     "board_style_saved": "Board look saved.",
-    "ollama_saved": "Ollama address saved. Workers use the Ollama at that address from their next task.",
-    "ollama_connected": "Ollama connected, and each worker without a model got one of its models. Change them any time under Workers.",
-    "ollama_ready": "Ollama is connected and every worker has a model. Press play to run the loop.",
-    "provider_on": "Provider connected. Its models are now in each worker's model list.",
-    "provider_off": "Provider disconnected. Its saved key was deleted from this machine.",
-    "worker_saved": "Worker saved. It takes its next task with that model.",
-    "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
-    "worker_off": "Worker off. The other worker does its steps, one task at a time.",
-    "worker_count": "Worker count saved. The loop picks it up the next time it looks for work.",
-    "joined": "Joined 1F916. Published articles post there from now on, one a day, newest first.",
-    "github_connected": "GitHub connected. Now pick the repo the site goes to.",
-    "github_linked": "Site linked. The site was pushed to GitHub; GitHub Pages takes a minute or two to put it online.",
-    "github_unlinked": "Site unlinked. The repo and the site stay on GitHub; nothing is pushed there any more.",
-    "github_off": "GitHub disconnected. Its token was deleted from this machine; the repo and the site stay on GitHub.",
-    "github_app_saved": "GitHub OAuth app saved. Connect GitHub to sign in with it.",
-    "custom_added": "Custom channel added. Published articles go there from the next publishing pass, newest first.",
-    "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
-    "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
-    "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
-    "search_saved": "Web search key checked and saved. Research searches the web from its next task.",
-    "search_unchecked": "Web search key saved, but Brave couldn't be asked about it just now. If research can't search, check the key.",
-    "search_off": "Web search key removed from this machine.",
-    "setup_hidden": "Setup hidden. Settings → Setup shows what is left and brings it back.",
-    "setup_shown": "Setup is back at the top of the Missions page.",
-    "publication_saved": "Publication saved. The site's pages, About page and feeds use it now.",
+    "ollama_saved": "Ollama address saved.",
+    "ollama_connected": "Ollama connected. Models assigned.",
+    "ollama_ready": "Ollama connected. Press play to start.",
+    "provider_on": "Provider connected.",
+    "provider_off": "Provider disconnected. Key deleted.",
+    "worker_saved": "Model saved.",
+    "worker_on": "Worker on.",
+    "worker_off": "Worker off.",
+    "worker_count": "Worker count saved.",
+    "joined": "Joined 1F916.",
+    "github_connected": "GitHub connected. Choose a repo.",
+    "github_linked": "Repo linked and site pushed. Pages can take a few minutes.",
+    "github_unlinked": "Repo unlinked.",
+    "github_off": "GitHub disconnected.",
+    "github_app_saved": "OAuth client ID saved.",
+    "custom_added": "Channel added.",
+    "custom_removed": "Channel removed.",
+    "republish": "Publishing queued.",
+    "republish_off": "Publishing now.",
+    "search_saved": "Web search key saved.",
+    "search_unchecked": "Web search key saved, but Brave didn't answer. If search fails, check the key.",
+    "search_off": "Web search key removed.",
+    "mcp_on": "Sharing on. Copy a setup below into your app.",
+    "mcp_off": "Sharing off. Nothing on the network can reach the tools.",
+    "mcp_token": "New token made. Apps with the old one are refused.",
+    "mcp_port": "Port saved.",
+    "setup_hidden": "Setup hidden. Settings → Setup brings it back.",
+    "setup_shown": "Setup shown on the Missions page.",
+    "publication_saved": "Publication saved.",
 }
 ERRORS = {
-    "combine": "That combine can't go ahead now: a worker is busy with one of its missions, or they moved on.",
-    "link": "Those two can't be linked: pick another mission, at least one of them not published yet.",
+    "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
+    "mcp_port": "A port is a number from 1024 to 65535.",
+    "combine": "Can't combine now: a mission is in use or has moved on.",
+    "link": "Can't link those two: at least one must be unpublished.",
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
-    "board_style": "Pick a surface, cards and string from the choices shown.",
+    "language": "Pick a language from the list.",
+    "board_style": "Pick a surface, cards and string.",
     "chat_color": "That colour wasn't a #rrggbb colour.",
     "slug": "Short name: lowercase letters, numbers and dashes only.",
     "exists": "A mission with that short name already exists.",
-    "notes": "Say what needs fixing so the agent can act on it.",
-    "state": "That mission isn't waiting for that action any more.",
+    "notes": "Add notes on what to fix.",
+    "state": "That action no longer applies.",
     "running": "The loop is already running.",
-    "every": "Give the rest between looks for work in whole minutes.",
-    "top_n": "Pick how many passages a library search returns from the list.",
+    "every": "Enter whole minutes.",
+    "top_n": "Pick a number from the list.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
-    "epic_target": "Pick a different, approved epic to move them to.",
-    "site_url": "The site address must be a full http:// or https:// address, or empty.",
+    "epic_target": "Pick a different approved epic.",
+    "site_url": "Enter a full http(s):// address, or leave it empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
-    "worker_model": "Pick a model one of the connected providers offers.",
-    "provider": "There is no such model provider.",
-    "ollama_empty": "Ollama is running but has no models yet. Pull one first, e.g. ollama pull <model>, then connect again.",
-    "ollama_host": "The Ollama address must be a full http:// or https:// address, or empty for the default.",
-    "server": "A server address must be a full http:// or https:// address, or empty for the default.",
-    "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
-    "worker_count": f"A worker count is a whole number from 1 to {settings.MAX_COUNT}.",
-    "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
+    "worker_model": "Pick a model from the list.",
+    "provider": "Unknown provider.",
+    "ollama_empty": "Ollama has no models. Pull one first (ollama pull <model>).",
+    "ollama_host": "Enter a full http(s):// address, or leave it empty.",
+    "server": "Enter a full http(s):// address, or leave it empty.",
+    "worker_last": "At least one worker must stay on.",
+    "worker_count": "Enter a whole number from 1 to {max}.",
+    "ollama": "Can't reach Ollama. Start it and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
-    "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
-    "places": "Tick at least one place to publish it to.",
+    "github_app": "That isn't a valid OAuth client ID.",
+    "places": "Pick at least one place.",
     "notready": "The loop can't start yet",
-    "search_key": "Brave refused that key. Copy it again from your Brave Search API dashboard.",
-    "search_format": "That doesn't look like a Brave API key: paste it without spaces.",
-    "publication": f"Too long: the name can be {settings.NAME_MAX} characters, the tagline {settings.TAGLINE_MAX} "
-                   f"and the About statement {settings.ABOUT_MAX}.",
+    "search_key": "Brave refused that key.",
+    "search_format": "That isn't a Brave API key. Paste it without spaces.",
+    "publication": "Too long. Limits: name {name}, tagline {tagline}, About {about} characters.",
 }
 
 # ---------- loop status ----------
@@ -199,43 +207,46 @@ def tone(m: Mission) -> str:
 
 def label(m: Mission) -> str:
     if m.state == State.DONE and m.publish_requests:
-        return "Publishing again"
+        return _("Publishing again")
     if m.state == State.BRIEF_READY and m.approved:
-        return "Approved, writing next"
+        return _("Approved")
     if m.state == State.ARTICLE_READY and m.reviewed:
-        return "Publishing next"
-    return LABELS[m.state]
+        return _("Publishing next")
+    return _(LABELS[m.state])
 
 def next_step(m: Mission) -> str:
     if m.state == State.BRIEF_READY and not m.approved:
-        return "Read the brief, then approve it or send it back."
+        return _("Brief needs review")
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        rated = f"{m.article_rating.summary()}. " if m.article_rating else ""
-        return rated + "Read the article, then publish it or send it back."
+        rated = f"{rating_summary(m.article_rating)} · " if m.article_rating else ""
+        return rated + _("Article needs review")
     if m.state == State.PARKED:
-        stage = "writing" if orchestrator.parked_while_writing(m) else "research"
-        then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
-        return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
+        stopped = (_("Stopped after {n} writing attempts") if orchestrator.parked_while_writing(m)
+                   else _("Stopped after {n} research attempts"))
+        return stopped.format(n=m.max_attempts)
     if m.state == State.RESEARCHING:
         if m.brief_sources:
-            doing = "Writing the brief's claims from its checked sources."
+            doing = _("Writing claims")
         elif m.brief_pick:
-            doing = "Checking the sources picked for the brief."
+            doing = _("Checking sources")
         elif m.gathered or m.interrupted_brief:
-            doing = "Writing the brief from its sources."
+            doing = _("Writing brief")
         else:
-            doing = "Carrying on the paused search." if m.search_paused else "Finding sources."
+            doing = _("Resuming search") if m.search_paused else _("Finding sources")
         same = m.gathered or m.interrupted_brief or m.search_paused   # the attempt already counted carries on
         try_ = m.attempts if same else m.attempts + 1
-        return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
+        attempt = _("attempt {n} of {total}").format(n=try_, total=m.max_attempts)
+        return f"{doing} · {attempt}" if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
         if m.checked_article:
-            return f"Rating the article that passed its check on attempt {m.write_attempts} of {m.max_attempts}."
-        done = (f" {len(m.article_draft.sections)} of {len(m.article_draft.plan.sections)} sections written."
+            return _("Rating the article") + " · " + _("attempt {n} of {total}").format(n=m.write_attempts, total=m.max_attempts)
+        attempt = _("attempt {n} of {total}").format(n=m.write_attempts + 1, total=m.max_attempts)
+        done = (" · " + _("{n} of {total} sections").format(n=len(m.article_draft.sections),
+                                                           total=len(m.article_draft.plan.sections))
                 if m.article_draft else "")
-        return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}.{done}"
+        return f'{_("Writing")} · {attempt}{done}'
     if m.state == State.DONE and m.publish_requests:
-        return "To " + ", ".join(orchestrator.channel_name(k) for k in m.publish_requests) + ", ahead of everything else."
+        return _("To {places}").format(places=", ".join(_(orchestrator.channel_name(k)) for k in m.publish_requests))
     return ""
 
 def in_progress(m: Mission) -> bool:
@@ -260,7 +271,18 @@ def _article(slug: str) -> Article | None:
 def working_on(m: Mission, now: list[dict]) -> str:
     """A line saying which agent is on this mission right now, or "" if none is."""
     e = next((e for e in now or [] if e["slug"] == m.slug), None)
-    return f'{activity.AGENTS[e["agent"]]} is working on this now.' if e else ""
+    return _("{agent} working now").format(agent=agent_name(e["agent"])) if e else ""
+
+def agent_name(agent: str) -> str:
+    return _(activity.AGENTS[agent])
+
+def worker_name(worker: str) -> str:
+    return _(settings.WORKERS[worker])
+
+def seat_name(seat: str) -> str:
+    """A worker copy's name in the UI's language ("Research Assistant 2"); "" for a seat that is no worker's."""
+    worker, _sep, n = seat.partition("-")
+    return f"{_(settings.WORKERS[worker])} {n}".strip() if worker in settings.WORKERS else ""
 
 def elapsed(since: float) -> str:
     seconds = max(0, int(time.time() - since))
@@ -631,6 +653,12 @@ main:has(.settings) { max-width: 72rem; }
 .set h3.part { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase;
                letter-spacing:.08em; color:var(--muted); margin:2rem 0 .6rem; scroll-margin-top:1.25rem; }
 .set h3.part .ico { width:1.05rem; height:1.05rem; color:var(--fg); }
+.mcp .inline input[readonly] { flex:1 1 16rem; min-width:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; }
+.mcp pre.mcp-snippet { white-space:pre-wrap; word-break:break-all; font-size:.8rem; background:var(--quote);
+  padding:.6rem .75rem; border-radius:8px; margin:.5rem 0 .3rem; max-width:100%; overflow-x:auto; }
+.mcp ul.mcp-tools { padding-left:1.1rem; margin:.4rem 0; display:grid; gap:.3rem; }
+.mcp .warn { color:var(--accent); }
+.mcp p .ico { width:1rem; height:1rem; vertical-align:-.15rem; margin-right:.35rem; }
 .set > h2 + h3.part { margin-top:.4rem; }
 .set > h2 + .actions, .set > h2 + form.actions { margin-top:0; }
 .set .actions[id], .set form[id] { scroll-margin-top:1.25rem; }
@@ -684,7 +712,8 @@ const showElapsed = () => {
   });
   document.querySelectorAll("[data-ago]").forEach(e => {      // ui.ago, kept current; older dates stay as written
     const s = Date.now() / 1000 - Number(e.dataset.ago);
-    if (s < 86400) e.textContent = s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`;
+    const t = (k, n) => ((window.I18N || {})[k] || k).replace("{n}", n);
+    if (s < 86400) e.textContent = s < 60 ? t("just now") : s < 3600 ? t("{n}m ago", Math.floor(s / 60)) : t("{n}h ago", Math.floor(s / 3600));
   });
 };
 setInterval(showElapsed, 1000);
@@ -739,6 +768,47 @@ def asset(name: str) -> str:
 def script(name: str) -> str:
     return f'<script src="{asset(name)}" defer></script>'
 
+STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+def script_strings(name: str) -> list[str]:
+    """Every string literal inside a page script's tr(...) calls (assets/board.js, assets/avatars.js), ternaries
+    included, in the order written."""
+    code, out, i = (ASSETS / name).read_text(), [], 0
+    while (i := code.find("tr(", i)) != -1:
+        if i and (code[i - 1].isalnum() or code[i - 1] in "_$."):
+            i += 3
+            continue
+        depth, j = 0, i + 2
+        while j < len(code):               # to the matching ")", stepping over strings
+            c = code[j]
+            if c == '"':
+                j = code.index('"', j + 1) if code[j + 1] != '"' else j + 1
+                while code[j - 1] == "\\" and code[j - 2] != "\\":
+                    j = code.index('"', j + 1)
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if not depth:
+                    break
+            j += 1
+        out += [json.loads(f'"{m}"') for m in STRING.findall(code[i + 3:j])]
+        i = j
+    return list(dict.fromkeys(x for x in out if x.strip()))
+
+def script_i18n(name: str) -> str:
+    """The translations one page script needs, added to window.I18N before it runs (English needs none)."""
+    if i18n.current() == "en":
+        return ""
+    table = json.dumps({s: _(s) for s in script_strings(name)}, ensure_ascii=False).replace("</", "<\\/")
+    return f"<script>window.I18N = Object.assign(window.I18N || {{}}, {table});</script>"
+
+def lines_script() -> str:
+    """The researchers' lines in the UI's language (none for English), loaded before researchers.js."""
+    code = i18n.current()
+    name = f"lines/{code}.js"
+    return f'<script src="{asset(name)}"></script>' if code != "en" and (ASSETS / name).exists() else ""
+
 class FreshFiles(StaticFiles):
     """Static files the browser checks before every use. Without this a browser guesses how long a script stays
     good from its age, so after an update it can keep drawing with the old researchers for hours. With it, an
@@ -777,17 +847,17 @@ def loop_button() -> str:
     has nothing to do); pause asks it to stop after the current agent saves its work."""
     every = settings.loop_every()
     if not loop_running():
-        action, ico, text, dot = "start", "play", "Loop off", ""
-        title = f"Start the loop. When it has nothing to do it rests {every:g} min (Settings) before looking again."
+        action, ico, text, dot = "start", "play", _("Loop off"), ""
+        title = _("Start the loop")
     elif orchestrator.STOP_FLAG.exists():
-        action, ico, text, dot = "", "pause", "Stopping", "stopping"
-        title = "Stopping: the agent at work saves what it has (2 minutes at most), then the loop exits."
+        action, ico, text, dot = "", "pause", _("Stopping"), "stopping"
+        title = _("Stopping after the current task")
     elif waiting := doctor.waiting():
-        action, ico, text, dot = "stop", "pause", "Waiting", "stopping"
-        title = f"Waiting: {waiting['reason']}. It checks again every 30 seconds. Pause to stop it."
+        action, ico, text, dot = "stop", "pause", _("Waiting"), "stopping"
+        title = _("Waiting: {reason}. Checks again every 30 s. Pause to stop.").format(reason=waiting["reason"])
     else:
-        action, ico, text, dot = "stop", "pause", "Running", "on"
-        title = "Pause the loop. The agent at work saves what it has (2 minutes at most), then the loop stops."
+        action, ico, text, dot = "stop", "pause", _("Running"), "on"
+        title = _("Pause the loop")
     button = (f'<button class="play {dot or "off"}" title="{escape(title)}" aria-label="{escape(title)}"'
               f' onclick="this.form.back.value = location.pathname"{"" if action else " disabled"}>{icon(ico)}</button>')
     return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
@@ -798,12 +868,11 @@ def loop_button() -> str:
 def auto_switch() -> str:
     """Auto mode, in the top bar on every page: approves every brief and proposed epic, never publishing."""
     on = settings.auto_mode()
-    title = ("Auto mode: the loop approves every brief and every proposed epic for you. "
-             "Publishing an article always waits for you.")
+    title = _("Auto-approve briefs and new epics. Articles still need you to publish.")
     return (f'<form class="auto" method="post" action="/auto"><input type="hidden" name="back" value="/">'
             f'<label class="switch" title="{escape(title)}"><input type="checkbox" role="switch" name="auto" value="on"'
             f'{" checked" if on else ""} onchange="this.form.back.value = location.pathname; this.form.submit()">'
-            f'<span>Auto</span></label></form>')
+            f'<span>{_("Auto")}</span></label></form>')
 
 def html_attrs() -> str:
     """The theme and chat colour from the Settings page, on <html> so they apply before first paint. "system"
@@ -852,27 +921,43 @@ async function refresh() {{
   return true;
 }}
 </script>{ELAPSED_JS}""" if poll else ""
-    html = (f'<!doctype html><html lang="en"{html_attrs()}><head><meta charset="utf-8">'
+    html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title>{avatars.script_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
-            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/published">{ICON_SITE}Published</a>'
-            f'<a href="/board">{ICON_BOARD}Board</a>'
-            f'<a href="/settings">{ICON_SETTINGS}Settings</a>'
-            f'<a href="/about" target="_blank" title="How the desk works, on the published site">{icon("book")}About</a></span></nav>'
-            f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
+            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
+            f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
+            f'<a href="/board">{ICON_BOARD}{_("Board")}</a>'
+            f'<a href="/settings">{ICON_SETTINGS}{_("Settings")}</a>'
+            f'<a href="/about" target="_blank" title="{escape(_("How it works, on the published site"), quote=True)}">{icon("book")}{_("About")}</a></span></nav>'
+            f"{body}</main>{js_strings()}{lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
+
+JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
+              "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
+              "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed", "Show", "Hide", "Press Ctrl/Cmd-C",
+              "just now", "{n}m ago", "{n}h ago"]
+
+def js_strings() -> str:
+    """The few strings the page's scripts show, in the UI's language (window.I18N; English needs none)."""
+    if i18n.current() == "en":
+        return ""
+    table = {s: _(s) for s in JS_STRINGS}
+    return f"<script>window.I18N = Object.assign(window.I18N || {{}}, {json.dumps(table, ensure_ascii=False).replace('</', '<\\/')});</script>"
 
 def flash(request: Request) -> str:
     done, err = request.query_params.get("done"), request.query_params.get("error")
     if err == "notready":
         why = (doctor.waiting() or {}).get("reason", "")
-        return f'<div class="flash err">{escape(ERRORS[err])}{": " + escape(why) if why else ""}.</div>'
+        return f'<div class="flash err">{escape(_(ERRORS[err]))}{": " + escape(why) if why else ""}.</div>'
     if err in ERRORS:
-        return f'<div class="flash err">{escape(ERRORS[err])}</div>'
+        text = _(ERRORS[err])
+        for key, value in (("{max}", settings.MAX_COUNT), ("{name}", settings.NAME_MAX),
+                           ("{tagline}", settings.TAGLINE_MAX), ("{about}", settings.ABOUT_MAX)):
+            text = text.replace(key, str(value))
+        return f'<div class="flash err">{escape(text)}</div>'
     if done in MESSAGES:
-        return f'<div class="flash">{escape(MESSAGES[done])}</div>'
+        return f'<div class="flash">{escape(_(MESSAGES[done]))}</div>'
     return ""
 
 def strip_step(agent: str) -> str:
@@ -880,13 +965,13 @@ def strip_step(agent: str) -> str:
     return "publisher" if agent in ("1f916", "github", "bluesky") else agent
 
 def doing(e: dict) -> str:
-    """What one working agent is doing, e.g. "Source finder is working on <topic> · 2m 3s"."""
+    """What one working agent is doing, e.g. "Source finder · <topic> · 2m 3s"."""
     since = f' · <span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>'
     if not e["slug"]:                      # the Theorist and the mission finder work for the desk, not one mission
-        task = "is looking across the desk for patterns" if e["agent"] == "theorist" else "is looking for new missions"
-        return f'<strong>{activity.AGENTS[e["agent"]]}</strong> {task}{since}'
+        task = _("all missions") if e["agent"] == "theorist" else _("new missions")
+        return f'<strong>{agent_name(e["agent"])}</strong> · {task}{since}'
     m = store.get_mission(e["slug"])
-    return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> is working on '
+    return (f'<strong>{agent_name(e["agent"])}</strong> · '
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
 def took(seconds: float) -> str:
@@ -901,34 +986,33 @@ def ago(at: float) -> str:
     """When a step ended, from now: "just now", "5m ago", "2h ago", else the date."""
     s = time.time() - float(at)
     if s < 60:
-        return "just now"
+        return _("just now")
     if s < 3600:
-        return f"{int(s // 60)}m ago"
+        return _("{n}m ago").format(n=int(s // 60))
     if s < 86400:
-        return f"{int(s // 3600)}h ago"
-    return datetime.fromtimestamp(float(at)).strftime("%b %-d, %H:%M")
+        return _("{n}h ago").format(n=int(s // 3600))
+    return datetime.fromtimestamp(float(at)).strftime("%Y-%m-%d %H:%M")
 
-PAST = {"theorist": "looked across the desk for patterns", "finder": "looked for new missions"}
+PAST = {"theorist": "all missions", "finder": "new missions"}     # what a desk-wide agent worked on, as doing() says it
 OUTCOME = {"failed": "failed", "stopped": "stopped"}
 
 def step_task(e: dict, topics: dict[str, str]) -> str:
-    """What a finished step did: "worked on <topic>" (a link), or what a desk-wide agent did."""
+    """What a finished step worked on: its mission (a link), or all missions / new missions for a desk-wide agent."""
     if not e.get("slug"):
-        return PAST.get(e["agent"], "worked for the desk")
-    return (f'worked on <a href="/m/{quote(e["slug"])}">'
-            f'{escape(topics.get(e["slug"], e["slug"]))}</a>')
+        return _(PAST.get(e["agent"], "all missions"))
+    return f'<a href="/m/{quote(e["slug"])}">{escape(topics.get(e["slug"], e["slug"]))}</a>'
 
 def step_outcome(e: dict) -> str:
     kind = e.get("outcome", "done")
     if kind not in OUTCOME:
         return ""
     why = f' title="{escape(e.get("why", ""), quote=True)}"' if e.get("why") else ""
-    return f' · <span class="out {kind}"{why}>{OUTCOME[kind]}</span>'
+    return f' · <span class="out {kind}"{why}>{_(OUTCOME[kind])}</span>'
 
 def past_step(e: dict, topics: dict[str, str]) -> str:
-    """One finished step: "Source finder worked on <topic> · took 4m 12s · 3m ago"."""
-    return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> {step_task(e, topics)}'
-            f' · took {took(e["ended"] - e["since"])}{step_outcome(e)}'
+    """One finished step: "Source finder · <topic> · took 4m 12s · 3m ago"."""
+    return (f'<strong>{agent_name(e["agent"])}</strong> · {step_task(e, topics)}'
+            + ' · ' + _("took {time}").format(time=took(e["ended"] - e["since"])) + step_outcome(e) +
             f' · <span class="ago" data-ago="{float(e["ended"])}">{ago(e["ended"])}</span>')
 
 RECENT_STEPS = 3                           # finished steps shown under the strip
@@ -937,16 +1021,16 @@ def flow_status(now: list[dict], running: bool, topics: dict[str, str] | None = 
     """The brief log under the strip: who is working on what and for how long (with more than one worker busy,
     one line each, named), then the last few finished steps, with how long each took, and a link to the full log
     (activity.LOG, on /log)."""
-    lines = [f'<li class="live">' + (f'<span class="who">{settings.seat_name(e["worker"])}</span> '
-             if settings.seat_name(e["worker"]) and len(now) > 1 else "") + doing(e) + "</li>" for e in now]
+    lines = [f'<li class="live">' + (f'<span class="who">{seat_name(e["worker"])}</span> '
+             if seat_name(e["worker"]) and len(now) > 1 else "") + doing(e) + "</li>" for e in now]
     if not lines:
-        idle = "No agent is working right now." if running else "Loop is off, so every step is idle."
+        idle = _("Idle") if running else _("Loop off")
         lines.append(f'<li class="live idle">{idle}</li>')
     if topics is None:
         topics = {m.slug: m.topic for m in store.all_missions()}
     lines += [f'<li class="past">{past_step(e, topics)}</li>' for e in activity.recent(RECENT_STEPS)]
     return (f'<ul class="steps">{"".join(lines)}</ul>'
-            f'<a class="steps-all" href="/log">Full log &rarr;</a>')
+            f'<a class="steps-all" href="/log">' + _("Full log") + ' &rarr;</a>')
 
 def flow_state() -> dict:
     """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
@@ -963,7 +1047,7 @@ def flow_state() -> dict:
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
-                     "name": activity.AGENTS[e["agent"]]} for e in now],
+                     "name": agent_name(e["agent"])} for e in now],
         "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
@@ -987,47 +1071,45 @@ def flow_strip(state: dict) -> str:
     attrs = f'data-shape="{",".join(k + ("*" if kind == "auto" else "") for k, kind, _ in steps)}" ' \
             f'data-working="{escape(working, quote=True)}"'
     off = "" if state["running"] else " off"
-    return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
+    return (f'<section id="flow" class="flow{off}" {attrs} aria-label="{_("Pipeline")}">'
             f'<div class="flow-scroll"><div class="flow-track"{lab}>{track}</div></div>'
             f'<div class="now" aria-live="polite">{state["now"]}</div></section>')
 
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
     if running and stopping:
-        state, dot = "Loop is stopping: saving the current work (2 minutes at most)", "stopping"
+        state, dot = _("Stopping after the current task"), "stopping"
         controls = ""
     elif running and (waiting := doctor.waiting()):
-        state, dot = (f'Loop is waiting: {escape(waiting["reason"])}. It checks again every 30 seconds. '
-                      f'<a href="/settings#setup">Settings → Setup</a> shows what to fix'), "stopping"
+        state = _("Loop waiting: {reason}. Checks again every 30 s.").format(reason=escape(waiting["reason"]))
+        state, dot = f'{state} <a href="/settings#setup">{_("Settings → Setup")}</a>', "stopping"
         controls = ""
     elif running:
-        state, dot = "Loop is running. Pause it with the button at the top of the page", "on"
+        state, dot = _("Loop running"), "on"
         controls = (f'<form method="post" action="/loop/wake"><input type="hidden" name="back" value="{back}">'
-                    f'<button>Check for work now</button></form>')
+                    f'<button>{_("Check for work now")}</button></form>')
     else:
-        state, dot = ("Loop is off. Nothing will be researched, written or published until you press play at the "
-                      "top of the page"), ""
+        state, dot = _("Loop off. Press play at the top to start."), ""
         controls = ""
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
             f'{flow_strip(flow_state())}</div>{script("flow.js")}')   # flow.js keeps the pipeline strip live
 
 def finder_panel() -> str:
     line = store.get_inspiration()
-    state = ("Each time the loop has caught up on its missions, the finder searches around this line and adds 1 to 3 "
-             "missions. The Theorist evolves it as the desk's work grows: questions only, keeping your words.") if line \
-        else "Off until you set a line."
-    think = ('<button formaction="/theorist" title="Look across the desk and evolve the line on the loop\'s next run">'
-             'Ask the Theorist</button>') if line else ""
-    return heading("brain", "Inspiration") + f"""<form method="post" action="/inspiration" class="actions">
-  <label for="inspiration" style="margin-top:0"><span class="hint">{state} Clear it to turn the finder and the Theorist off.</span></label>
-  <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="e.g. Who really decides what the Federal Reserve does?">
-  <p><button>Save inspiration</button>{think}</p>{theorist_notes()}
+    state = _("The mission finder searches from this line. Empty turns the finder and Theorist off.")
+    think = (f'<button formaction="/theorist" title="{escape(_("Run the Theorist on the next loop pass"))}">'
+             f'{_("Run Theorist")}</button>') if line else ""
+    example = escape(_("e.g. Who really decides what the Federal Reserve does?"), quote=True)
+    return heading("brain", _("Inspiration")) + f"""<form method="post" action="/inspiration" class="actions">
+  <label for="inspiration" style="margin-top:0"><span class="hint">{state}</span></label>
+  <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="{example}">
+  <p><button>{_("Save")}</button> {think}</p>{theorist_notes()}
 </form>"""
 
 def _when(at: str) -> str:
     return escape(at[:16].replace("T", " ")) + " UTC" if at else ""
 
-BY = {"human": "you", "chat": "the chat assistant", "theorist": "the Theorist"}   # who changed the line
+BY = {"human": "you", "chat": "Researcher Chat", "theorist": "Theorist"}   # who changed the line
 
 def theorist_notes() -> str:
     """The Theorist's last turn and how the line got here, folded away under the inspiration box."""
@@ -1036,82 +1118,88 @@ def theorist_notes() -> str:
         return ""
     parts = []
     if last.get("kind") == "board":        # a board turn, then the turn before it that looked across the desk
+        board = f'<a href="/board">{_("board")}</a>'
         if last.get("failed"):
-            parts.append(f'<p class="muted">Last turn {_when(last["at"])} was a <a href="/board">board</a> turn and '
-                         f'failed: {escape(last["failed"])}</p>')
+            failed = _("Last turn {when} ({board}) failed: {error}").format(
+                when=_when(last["at"]), board=board, error=escape(last["failed"]))
+            parts.append(f'<p class="muted">{failed}</p>')
         else:
             moved = last.get("moved", [])
             sized = sum(1 for mv in moved if mv.get("size") is not None)
-            what = (f"moved {len(moved)} note{'s' * (len(moved) != 1)}" + (f", resizing {sized}" if sized else "")
-                    if moved else "left every note where it was")
-            parts.append(f'<p class="muted">Last turn {_when(last["at"])} tidied the <a href="/board">board</a>: '
-                         f'{what}. {escape(last.get("why", ""))}</p>')
+            what = ((_n("moved {n} note", "moved {n} notes", len(moved))
+                     + (", " + _n("resized {n}", "resized {n}", sized) if sized else ""))
+                    if moved else _("moved nothing"))
+            tidied = _("Last turn {when} tidied the {board}: {what}.").format(when=_when(last["at"]), board=board, what=what)
+            parts.append(f'<p class="muted">{tidied} {escape(last.get("why", ""))}</p>')
             if last.get("notes"):
-                parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+                parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
         last = last.get("ideas") or {}
         if last:
-            parts.append('<p class="hint">The turn before that looked across the desk:</p>')
+            parts.append(f'<p class="hint">{_("Turn before:")}</p>')
     if last.get("failed"):
-        parts.append(f'<p class="muted">Last turn {_when(last["at"])} failed: {escape(last["failed"])}</p>')
+        failed = _("Last run {when} failed: {error}").format(when=_when(last["at"]), error=escape(last["failed"]))
+        parts.append(f'<p class="muted">{failed}</p>')
     elif last:
-        parts.append(f'<p class="muted">Last turn {_when(last["at"])}. {escape(last.get("why", ""))}</p>')
+        parts.append(f'<p class="muted">{_("Last run {when}.").format(when=_when(last["at"]))} '
+                     f'{escape(last.get("why", ""))}</p>')
         if last.get("patterns"):
-            parts.append("<p>Patterns it saw:</p><ul>" + "".join(f"<li>{escape(p)}</li>" for p in last["patterns"])
+            parts.append(f'<p>{_("Patterns:")}</p><ul>' + "".join(f"<li>{escape(p)}</li>" for p in last["patterns"])
                          + "</ul>")
-        made = [f"proposed the epic <strong>{escape(t)}</strong> (waiting for you below)" for t in last.get("epics", [])]
+        made = [f'<li>{_("Proposed epic")} <strong>{escape(t)}</strong></li>' for t in last.get("epics", [])]
         m = store.get_mission(last["mission"]) if last.get("mission") else None
         if m:
-            made.append(f'proposed the mission <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>')
+            made.append(f'<li>{_("Proposed mission")} <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a></li>')
         c = store.get_combine(last["combine"]) if last.get("combine") else None
         if c:
-            made.append(f"proposed combining {len(c.members)} missions into <strong>{escape(c.topic)}</strong>"
-                        + (" (waiting for you below)" if c.status == "proposed" else f" ({c.status})"))
+            state = {"proposed": _("waiting for you"), "approved": _("approved"),
+                     "rejected": _("rejected")}.get(c.status, c.status)
+            made.append(f'<li>{_("Proposed combining {n} missions into").format(n=len(c.members))} '
+                        f'<strong>{escape(c.topic)}</strong> ({state})</li>')
         for a, b in last.get("links", []):
-            made.append(f'linked {mission_link(a)} and {mission_link(b)}')
+            made.append(f'<li>{_("Linked")} {mission_link(a)} · {mission_link(b)}</li>')
         if made:
-            parts.append(f"<p>It {', and '.join(made)}.</p>")
+            parts.append(f"<ul>{''.join(made)}</ul>")
         if last.get("lookups"):
-            parts.append("<p>It searched the library for:</p><ul>" + "".join(f"<li>{escape(q)}</li>"
-                                                                            for q in last["lookups"]) + "</ul>")
+            parts.append(f"<p>{_('Library searches:')}</p><ul>" + "".join(f"<li>{escape(q)}</li>"
+                                                                   for q in last["lookups"]) + "</ul>")
         if last.get("notes"):
-            parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+            parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
     if history:
         rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
-                       f'{BY.get(h.get("by"), "the Theorist")}:</span> '
-                       f'{escape(h.get("line") or "(cleared)")}</li>' for h in reversed(history))
-        parts.append(f"<p>The line over time, newest first:</p><ul>{rows}</ul>")
-    return f'<details><summary>{icon("bulb")}Theorist\'s notes</summary>{"".join(parts)}</details>'
+                       f'{_(BY.get(h.get("by"), "Theorist"))}:</span> '
+                       f'{escape(h.get("line") or _("(cleared)"))}</li>' for h in reversed(history))
+        parts.append(f'<p>{_("Line history, newest first:")}</p><ul>{rows}</ul>')
+    return f'<details><summary>{icon("bulb")}{_("Theorist\'s notes")}</summary>{"".join(parts)}</details>'
 
 
 def f916_status() -> str:
     """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
     if not agents.f916_enabled():
-        return ('1F916 is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
-                "or once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
+        return _("1F916 off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     queued, until, state = len(orchestrator.queue(f916)), f916.spent_until(), f916.load_state()
     if until and until > clock.now():
-        when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
+        when = _("next post after {when} UTC").format(when=f"{until:%b %-d %H:%M}")
     else:
-        when = "can post now" if queued else "nothing waiting"
+        when = _("ready") if queued else _("nothing queued")
     problem = state.get("note", "") if not state.get("spent_until") else ""
-    line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong> on {escape(f916.api())}, one article a day, newest first · '
-            f"{queued} queued · {when}")
-    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+    line = (f'1F916: <strong>{escape(f916.key()["handle"])}</strong> {_("on")} {escape(f916.api())} · {_("1 per day")} · '
+            f'{_("{n} queued").format(n=queued)} · {when}')
+    return line + (f'<br><span class="hint">{_("Last error:")} {escape(problem)}</span>' if problem else "")
+
+def SETTINGS_LINK() -> str:
+    return f'<a href="/settings#publishing">{_("Settings")}</a>'
 
 def bluesky_status() -> str:
     """One line on the Bluesky channel: who we post as, how many wait, and the last failure if any."""
     if not agents.bluesky_enabled():
-        return ('Bluesky is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
-                "or set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env and run "
-                "<code>python run.py check-bluesky</code>.")
+        return _("Bluesky off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
-    server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f" on {escape(bluesky._service())}"
-    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, at most one article every 10 minutes, "
-            f"newest first · {queued} queued")
+    server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f' {_("on")} {escape(bluesky._service())}'
+    line = (f'Bluesky: <strong>{escape(bluesky.handle())}</strong>{server} · {_("max 1 per 10 min")} · '
+            f'{_("{n} queued").format(n=queued)}')
     if not settings.site_url():
-        line += ('<br><span class="hint">No hosted address for the site, so posts link to the 1F916 copy when there '
-                 "is one and otherwise carry no link.</span>")
-    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+        line += f'<br><span class="hint">{_("No site address: posts link to 1F916, or nowhere.")}</span>'
+    return line + (f'<br><span class="hint">{_("Last error:")} {escape(problem)}</span>' if problem else "")
 
 def _link(url: str, text: str = "") -> str:
     return f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener">{escape(text or url)}</a>'
@@ -1119,25 +1207,25 @@ def _link(url: str, text: str = "") -> str:
 def github_status() -> str:
     """One line on the GitHub Pages channel: which repo, where the site is, the last push or failure."""
     if not agents.github_enabled():
-        return ('GitHub Pages is off. Connect GitHub on the <a href="/settings#publishing">Settings</a> page to put the site '
-                "online, so Bluesky posts link to each article.")
+        return _("GitHub Pages off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     state, repo = github.load_state(), github.repo()
-    line = (f"GitHub Pages: {_link(github.site_address())} from "
-            f"{_link(settings.github_url() + '/' + repo, repo)} · {len(orchestrator.queue(github))} queued")
+    line = (f'GitHub Pages: {_link(github.site_address())} {_("from")} '
+            f"{_link(settings.github_url() + '/' + repo, repo)} · "
+            f'{_("{n} queued").format(n=len(orchestrator.queue(github)))}')
     if state.get("at"):
-        line += f" · last push {escape(state['at'][:16].replace('T', ' '))}"
+        line += f' · {_("last push")} {escape(state["at"][:16].replace("T", " "))}'
     if state.get("pages_note"):
-        line += f'<br><span class="hint">To do: {escape(state["pages_note"])}</span>'
+        line += f'<br><span class="hint">{_("Action needed:")} {escape(state["pages_note"])}</span>'
     if state.get("note"):
-        line += f'<br><span class="hint">Last push failed: {escape(state["note"])}</span>'
+        line += f'<br><span class="hint">{_("Last push failed:")} {escape(state["note"])}</span>'
     return line
 def custom_status(c) -> str:
     """One line on a custom channel: what it sends where, and how many wait."""
     cfg = c.cfg
-    where = (f"POSTs to <code>{escape(urlparse(cfg['target']).netloc)}</code>" if cfg["kind"] == "webhook"
-             else f"writes files into <code>{escape(cfg['target'])}</code>")
-    fmt = settings.CUSTOM_FORMATS.get(cfg["format"], cfg["format"])
-    return f"{escape(c.NAME)}: {where} as {escape(fmt)}, newest first · {len(orchestrator.queue(c))} queued"
+    where = (f"{_('webhook')} <code>{escape(urlparse(cfg['target']).netloc)}</code>" if cfg["kind"] == "webhook"
+             else f"{_('folder')} <code>{escape(cfg['target'])}</code>")
+    fmt = _(settings.CUSTOM_FORMATS.get(cfg["format"], cfg["format"]))
+    return f'{escape(c.NAME)}: {where} · {escape(fmt)} · {_("{n} queued").format(n=len(orchestrator.queue(c)))}'
 
 def channel_status(c) -> str:
     if c.KEY == f916.KEY:
@@ -1167,34 +1255,33 @@ def places(m: Mission, queues: dict[str, list[str]] | None = None) -> list[dict]
             link = (f'<a href="{where}" target="_blank" rel="noopener">{where}</a>'
                     if post.where.startswith(("https://", "http://")) else
                     f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>' if key == "site" else where)
-            bits.append(f"{'written' if key == 'site' else 'posted'} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
+            bits.append(f"{_('written') if key == 'site' else _('posted')} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
         if key in m.publish_requests:
-            bits.append(f'<strong>publishing requested {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>, ahead of '
-                        "everything else")
+            bits.append(f'<strong>{_("requested")} {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>')
         elif not post and key in queues:
             slugs = queues[key]
-            bits.append(f"waiting, #{slugs.index(m.slug) + 1} of {len(slugs)} in the queue" if m.slug in slugs
-                        else "waiting for the feed to carry its text")
+            bits.append(_("queued, #{n} of {total}").format(n=slugs.index(m.slug) + 1, total=len(slugs))
+                        if m.slug in slugs else _("waiting for feed"))
         if m.channel_errors.get(key):
-            bits.append(f"refused the last try: {escape(m.channel_errors[key])}")
-        out.append({"key": key, "name": orchestrator.channel_name(key), "posted": bool(post),
-                    "on": key == "site" or key in queues, "status": " · ".join(bits) or "not posted"})
+            bits.append(f'{_("refused:")} {escape(m.channel_errors[key])}')
+        out.append({"key": key, "name": _(orchestrator.channel_name(key)), "posted": bool(post),
+                    "on": key == "site" or key in queues, "status": " · ".join(bits) or _("not posted")})
     return out
 
 def channel_names(m: Mission) -> str:
     """Where a published mission went, e.g. "Local site, 1F916"."""
-    return ", ".join(orchestrator.channel_name(k) for k in orchestrator.channels(m))
+    return ", ".join(_(orchestrator.channel_name(k)) for k in orchestrator.channels(m))
 
 def publish_form(m: Mission, rows: list[dict], back: str) -> str:
     """Publish a published article again: tick where. Places it hasn't reached yet are ticked already."""
     boxes = "".join(
         f'<label class="tick"><input type="checkbox" name="to" value="{escape(r["key"], quote=True)}"'
         f'{"" if r["posted"] and r["key"] != "site" else " checked"}> {escape(r["name"])}'
-        f'<span class="hint">{" (rewrite the page)" if r["key"] == "site" else " (again)" if r["posted"] else ""}</span></label>'
+        f'<span class="hint">{" " + _("(rebuild page)") if r["key"] == "site" else " " + _("(again)") if r["posted"] else ""}</span></label>'
         for r in rows if r["on"])
     return (f'<form method="post" action="/m/{quote(m.slug)}/republish" class="republish">'
             f'<input type="hidden" name="back" value="{escape(back, quote=True)}">{boxes}'
-            f'<button class="primary">Publish</button></form>')
+            f'<button class="primary">{_("Publish")}</button></form>')
 
 def places_html(m: Mission, rows: list[dict]) -> str:
     return "".join(f'<li><strong>{escape(r["name"])}</strong>: {r["status"]}</li>' for r in rows)
@@ -1202,17 +1289,17 @@ def places_html(m: Mission, rows: list[dict]) -> str:
 # ---------- settings: the two workers and the model providers ----------
 
 WORKER_BLURBS = {
-    "assistant": "Young, quick and tireless. Does the legwork: searching and reading pages, with the small model.",
-    "pi": "Tenured, slow and thorough. Does the thinking and the writing, with the big model.",
+    "assistant": "Small model. Searches and reads.",
+    "pi": "Big model. Thinks and writes.",
 }
 ROLE_STEPS = {                             # where each worker's model is used; the rest of the pipeline is code
-    "assistant": ["<strong>Source finder</strong>: searches the web and reads pages for each mission (up to 15 minutes)",
-                  "<strong>Mission finder</strong>: its searches around your inspiration line",
-                  "<strong>Contact finder</strong>: looks for people to interview (only while outreach is on)"],
-    "pi": ["<strong>Theorist</strong>: looks across every epic, post and mission and evolves your inspiration line",
-           "<strong>Brief writer</strong>: turns the gathered sources into the research brief",
-           "<strong>Article writer</strong>: writes the article from the approved brief",
-           "<strong>Mission finder</strong>: picks the new missions from what the searches found"],
+    "assistant": ["<strong>Source finder</strong>: searches and reads pages",
+                  "<strong>Mission finder</strong>: searches",
+                  "<strong>Contact finder</strong>: finds people (outreach only)"],
+    "pi": ["<strong>Theorist</strong>: refines the inspiration line",
+           "<strong>Brief writer</strong>: writes the brief",
+           "<strong>Article writer</strong>: writes the article",
+           "<strong>Mission finder</strong>: picks new missions"],
 }
 
 def gb(size: int) -> str:
@@ -1227,98 +1314,88 @@ def model_options(current: str, conn: dict, models: list[dict] | None = None) ->
         if m["size"]:
             bits.append(gb(m["size"]))
         if m["loaded"]:
-            bits.append("loaded")
+            bits.append(_("loaded"))
         groups.setdefault(m["provider"], []).append(
             f'<option value="{escape(m["ref"], quote=True)}"{" selected" if m["ref"] == current else ""}>'
             f'{" · ".join(bits)}</option>')
-    opts = [f'<optgroup label="{escape(settings.PROVIDERS[pid]["name"], quote=True)}">{"".join(o)}</optgroup>'
+    opts = [f'<optgroup label="{escape(provider_name(pid), quote=True)}">{"".join(o)}</optgroup>'
             for pid, o in groups.items()]
     if not current:                        # nothing chosen on this machine yet: the code has no default
-        opts.insert(0, '<option value="" selected disabled>Choose a model</option>')
+        opts.insert(0, f'<option value="" selected disabled>{_("Choose a model")}</option>')
     elif current not in {m["ref"] for m in models}:   # saved before, or its provider is closed: still show it
         pid, name = settings.split_model(current)
         if pid == settings.LOCAL:
-            missing = "not pulled" if conn["ok"] else "Ollama not reachable"
+            missing = _("not pulled") if conn["ok"] else _("Ollama not reachable")
         else:
-            missing = (f"{settings.PROVIDERS[pid]['name']} not connected" if not settings.provider_on(pid)
-                       else f"not offered by {settings.PROVIDERS[pid]['name']}")
+            prov = settings.PROVIDERS[pid]['name']
+            missing = (_("{provider} not connected").format(provider=prov) if not settings.provider_on(pid)
+                       else _("not offered by {provider}").format(provider=prov))
         opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
     return "".join(opts)
-
-def plural(worker: str) -> str:
-    """"a Research Assistant" or "3 Research Assistants"."""
-    n, name = settings.worker_count(worker), settings.WORKERS[worker]
-    return f"{n} {name}s" if n > 1 else f"the {name}"
 
 def count_stepper(worker: str) -> str:
     """How many of this worker run at once: − and + (assets: WORKER_COUNT_JS, which waits for the clicks to settle
     before saving) or a number typed in."""
-    n, top, name = settings.worker_count(worker), settings.MAX_COUNT, settings.WORKERS[worker]
-    hint = "at a time" if n == 1 else f"at a time, each on its own mission"
-    return f"""<label for="{worker}_count">How many</label>
+    n, top = settings.worker_count(worker), settings.MAX_COUNT
+    hint = _("each on its own mission") if n > 1 else ""
+    name = worker_name(worker)
+    fewer = escape(_("One fewer {worker}").format(worker=name), quote=True)
+    more = escape(_("One more {worker}").format(worker=name), quote=True)
+    return f"""<label for="{worker}_count">{_("Copies")}</label>
   <div class="stepper">
-    <span class="steps"><button type="button" data-step="-1" aria-label="One fewer {name}"{" disabled" if n <= 1 else ""}>&minus;</button><input type="number" id="{worker}_count" name="count" value="{n}" min="1" max="{top}" step="1" inputmode="numeric" onchange="this.form.requestSubmit()"><button type="button" data-step="1" aria-label="One more {name}"{" disabled" if n >= top else ""}>+</button></span>
+    <span class="steps"><button type="button" data-step="-1" aria-label="{fewer}"{" disabled" if n <= 1 else ""}>&minus;</button><input type="number" id="{worker}_count" name="count" value="{n}" min="1" max="{top}" step="1" inputmode="numeric" onchange="this.form.requestSubmit()"><button type="button" data-step="1" aria-label="{more}"{" disabled" if n >= top else ""}>+</button></span>
     <span class="hint">{hint}</span>
   </div>"""
 
 def worker_card(worker: str, conn: dict, now: list[dict], models: list[dict] | None = None) -> str:
     on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
-    name, other_name = settings.WORKERS[worker], settings.WORKERS[other]
-    steps = "".join(f"<li>{s}</li>" for s in ROLE_STEPS[worker])
+    name, other_name = worker_name(worker), worker_name(other)
+    steps = "".join(f"<li>{_(s)}</li>" for s in ROLE_STEPS[worker])
     if not on:
-        note = (f'<p class="note hint">Off: the {other_name} does these steps with '
-                f"<code>{escape(settings.worker_model(other) or 'its model')}</code>, one task at a time.</p>")
+        note = f'<p class="note hint">{_("Off. The {other} runs these steps.").format(other=other_name)}</p>'
     elif not model:
-        note = '<p class="note"><strong>No model chosen yet.</strong> The loop waits until this worker has one.</p>'
+        note = (f'<p class="note"><strong>{_("No model chosen yet.")}</strong> '
+                f'{_("The loop won\'t start without one.")}</p>')
     else:
-        extra = "" if settings.worker_on(other) else (f'<li>and, while the {other_name} is off, every one of '
-                                                      "its steps too</li>")
+        extra = "" if settings.worker_on(other) else f'<li>{_("The {other}\'s steps, while it\'s off").format(other=other_name)}</li>'
         steps += extra
         busy = [e for e in now if settings.seat_worker(e["worker"]) == worker]
         many = settings.worker_count(worker) > 1
-        note = "".join(f'<p class="note">Now{" (" + escape(settings.seat_name(e["worker"])) + ")" if many else ""}: '
+        note = "".join(f'<p class="note">{_("Now")}{" (" + escape(seat_name(e["worker"])) + ")" if many else ""}: '
                        f'{doing(e)}</p>' for e in busy)
     checked = " checked" if on else ""
     crew = (f'<div class="crew-wrap"><div class="crew" data-crew="{worker}" aria-hidden="true"></div>'
-            f'<a class="crew-edit" href="/avatars">{icon("pencil")}Customize</a></div>' if settings.animations() else "")
+            f'<a class="crew-edit" href="/avatars">{icon("pencil")}{_("Edit avatars")}</a></div>' if settings.animations() else "")
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
   <input type="hidden" name="worker" value="{worker}">
   <div class="head"><h3>{name}</h3>
-    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{name} on"></label></div>
-  <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
-  <label for="{worker}_model">Model</label>
+    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{escape(_("{name} on").format(name=name), quote=True)}"></label></div>
+  <p class="tagline hint">{_(WORKER_BLURBS[worker])}</p>
+  <label for="{worker}_model">{_("Model")}</label>
   <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn, models)}</select>
   {count_stepper(worker)}
-  <label>Uses this model for</label>
+  <label>{_("Steps")}</label>
   <ul>{steps}</ul>
   {note}<div class="grow"></div>
-  <noscript><p><button>Save</button></p></noscript>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
   {crew}
 </form>"""
 
 def workers_section(conn: dict, models: list[dict] | None = None) -> str:
     now = running_now()
-    a, p = (f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>" for w in settings.WORKERS)
-    if settings.parallel():
-        ra, pi = plural("assistant"), plural("pi")
-        lead = (f"Both workers are on, so they work at the same time whenever each has a task: {ra} "
-                f"search{'' if ra[0].isdigit() else 'es'} with {a} while {pi} write{'' if pi[0].isdigit() else 's'} "
-                f"with {p}.")
+    if settings.missing_models():          # the code has no models of its own: this machine picks them
+        lead = f'<strong>{_("Choose a model for each worker; the loop won\'t start until you do.")}</strong>'
+    elif settings.parallel():
+        lead = ""
     else:
         w = next(w for w in settings.WORKERS if settings.worker_on(w))
         n = settings.worker_count(w)
-        pace = "one task at a time" if n == 1 else f"{n} tasks at a time"
-        lead = (f"Only the {settings.WORKERS[w]} is on: it does every step with "
-                f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>, {pace}.")
-    if settings.missing_models():          # the code has no models of its own: this machine picks them
-        lead = ("<strong>Choose a model for each worker that is on; the loop won't start until you do.</strong> "
-                "Both on: they work at the same time whenever each has a task.")
-    else:
-        lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
+        lead = (_("Only the {worker} is on. It runs every step, one at a time.") if n == 1 else
+                _("Only the {worker} is on. It runs every step, {n} at a time.")).format(worker=worker_name(w), n=n)
     models = models if models is not None else llm.catalog(conn)
     cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
-    return (f'<p>{lead} The source checker, article checker and publisher are '
-            f'code and use no model.</p><div class="workers">{cards}</div>{WORKER_COUNT_JS}')
+    return (f'{f"<p>{lead}</p>" if lead else ""}'
+            f'<div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
 # The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
 # stop for a moment, so three quick clicks are one save, not three page loads.
@@ -1341,12 +1418,10 @@ document.querySelectorAll(".stepper").forEach(box => {
 
 def ollama_form() -> str:
     saved, env = settings.saved().get("ollama_host", ""), settings._env("OLLAMA_HOST")
-    source = ("from OLLAMA_HOST in .env" if env and not saved else
-              "saved on this page" if saved else "the standard local address")
     return f"""<form method="post" action="/settings/ollama" class="inline">
-  <label for="ollama_host" class="sr">Ollama address</label>
+  <label for="ollama_host" class="sr">{_("Ollama address")}</label>
   <input type="text" id="ollama_host" name="ollama_host" maxlength="300" value="{escape(saved, quote=True)}" placeholder="{escape(env or settings.OLLAMA_DEFAULT, quote=True)}">
-  <button>Save address</button><span class="hint">now {source}; empty goes back to .env or {settings.OLLAMA_DEFAULT}</span>
+  <button>{_("Save")}</button><span class="hint">{_("Empty uses {address}").format(address=escape(env or settings.OLLAMA_DEFAULT))}</span>
 </form>"""
 
 def model_users() -> dict[str, list[str]]:
@@ -1354,32 +1429,35 @@ def model_users() -> dict[str, list[str]]:
     users: dict[str, list[str]] = {}
     for w in settings.WORKERS:
         if settings.worker_on(w):
-            users.setdefault(settings.worker_model(w), []).append(settings.WORKERS[w])
+            users.setdefault(settings.worker_model(w), []).append(worker_name(w))
     return users
 
 def ollama_card(conn: dict) -> str:
     host = escape(conn["host"])
-    connect = """<form method="post" action="/settings/ollama-connect" class="actions"><button class="primary">Connect Ollama</button>
-  <span class="hint">checks that Ollama answers and gives each worker without a model one of its models: the biggest to the
-  Principal Investigator, the smallest to the Research Assistant</span></form>"""
+    connect = (f'<form method="post" action="/settings/ollama-connect" class="actions"><button class="primary">'
+               f'{_("Connect Ollama")}</button> <span class="hint">{_("Gives each worker without a model one of its models.")}'
+               f'</span></form>')
+    head = (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">{_("On this machine")}'
+            f'</span></div>')
     if not conn["ok"]:
-        return (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">On this machine</span>'
-                f'</div><p>Not reachable at <code>{host}</code> ({escape(conn["error"])}). Install it from '
-                f'<a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>, open the app and '
-                f'pull a model or two (<code>ollama pull &lt;model&gt;</code>), then connect. Running on another machine? '
-                f'Put its address below.</p>{connect}{ollama_form()}</div>')
+        link = '<a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>'
+        return (f'{head}<p>{_("Not reachable at {host} ({error}).").format(host=f"<code>{host}</code>", error=escape(conn["error"]))} '
+                f'{_("Install it from {link}, pull a model, then connect.").format(link=link)}</p>{connect}{ollama_form()}</div>')
     users = model_users()
     rows = "".join(
         f'<tr><td><code>{escape(m["name"])}</code></td><td class="size">{gb(m["size"])}</td>'
-        f'<td class="size">{"in memory, " + gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
+        f'<td class="size">{gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
         f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
     count = len(conn["models"])
-    table = (f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
-             f'<td class="when">Loaded</td><td class="when">Used by</td></tr>{rows}</table>' if rows else "")
-    lead = (f"Connected at <code>{host}</code> · {count} model{'' if count == 1 else 's'}. "
-            "<code>ollama pull &lt;model&gt;</code> adds more.")
-    return (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">On this machine</span>'
-            f'</div><p>{lead}</p>{connect if settings.missing_models() else ""}{ollama_form()}{table}</div>')
+    table = (f'<table class="events models"><tr><td class="when">{_("Model")}</td><td class="when">{_("Size")}</td>'
+             f'<td class="when">{_("In memory")}</td><td class="when">{_("Used by")}</td></tr>{rows}</table>' if rows else "")
+    lead = (_("Connected at {host}").format(host=f"<code>{host}</code>") + " · " + _n("{n} model", "{n} models", count))
+    return f'{head}<p>{lead}</p>{connect if settings.missing_models() else ""}{ollama_form()}{table}</div>'
+
+def provider_name(pid: str) -> str:
+    """A provider's name as shown: the brands as they are, the generic one in the UI's language."""
+    name = settings.PROVIDERS[pid]["name"]
+    return _(name) if pid == "custom" else name
 
 def cloud_card(pid: str) -> str:
     spec = settings.PROVIDERS[pid]
@@ -1387,20 +1465,21 @@ def cloud_card(pid: str) -> str:
     users = model_users()
     used = sorted({w for ref, ws in users.items() if settings.split_model(ref)[0] == pid for w in ws})
     if error:
-        status = f"Connected, but not answering just now: {escape(error)}"
+        status = _("Not answering: {error}").format(error=escape(error))
     else:
-        status = f"Connected · {len(names)} model{'' if len(names) == 1 else 's'}"
+        status = _("Connected") + " · " + _n("{n} model", "{n} models", len(names))
     if pid == "custom":
-        status += f" at <code>{escape(settings.provider_url(pid))}</code>"
+        status += f" · <code>{escape(settings.provider_url(pid))}</code>"
     if used:
-        status += f" · used by the {' and the '.join(used)}"
+        status += " · " + _("used by {workers}").format(workers=", ".join(used))
     if settings.provider_saved(pid):
         remove = (f'<form method="post" action="/settings/provider"><input type="hidden" name="do" value="forget">'
-                  f'<input type="hidden" name="provider" value="{pid}"><button>Disconnect {escape(spec["name"])}</button></form>')
+                  f'<input type="hidden" name="provider" value="{pid}"><button>'
+                  f'{_("Disconnect {provider}").format(provider=escape(provider_name(pid)))}</button></form>')
     else:
-        remove = f'<p class="hint">Set in .env; remove {escape(spec["key_env"])} there to turn it off.</p>'
-    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(spec["name"])}</h3><span class="badge">Cloud</span>'
-            f'</div><p>{status}. Its models are in each worker\'s list.</p>{remove}</div>')
+        remove = f'<p class="hint">{_("Set in .env ({key}).").format(key=escape(spec["key_env"]))}</p>'
+    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(provider_name(pid))}</h3><span class="badge">{_("Cloud")}</span>'
+            f'</div><p>{status}</p>{remove}</div>')
 
 def add_provider_forms() -> str:
     out = []
@@ -1408,35 +1487,30 @@ def add_provider_forms() -> str:
         if pid == settings.LOCAL or settings.provider_on(pid):
             continue
         spec = settings.PROVIDERS[pid]
-        get_key = (f' Get a key at <a href="{escape(spec["keys"], quote=True)}" target="_blank" rel="noopener">'
-                   f'{escape(spec["keys"].split("//")[-1].split("/")[0])}</a>.' if spec["keys"] else "")
-        env = f' Or put it in <code>.env</code> as <code>{escape(spec["key_env"])}</code>.' if spec["key_env"] else ""
+        get_key = (" " + _("Get a key at {link}.").format(
+            link=f'<a href="{escape(spec["keys"], quote=True)}" target="_blank" rel="noopener">'
+                 f'{escape(spec["keys"].split("//")[-1].split("/")[0])}</a>') if spec["keys"] else "")
+        env = " " + _("Or set {key} in .env.").format(key=f'<code>{escape(spec["key_env"])}</code>') if spec["key_env"] else ""
         url = ""
         if pid == "custom":
-            url = f"""<label for="url_{pid}">Address <span class="hint">the API's base, ending before /chat/completions, e.g. http://127.0.0.1:1234/v1</span></label>
+            url = f"""<label for="url_{pid}">{_("Address")} <span class="hint">{_("API base URL, before /chat/completions")}</span></label>
   <input type="text" id="url_{pid}" name="url" required maxlength="300" placeholder="http://127.0.0.1:1234/v1">"""
-        key_label = "API key" + (' <span class="hint">optional: only if the server asks for one</span>'
-                                  if spec.get("optional_key") else "")
+        key_label = _("API key") + (f' <span class="hint">{_("optional")}</span>' if spec.get("optional_key") else "")
         required = "" if spec.get("optional_key") else " required"
-        out.append(f"""<details class="pubbox add"><summary><strong>{escape(spec["name"])}</strong> · {escape(spec["blurb"])}</summary>
-<p>Pay as you go on your own account: each brief, article and search turn is billed by {escape(spec["name"])}.{get_key}
-The key is checked with {escape(spec["name"])}, then saved to <code>data/providers.json</code> on this machine only.{env}</p>
+        out.append(f"""<details class="pubbox add"><summary><strong>{escape(provider_name(pid))}</strong> · {escape(_(spec["blurb"]))}</summary>
+<p>{_("Billed per use by {provider}.").format(provider=escape(provider_name(pid)))}{get_key} {_("Key saved to data/providers.json.")}{env}</p>
 <form method="post" action="/settings/provider">
   <input type="hidden" name="do" value="connect"><input type="hidden" name="provider" value="{pid}">
   {url}
   <label for="key_{pid}">{key_label}</label>
   <input type="password" id="key_{pid}" name="key"{required} maxlength="500" autocomplete="off">
-  <p><button>Check and connect</button></p>
+  <p><button>{_("Connect")}</button></p>
 </form></details>""")
     return "".join(out)
 
 def connection_section(conn: dict) -> str:
     cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
-    return ("<p>The workers can use any model from the "
-            "providers connected here, and each worker can use a different one. Ollama runs free on this machine; a "
-            "cloud provider needs only its API key. Keys stay on this machine, in <code>data/providers.json</code> "
-            "or <code>.env</code>, and are never committed.</p>"
-            f'{cards}<h3 class="sub">Add a provider</h3>{add_provider_forms()}')
+    return f'{cards}<h3 class="sub">{_("Add a provider")}</h3>{add_provider_forms()}'
 
 EMBEDDY = re.compile(r"embed|bge|minilm|e5-|gte|arctic|mxbai|nomic", re.I)   # an Ollama embedding model's name
 
@@ -1444,10 +1518,10 @@ def library_section(conn: dict) -> str:
     """The desk's library (library.py): which provider and model embed its passages, and how many a search returns."""
     current, env = settings.embed_model(), settings._env(settings.EMBED_ENV)
     pid, name = settings.split_model(current) if current else ("none", "")
-    choices = [("none", "No embedding model: rank by words only")] + [
-        (p, settings.PROVIDERS[p]["name"]) for p in settings.embed_providers()]
+    choices = [("none", _("None: rank by words only"))] + [
+        (p, provider_name(p)) for p in settings.embed_providers()]
     if pid not in dict(choices):           # set to a provider since disconnected: keep it visible
-        choices.append((pid, settings.PROVIDERS.get(pid, {}).get("name", pid) + " (not connected)"))
+        choices.append((pid, _("{provider} not connected").format(provider=settings.PROVIDERS.get(pid, {}).get("name", pid))))
     opts = "".join(f'<option value="{p}"{" selected" if p == pid else ""}>{escape(label)}</option>' for p, label in choices)
     names = [(m["name"], "Ollama") for m in conn["models"] if EMBEDDY.search(m["name"])]
     for p in settings.embed_providers()[1:]:
@@ -1456,29 +1530,35 @@ def library_section(conn: dict) -> str:
                           for n, label in names)
     tops = "".join(f'<option value="{n}"{" selected" if n == settings.library_top_n() else ""}>{n}</option>'
                    for n in settings.TOP_N_CHOICES)
-    source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and settings.saved().get("embed_model") in (None, "")
-              else "")
-    now = f" Embedding model: <code>{escape(current)}</code>{source}." if current else ""
-    return f"""{part("book", "Library", "library")}
-<p>The Theorist and Researcher Chat search the desk's library before they reason: every mission's objective, each
-brief's claims with the quotes they cite, counterpoints and sources, and every article section. It always ranks by
-words; an embedding model adds ranking by meaning. It keeps itself up to date and lives in <code>data/library.db</code>
-on this machine.</p>
-<div class="pubbox channel"><div class="head"><h3>Index</h3><span class="badge">On this machine</span></div>
-<p>{escape(library.summary())}.{now}</p>
+    from_env = env and current == env and settings.saved().get("embed_model") in (None, "")
+    source = " " + _("(from {key} in .env)").format(key="MISSION_LOOP_EMBED_MODEL") if from_env else ""
+    now = (" " + _("Embedding model: {model}").format(model=f"<code>{escape(current)}</code>") + f"{source}.") if current else ""
+    intro = _("Missions, briefs, sources and articles, searched by the Theorist and Researcher Chat. "
+              "Ranks by words; an embedding model adds meaning. Stored in {file}.").format(file="<code>data/library.db</code>")
+    return f"""{part("book", _("Library"), "library")}
+<p>{intro}</p>
+<div class="pubbox channel"><div class="head"><h3>{_("Index")}</h3><span class="badge">{_("On this machine")}</span></div>
+<p>{library_line()}{now}</p>
 <form method="post" action="/settings/library" class="inline"><input type="hidden" name="do" value="index">
-  <button>Index now</button><span class="hint">embeds every new passage now instead of a minute's worth per search</span></form></div>
+  <button>{_("Index now")}</button><span class="hint">{_("embeds every new passage now")}</span></form></div>
 <form method="post" action="/settings/library">
   <input type="hidden" name="do" value="save">
-  <label for="embed_provider">Embedding provider <span class="hint">Ollama, or a connected provider with embeddings (Anthropic, DeepSeek and Groq have none)</span></label>
+  <label for="embed_provider">{_("Embedding provider")} <span class="hint">{_("Anthropic, DeepSeek and Groq have none")}</span></label>
   <select id="embed_provider" name="provider">{opts}</select>
-  <label for="embed_model">Embedding model <span class="hint">e.g. an Ollama embedding model you pulled, or the provider's own; checked before it is saved</span></label>
+  <label for="embed_model">{_("Embedding model")} <span class="hint">{_("checked before saving")}</span></label>
   <input type="text" id="embed_model" name="model" maxlength="200" list="embed_models" value="{escape(name, quote=True)}" autocomplete="off">
   <datalist id="embed_models">{suggestions}</datalist>
-  <label for="top_n">Passages per search (top N) <span class="hint">more gives the agents more to reason from and costs more of their context</span></label>
+  <label for="top_n">{_("Passages per search")} <span class="hint">{_("more context, more cost")}</span></label>
   <select id="top_n" name="top_n">{tops}</select>
-  <p><button>Save</button></p>
+  <p><button>{_("Save")}</button></p>
 </form>"""
+
+def library_line() -> str:
+    st = library.status()
+    line = _("{passages} passages from {missions} missions").format(passages=st["passages"], missions=st["missions"])
+    how = (_("{done} of {total} embedded").format(done=st["embedded"], total=st["passages"]) if st["model"]
+           else _("ranked by words only"))
+    return f"{line} · {how}."
 
 def index_now() -> threading.Thread:
     """Bring the whole library up to date in the background, embedding everything new (searches do a minute's worth)."""
@@ -1532,7 +1612,7 @@ async def save_provider(request: Request) -> Response:
     pid, do = str(form.get("provider") or ""), str(form.get("do") or "")
     if pid not in settings.PROVIDERS or pid == settings.LOCAL:
         return go("/settings", error="provider")
-    name = settings.PROVIDERS[pid]["name"]
+    name = provider_name(pid)
     if do == "forget":
         settings.forget_provider(pid)
         providers.forget_models(pid)
@@ -1541,18 +1621,18 @@ async def save_provider(request: Request) -> Response:
     try:
         url = settings._http_address(url) if url else ""
         if not key and not settings.PROVIDERS[pid].get("optional_key"):
-            raise ValueError("paste the API key")
+            raise ValueError(_("paste the API key"))
         if any(c.isspace() for c in key):
-            raise ValueError("that doesn't look like an API key")
+            raise ValueError(_("that doesn't look like an API key"))
         if not url and not settings.PROVIDERS[pid]["url"]:
-            raise ValueError("say where the server is")
+            raise ValueError(_("enter the server address"))
         found = await run_in_threadpool(providers.list_models, pid, key, url or settings.PROVIDERS[pid]["url"])
         settings.save_provider(pid, key, url)
     except (ValueError, providers.ProviderError) as e:
-        return page("Settings", settings_body(request, f"{name} was not connected: {e}"))
+        return page(_("Settings"), settings_body(request, _("{provider} not connected: {error}").format(provider=name, error=e)))
     providers.forget_models(pid)
     if not found:
-        return page("Settings", settings_body(request, f"{name} is connected, but offered no chat models to this key."))
+        return page(_("Settings"), settings_body(request, _("{provider} connected, but offers no chat models for this key.").format(provider=name)))
     return go("/settings", done="provider_on")
 
 async def save_worker(request: Request) -> Response:
@@ -1600,42 +1680,44 @@ GITHUB_LOGIN: dict = {}                     # the GitHub sign-in in progress (st
 def github_row() -> str:
     """The GitHub Pages channel on the Settings page: one step at a time, connect, then pick the repo."""
     if os.environ.get("MISSION_LOOP_STUBS") == "1":
-        return "<p>GitHub Pages is off while MISSION_LOOP_STUBS=1, so a test run never publishes for real.</p>"
+        return f"<p>{_(STUB_RUN)}</p>"
     gh = escape(settings.github_url(), quote=True)
     if github.enabled():
         return f"""<p>{github_status()}</p>
-<p class="hint">Each time the loop publishes, whatever changed in <code>site/</code> is pushed to the repo as one commit.
-The repo holds the site and nothing else.</p>
+<p class="hint">{_("Changes in site/ are pushed after each publish.")}</p>
 <form method="post" action="/settings/github" class="actions inline-buttons">
-  <button name="do" value="unlink">Use a different repo</button> <button name="do" value="forget">Disconnect GitHub</button>
+  <button name="do" value="unlink">{_("Use a different repo")}</button> <button name="do" value="forget">{_("Disconnect GitHub")}</button>
 </form>"""
     if github.connected():
         name = escape(github.suggested_name(), quote=True)
-        return f"""<p>Connected as <strong>{escape(github.login_name())}</strong>. Last step: the repo the site goes to.
-Everything in it is replaced by the site, so use a new or empty public repo.</p>
+        served = _("{repo} is served at {address}").format(
+            repo=f"<code>{escape(github.suggested_name())}</code>",
+            address=escape(github.pages_address(github.login_name() + "/" + github.suggested_name())))
+        connected = _("Connected as {login}.").format(login=f"<strong>{escape(github.login_name())}</strong>")
+        return f"""<p>{connected} {_("Choose a repo for the site. Its contents will be replaced, so use a new or empty public repo.")}</p>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="create">
-  <label for="gh_name" style="margin-top:0">Create my site <span class="hint">a new public repo; <code>{escape(github.suggested_name())}</code> is served at {escape(github.pages_address(github.login_name() + "/" + github.suggested_name()))}</span></label>
+  <label for="gh_name" style="margin-top:0">{_("New repo")} <span class="hint">{served}</span></label>
   <input type="text" id="gh_name" name="name" maxlength="100" value="{name}">
-  <p><button>Create the repo and publish</button></p>
+  <p><button>{_("Create repo and publish")}</button></p>
 </form>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="link">
-  <label for="gh_repo">Or use a repo you already made <span class="hint">paste its link, e.g. {gh}/{escape(github.login_name())}/my-site</span></label>
+  <label for="gh_repo">{_("Existing repo")} <span class="hint">{_("repo link")}</span></label>
   <input type="text" id="gh_repo" name="repo" maxlength="300" required placeholder="{gh}/{escape(github.login_name())}/my-site">
-  <p><button>Link this repo and publish</button></p>
+  <p><button>{_("Link repo and publish")}</button></p>
 </form>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="forget">
-  <p><button>Disconnect GitHub</button></p></form>"""
+  <p><button>{_("Disconnect GitHub")}</button></p></form>"""
     if GITHUB_LOGIN:
         code, where = escape(GITHUB_LOGIN["user_code"]), escape(GITHUB_LOGIN["verification_uri"], quote=True)
         return f"""<div class="gh-code" data-interval="{GITHUB_LOGIN['interval']}">
-<p>Open <a href="{where}" target="_blank" rel="noopener">{where}</a>, sign in, enter this code and approve:</p>
-<p class="code-big"><code>{code}</code> <button type="button" class="copy" data-code="{code}">Copy</button></p>
-<p class="hint gh-wait">Waiting for GitHub… this page carries on by itself once you approve.</p>
+<p>{_("Open {link} and enter this code:").format(link=f'<a href="{where}" target="_blank" rel="noopener">{where}</a>')}</p>
+<p class="code-big"><code>{code}</code> <button type="button" class="copy" data-code="{code}">{_("Copy")}</button></p>
+<p class="hint gh-wait">{_("Waiting for approval…")}</p>
 </div>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="cancel">
-  <p><button>Cancel</button></p></form>
+  <p><button>{_("Cancel")}</button></p></form>
 <script>
 (() => {{
   const box = document.querySelector(".gh-code"), wait = box.querySelector(".gh-wait");
@@ -1645,7 +1727,7 @@ Everything in it is replaced by the site, so use a new or empty public repo.</p>
     try {{
       const r = await (await fetch("/settings/github/poll", {{method: "POST"}})).json();
       if (r.state === "done") return location.assign("/settings?done=github_connected");
-      if (r.state === "error") {{ wait.textContent = r.message + " Cancel and connect again."; return; }}
+      if (r.state === "error") {{ wait.textContent = r.message + " " + {json.dumps(_("Cancel and connect again."))}; return; }}
       if (r.state === "slow_down") every += 5000;
     }} catch (e) {{}}
     setTimeout(poll, every);
@@ -1654,24 +1736,22 @@ Everything in it is replaced by the site, so use a new or empty public repo.</p>
 }})();
 </script>"""
     if not settings.github_client_id():
-        return f"""<p>Off. This copy of mission-loop has no GitHub OAuth app to sign in with yet. Register one once
-(on GitHub: Settings &gt; Developer settings &gt; OAuth Apps &gt; New OAuth App, or <a href="{gh}/settings/applications/new" target="_blank" rel="noopener">here</a>):
-any name, homepage and callback URL (e.g. http://127.0.0.1:8770), then tick <strong>Enable Device Flow</strong>
-and paste its client ID below. A client ID isn't a secret; there is no client secret to make.</p>
+        needs = _("Needs a GitHub OAuth app. {create} with any name and URLs (e.g. http://127.0.0.1:8770), tick "
+                  "{device}, then paste its client ID.").format(
+            create=f'<a href="{gh}/settings/applications/new" target="_blank" rel="noopener">{_("Create one")}</a>',
+            device="<strong>Enable Device Flow</strong>")
+        return f"""<p>{needs}</p>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="client_id">
-  <label for="gh_client" style="margin-top:0">OAuth app client ID</label>
+  <label for="gh_client" style="margin-top:0">{_("OAuth app client ID")}</label>
   <input type="text" id="gh_client" name="client_id" maxlength="64" required placeholder="Ov23li…">
-  <p><button>Save</button></p>
+  <p><button>{_("Save")}</button></p>
 </form>"""
-    return f"""<p>Off. Puts the site online for free with GitHub Pages, so Bluesky posts link to the full article,
-and keeps it up to date each time something is published. Connecting signs you in on GitHub itself; no password or
-token is typed here. The app can then reach your public repos only, and its token is saved to
-<code>data/github.json</code> on this machine.</p>
+    return f"""<p>{_("Hosts the site free on GitHub Pages. You sign in on GitHub; access is limited to public repos.")}</p>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="connect">
-  <p><button>Connect GitHub</button></p></form>"""
+  <p><button>{_("Connect GitHub")}</button></p></form>"""
 
-STUB_RUN = "Off while MISSION_LOOP_STUBS=1, so a test run never posts for real."
+STUB_RUN = "Off in stub mode (MISSION_LOOP_STUBS=1)."
 
 def local_site_box() -> str:
     """The foundation: the static site in site/ on this machine, which every channel posts from."""
@@ -1680,46 +1760,39 @@ def local_site_box() -> str:
     feeds = ('<a href="/site/feed.xml" target="_blank">site/feed.xml</a> (RSS) · '
              '<a href="/site/feed.json" target="_blank">site/feed.json</a> (JSON Feed)')
     hosted = escape(url.rstrip("/") + "/")
-    links = (f"Links in the feeds are full addresses under {hosted}; once the site is there, its feeds are "
-             f"{hosted}feed.xml and {hosted}feed.json." if url else
-             "No hosted address yet, so links in the feeds are relative to the feed file. "
-             "That works wherever the site folder is served.")
-    source = (' <span class="hint">(from MISSION_LOOP_SITE_URL in .env; saving here overrides it)</span>'
+    links = _("Feed links use {address}").format(address=hosted) if url else _("Feed links are relative to the feed file.")
+    source = (f' <span class="hint">{_("(from .env)")}</span>'
               if env and not settings.saved().get("site_url") else
-              ' <span class="hint">(the GitHub Pages address until you type one)</span>'
+              ' <span class="hint">(GitHub Pages)</span>'
               if url and not settings.saved().get("site_url") else "")
     return f"""<div class="pubbox">
-<div class="head"><h3>Local site</h3><span class="badge">Foundation · always on</span></div>
-<p>Every published article is written here first, as files on this machine: a page per article in <code>site/</code>,
-an index page and two feeds. It is the record of what is published, and every channel posts from it.</p>
-<p>{count} article{"" if count == 1 else "s"} · {feeds} · <a href="/published">See what's published</a></p>
+<div class="head"><h3>{_("Local site")}</h3><span class="badge">{_("Always on")}</span></div>
+<p>{_("Files in site/. Every channel posts from here.")}</p>
+<p>{_n("{n} article", "{n} articles", count)} · {feeds} · <a href="/published">{_("Published")}</a></p>
 <form method="post" action="/settings/site-url">
-  <label for="site_url">Hosted address{source} <span class="hint">optional: where a copy of <code>site/</code> is served,
-  e.g. https://example.com/news/. Feed links and Bluesky link cards use it. Empty: the GitHub Pages address once that
-  channel is set up, else none while the site is only on this machine.</span></label>
+  <label for="site_url">{_("Site address")}{source} <span class="hint">{_("optional: where site/ is hosted, for feed and Bluesky links")}</span></label>
   <input type="text" id="site_url" name="site_url" maxlength="300" value="{escape(settings.saved().get("site_url", ""), quote=True)}" placeholder="{escape(url or "https://example.com/news/", quote=True)}">
   <p class="hint">{links}</p>
-  <p><button>Save hosted address</button></p>
+  <p><button>{_("Save")}</button></p>
 </form></div>"""
 
 def channel_card(c) -> str:
     """One channel that is set up: what it is, how it is doing, and how to take it away."""
     if c.KEY == f916.KEY:
-        kind, remove = "Built in", ('<p class="hint">Joined for good: <code>data/1f916.json</code> is the citizen\'s '
-                                    "whole identity, with no recovery, so it can't be removed here.</p>")
+        kind, remove = _("Built in"), f'<p class="hint">{_("Permanent: data/1f916.json is the account\'s only key.")}</p>'
     elif c.KEY == github.KEY:               # its status and its unlink / disconnect buttons
-        return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">Built in</span>'
+        return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">{_("Built in")}</span>'
                 f'</div>{github_row()}</div>')
     elif c.KEY == bluesky.KEY:
-        kind = "Built in"
-        remove = ("""<form method="post" action="/settings/bluesky"><input type="hidden" name="forget" value="1">
-  <button>Disconnect Bluesky</button></form>""" if bluesky.saved_credentials() else
-                  '<p class="hint">Set in .env; remove BLUESKY_HANDLE and BLUESKY_APP_PASSWORD there to turn it off.</p>')
+        kind = _("Built in")
+        remove = (f"""<form method="post" action="/settings/bluesky"><input type="hidden" name="forget" value="1">
+  <button>{_("Disconnect Bluesky")}</button></form>""" if bluesky.saved_credentials() else
+                  f'<p class="hint">{_("Set in .env (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD).")}</p>')
     else:
-        kind = "Custom · " + settings.CUSTOM_KINDS.get(c.cfg["kind"], c.cfg["kind"])
+        kind = _("Custom") + " · " + _(settings.CUSTOM_KINDS.get(c.cfg["kind"], c.cfg["kind"]))
         remove = (f'<form method="post" action="/settings/custom-channel/remove">'
                   f'<input type="hidden" name="id" value="{escape(c.cfg["id"], quote=True)}">'
-                  f'<button>Remove channel</button></form>')
+                  f'<button>{_("Remove channel")}</button></form>')
     return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">{escape(kind)}</span>'
             f'</div><p>{channel_status(c)}</p>{remove}</div>')
 
@@ -1727,81 +1800,67 @@ def add_channel_forms() -> str:
     """Ways to add a channel: the built-in ones not set up yet, and a custom one."""
     out = []
     if not agents.f916_enabled():
-        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Posts each article's full text,
-one a day, newest first. Joining makes a permanent, public citizen on <a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>.
-Its secret key is saved to <code>data/1f916.json</code> on this machine only; there is no recovery if it is lost.</p>
+        server = f'<a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>'
+        body = (f"<p>{_(STUB_RUN)}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>{_("Posts each article's full text, 1 per day. Joining creates a permanent public account on {server}. Its key is saved to data/1f916.json and can't be recovered.").format(server=server)}</p>
 <form method="post" action="/settings/join-1f916">
-  <label for="handle">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
-  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="e.g. loop-desk">
-  <label for="f916_url">Server <span class="hint">the 1F916 to join; the key only works there, so it is saved with the key</span></label>
+  <label for="handle">{_("Handle")} <span class="hint">{_("2–32 letters, digits, _ or -; permanent")}</span></label>
+  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="loop-desk">
+  <label for="f916_url">{_("Server")}</label>
   <input type="text" id="f916_url" name="f916_url" maxlength="300" value="{escape(settings.f916_url(), quote=True)}">
-  <p><button>Join 1F916</button></p>
+  <p><button>{_("Join 1F916")}</button></p>
 </form>""")
-        out.append(f'<details class="pubbox add"><summary><strong>1F916</strong> · built in</summary>{body}</details>')
+        out.append(f'<details class="pubbox add"><summary><strong>1F916</strong> · {_("built in")}</summary>{body}</details>')
     if not agents.github_enabled():         # connect, then pick the repo: open while a step is under way
         under_way = " open" if (GITHUB_LOGIN or github.connected()) and os.environ.get("MISSION_LOOP_STUBS") != "1" else ""
-        out.append(f'<details class="pubbox add"{under_way}><summary><strong>GitHub Pages</strong> · built in</summary>'
+        out.append(f'<details class="pubbox add"{under_way}><summary><strong>GitHub Pages</strong> · {_("built in")}</summary>'
                    f'{github_row()}</details>')
     if not agents.bluesky_enabled():
-        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Announces each article with a
-3-post thread (its title, boldest possibility and hardest fact), every post linking to the full text, at most
-one article every 10 minutes. Use an app password from Bluesky's
-Settings &gt; Privacy and security &gt; App passwords, never your account password. It is checked with Bluesky, then
-saved to <code>data/bluesky.json</code> on this machine only.</p>
+        body = (f"<p>{_(STUB_RUN)}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>{escape(_("Posts a 3-post thread per article, max 1 per 10 min. Use an app password (Bluesky: Settings > Privacy and security > App passwords), not your account password."))}</p>
 <form method="post" action="/settings/bluesky">
-  <label for="bsky_handle">Handle <span class="hint">e.g. yourname.bsky.social</span></label>
+  <label for="bsky_handle">{_("Handle")}</label>
   <input type="text" id="bsky_handle" name="handle" required maxlength="253" autocomplete="username" placeholder="yourname.bsky.social">
-  <label for="bsky_password">App password</label>
+  <label for="bsky_password">{_("App password")}</label>
   <input type="password" id="bsky_password" name="app_password" required maxlength="64" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
-  <label for="bsky_service">Server <span class="hint">optional: only for an account on another Bluesky server</span></label>
+  <label for="bsky_service">{_("Server")} <span class="hint">{_("optional, for accounts not on bsky.social")}</span></label>
   <input type="text" id="bsky_service" name="service" maxlength="300" placeholder="{escape(settings.bluesky_service(), quote=True)}">
-  <p><button>Check and turn on Bluesky</button></p>
+  <p><button>{_("Connect Bluesky")}</button></p>
 </form>""")
-        out.append(f'<details class="pubbox add"><summary><strong>Bluesky</strong> · built in</summary>{body}</details>')
-    kinds = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_KINDS.items())
-    formats = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_FORMATS.items())
-    out.append(f"""<details class="pubbox add"><summary><strong>Custom channel</strong> · anything else</summary>
-<p>Sends every published article somewhere you choose, in a format you choose, newest first and once each, like the
-other channels. Point a webhook at a service (a chat room, an automation tool, your own server), or have it drop a
-file per article into a folder another tool picks up (a clone of a site repository, a synced folder).</p>
+        out.append(f'<details class="pubbox add"><summary><strong>Bluesky</strong> · {_("built in")}</summary>{body}</details>')
+    kinds = "".join(f'<option value="{k}">{escape(_(v))}</option>' for k, v in settings.CUSTOM_KINDS.items())
+    formats = "".join(f'<option value="{k}">{escape(_(v))}</option>' for k, v in settings.CUSTOM_FORMATS.items())
+    out.append(f"""<details class="pubbox add"><summary><strong>{_("Custom channel")}</strong> · {_("webhook or folder")}</summary>
+<p>{_("Sends each published article to a webhook, or as a file into a folder.")}</p>
 <form method="post" action="/settings/custom-channel">
-  <label for="cc_name">Name <span class="hint">what the Published page calls it</span></label>
-  <input type="text" id="cc_name" name="name" required maxlength="40" placeholder="e.g. Team chat">
-  <label for="cc_kind">Send by</label>
+  <label for="cc_name">{_("Name")}</label>
+  <input type="text" id="cc_name" name="name" required maxlength="40" placeholder="{escape(_("e.g. Team chat"), quote=True)}">
+  <label for="cc_kind">{_("Type")}</label>
   <select id="cc_kind" name="kind">{kinds}</select>
-  <label for="cc_target">Where <span class="hint">a webhook's full http(s) address, or a folder's full path on this machine</span></label>
-  <input type="text" id="cc_target" name="target" required maxlength="500" placeholder="https://hooks.example.com/abc or /Users/me/outbox">
-  <label for="cc_format">Format</label>
+  <label for="cc_target">{_("Target")} <span class="hint">{_("webhook URL or folder path")}</span></label>
+  <input type="text" id="cc_target" name="target" required maxlength="500" placeholder="https://hooks.example.com/abc · /Users/me/outbox">
+  <label for="cc_format">{_("Format")}</label>
   <select id="cc_format" name="format">{formats}</select>
-  <details class="formats"><summary>What each format looks like</summary>
-  <p><strong>JSON</strong>: one JSON Feed 1.1 item, the same as the article's entry in <code>site/feed.json</code>:
-  <code>id</code> (the short name), <code>url</code>, <code>title</code>, <code>summary</code> (the dek),
-  <code>content_text</code> (the full article with its sources), <code>date_published</code> and, in an epic,
-  <code>tags</code>. Sent as <code>application/json</code>; a folder gets <code>&lt;short-name&gt;.json</code>.</p>
-  <p><strong>Markdown</strong>: <code># Title</code>, the dek in italics, the link to the hosted site when there is
-  one, then the full text. A folder gets <code>&lt;short-name&gt;.md</code>.</p>
-  <p><strong>Plain text</strong>: the same without the markup, as <code>&lt;short-name&gt;.txt</code>.</p>
-  <p>A webhook counts as posted on any 2xx reply; a JSON reply with a <code>url</code> is shown as where the article
-  can be read. 429 means try later, other 4xx refuse that article, and anything else is tried again next pass.</p>
+  <details class="formats"><summary>{_("Format details")}</summary>
+  <p><strong>JSON</strong>: {escape(_("a JSON Feed 1.1 item, as in site/feed.json"))} (<code>&lt;short-name&gt;.json</code>).</p>
+  <p><strong>Markdown</strong>: {_("title, dek, site link, full text")} (<code>&lt;short-name&gt;.md</code>).</p>
+  <p><strong>{_("Plain text")}</strong>: {_("the same without markup")} (<code>&lt;short-name&gt;.txt</code>).</p>
+  <p>{_("Webhooks: 2xx is posted, 429 retries later, other 4xx refuses, anything else retries next pass.")}</p>
   </details>
-  <p><button>Add custom channel</button></p>
+  <p><button>{_("Add channel")}</button></p>
 </form></details>""")
     return "".join(out)
 
 def publishing_section() -> str:
     live = live_channels()
     if os.environ.get("MISSION_LOOP_STUBS") == "1":
-        cards = f'<p class="muted">{STUB_RUN}</p>'
+        cards = f'<p class="muted">{_(STUB_RUN)}</p>'
     else:
         cards = "".join(channel_card(c) for c in live) or \
-            '<p class="muted">No channels yet, so articles stay on the local site. Add one below.</p>'
-    return f"""<p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
-<strong>channels</strong>, everywhere else the articles go. Each channel posts from the local site, newest first, and
-remembers what it has posted. Publish any article again from the <a href="/published">Published</a> page.</p>
+            f'<p class="muted">{_("No channels.")}</p>'
+    return f"""
 {local_site_box()}
-<h3 class="sub">Channels ({len(live)})</h3>
+<h3 class="sub">{_("Channels")} ({len(live)})</h3>
 {cards}
-<h3 class="sub">Add a channel</h3>
+<h3 class="sub">{_("Add a channel")}</h3>
 {add_channel_forms()}"""
 
 THEME_CHOICES = [("system", "monitor", "System"), ("light", "sun", "Light"), ("dark", "moon", "Dark")]
@@ -1829,14 +1888,18 @@ def display_forms() -> str:
     theme = settings.theme()
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{v}"{" checked" if v == theme else ""} '
-        f'onchange="this.form.requestSubmit()">{icon(ico)}{label}</label>' for v, ico, label in THEME_CHOICES)
+        f'onchange="this.form.requestSubmit()">{icon(ico)}{_(label)}</label>' for v, ico, label in THEME_CHOICES)
+    langs = "".join(
+        f'<label><input type="radio" name="language" value="{code}"{" checked" if code == i18n.current() else ""} '
+        f'onchange="this.form.requestSubmit()"><span lang="{code}">{escape(name)}</span></label>'
+        for code, name in settings.LANGUAGES.items())
     current = settings.chat_color()
     known = set(settings.CHAT_COLORS.values())
     def swatch(value: str, name: str, color: str) -> str:
         on = " checked" if value == current else ""
         ink = settings.ink_on(color) if color.startswith("#") else "#ffffff"
         return (f'<label class="swatch" style="--c:{color};--ink:{ink}"><input type="radio" name="choice" value="{value}"'
-                f'{on} onchange="this.form.requestSubmit()"><span class="dab"></span>{escape(name)}</label>')
+                f'{on} onchange="this.form.requestSubmit()"><span class="dab"></span>{escape(_(name))}</label>')
     swatches = swatch("", "Library red", "var(--accent)")
     swatches += "".join(swatch(c, n, c) for n, c in settings.CHAT_COLORS.items())
     mine = current if current and current not in known else ""
@@ -1845,19 +1908,23 @@ def display_forms() -> str:
     swatches += (f'<label class="swatch own{" set" if mine else ""}"{own_style}>'
                  f'<input type="radio" name="choice" value="own"{own_on} onchange="this.form.requestSubmit()">'
                  f'<span class="dab"><input type="color" id="own-color" name="own" value="{mine or OWN_DEFAULT}" '
-                 f'aria-label="Choose your own colour"></span>Your own</label>')
-    return f"""<form method="post" action="/settings/theme" class="actions display">
-  <h3>{icon("sun")}Appearance</h3>
-  <p class="hint">System follows your computer's light or dark setting, and changes with it. The article previews here
-  follow it too; the published site keeps its own switch for readers.</p>
-  <div class="choice" role="radiogroup" aria-label="Appearance">{themes}</div>
-  <noscript><p><button>Save</button></p></noscript>
+                 f'aria-label="{escape(_("Choose your own colour"), quote=True)}"></span>{_("Your own")}</label>')
+    return f"""<form method="post" action="/settings/language" class="actions display">
+  <h3>{icon("globe")}{_("Language")}</h3>
+  <div class="choice" role="radiogroup" aria-label="{escape(_("Language"), quote=True)}">{langs}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
+</form>
+<form method="post" action="/settings/theme" class="actions display">
+  <h3>{icon("sun")}{_("Appearance")}</h3>
+  <p class="hint">{_("System follows your computer's setting.")}</p>
+  <div class="choice" role="radiogroup" aria-label="{escape(_("Appearance"), quote=True)}">{themes}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>
 <form method="post" action="/settings/chat-color" class="actions display">
-  <h3>{icon("palette")}Chat colour</h3>
-  <p class="hint">The ink for the chat bubble and your questions in the chat panel.</p>
-  <div class="swatches" role="radiogroup" aria-label="Chat colour">{swatches}</div>
-  <noscript><p><button>Save</button></p></noscript>
+  <h3>{icon("palette")}{_("Chat colour")}</h3>
+  <p class="hint">{_("The chat bubble and your messages.")}</p>
+  <div class="swatches" role="radiogroup" aria-label="{escape(_("Chat colour"), quote=True)}">{swatches}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>{CHAT_COLOR_JS}"""
 
 # The Settings page's sections, in order: (anchor, icon, title). The nav down its left lists them.
@@ -1866,6 +1933,7 @@ SETTINGS_SECTIONS = [
     ("workers", "people", "Workers"),
     ("providers", "plug", "Model providers"),
     ("research", "search", "Research"),
+    ("mcp", "link", "MCP server"),
     ("display", "monitor", "Display"),
     ("publication", "newspaper", "Publication"),
     ("publishing", "broadcast", "Publishing"),
@@ -1917,7 +1985,7 @@ SETTINGS_NAV_JS = """<script>
 
 def settings_section(anchor: str, body: str) -> str:
     ico, title = next((i, t) for a, i, t in SETTINGS_SECTIONS if a == anchor)
-    return f'<section class="set" id="{anchor}"><h2>{icon(ico)}<span>{escape(title)}</span></h2>{body}</section>'
+    return f'<section class="set" id="{anchor}"><h2>{icon(ico)}<span>{escape(_(title))}</span></h2>{body}</section>'
 
 def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
@@ -1926,41 +1994,42 @@ def settings_body(request: Request, error: str = "") -> str:
     models = llm.catalog(conn)
     sprites = script("researchers.js") if settings.animations() else ""
     on = ' class="on" aria-current="true"'
-    nav = "".join(f'<a href="#{a}"{on if n == 0 else ""}>{icon(i)}<span>{escape(t)}</span></a>'
+    nav = "".join(f'<a href="#{a}"{on if n == 0 else ""}>{icon(i)}<span>{escape(_(t))}</span></a>'
                   for n, (a, i, t) in enumerate(SETTINGS_SECTIONS))
-    loop = f"""{part("clock", "Loop")}
+    loop = f"""{part("clock", _("Loop"))}
 <form method="post" action="/settings/loop-every" class="inline">
-  <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
+  <label for="every" style="margin:0">{_("Rest when idle")}</label>
   <input type="number" id="every" name="every" value="{settings.loop_every():g}" min="1" step="1" style="width:5rem">
-  <span class="hint">minutes before looking again (a loop already running keeps its own until you start it again)</span>
-  <button>Save</button>
+  <span class="hint">{_("minutes (applies on next start)")}</span>
+  <button>{_("Save")}</button>
 </form>"""
     animations = f"""<form method="post" action="/settings/animations" class="actions display">
-  <h3>{icon("activity")}Animations</h3>
-  <p class="hint">Little pixel researchers who drop by the missions a model is working on, and stand by their worker here.</p>
+  <h3>{icon("activity")}{_("Animations")}</h3>
+  <p class="hint">{_("Pixel researchers on active missions.")}</p>
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
-  Animations</label>
-  <noscript><p><button>Save</button></p></noscript>
+  {_("Animations")}</label>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>"""
     sections = "".join([
         settings_section("setup", setup_section(conn)),
         settings_section("workers", workers_section(conn, models) + loop),
         settings_section("providers", connection_section(conn)),
         settings_section("research", search_section() + library_section(conn)),
+        settings_section("mcp", mcp_section()),
         settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
         settings_section("publication", publication_section()),
         settings_section("publishing", publishing_section()),
     ])
-    return f"""{err}<h1>Settings</h1>
+    return f"""{err}<h1>{_("Settings")}</h1>
 <div class="settings">
-<nav class="set-nav" aria-label="Settings sections">{nav}</nav>
+<nav class="set-nav" aria-label="{escape(_("Settings sections"), quote=True)}">{nav}</nav>
 <div class="set-body">{sections}</div>
 </div>
 {SETTINGS_NAV_JS}
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
-    return page("Settings", settings_body(request))
+    return page(_("Settings"), settings_body(request))
 
 async def save_site_url(request: Request) -> Response:
     if not same_origin(request):
@@ -1981,6 +2050,15 @@ async def save_theme(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="theme")
     return go("/settings", done="theme_saved")
+
+async def save_language(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        settings.set_language(str((await request.form()).get("language") or ""))
+    except ValueError:
+        return go("/settings", error="language")
+    return go("/settings", done="language_saved")
 
 async def save_chat_color(request: Request) -> Response:
     if not same_origin(request):
@@ -2034,16 +2112,16 @@ async def save_library(request: Request) -> Response:
     pid, model = str(form.get("provider") or "none"), str(form.get("model") or "").strip()[:200]
     try:
         if pid != "none" and pid not in settings.PROVIDERS:
-            raise ValueError("pick a provider")
+            raise ValueError(_("pick a provider"))
         if pid != "none" and not model:
-            raise ValueError("name the embedding model")
+            raise ValueError(_("name the embedding model"))
         ref = settings.model_ref(pid, model) if pid != "none" else ""
         if ref != settings.embed_model():                 # unchanged: store nothing, so .env keeps applying
             if ref:
                 await run_in_threadpool(library.check, ref)
             settings.set_embed_model(ref or settings.WORDS_ONLY)
     except (ValueError, library.LibraryError) as e:
-        return page("Settings", settings_body(request, f"The embedding model was not saved: {e}"))
+        return page(_("Settings"), settings_body(request, _("Embedding model not saved: {error}").format(error=e)))
     settings.set_library_top_n(top_n)
     return go("/settings", done="library_saved")
 
@@ -2071,7 +2149,7 @@ async def join_1f916(request: Request) -> Response:
     try:
         await run_in_threadpool(f916.register, handle, settings.model_for("pi") or "unknown")
     except (FileExistsError, RuntimeError) as e:
-        return page("Settings", settings_body(request, f"1F916 did not join: {e}"))
+        return page(_("Settings"), settings_body(request, _("1F916 did not join: {error}").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="joined")
@@ -2084,7 +2162,7 @@ async def add_custom_channel(request: Request) -> Response:
         settings.add_custom_channel(str(form.get("name") or ""), str(form.get("kind") or ""),
                                     str(form.get("target") or "")[:500], str(form.get("format") or ""))
     except ValueError as e:
-        return page("Settings", settings_body(request, f"Custom channel not added: {e}."))
+        return page(_("Settings"), settings_body(request, _("Channel not added: {error}.").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="custom_added")
@@ -2114,7 +2192,7 @@ async def save_bluesky(request: Request) -> Response:
     try:
         await run_in_threadpool(bluesky.check_login, handle, password, service)
     except Exception as e:                 # wrong password, rate limit, network: nothing is saved
-        return page("Settings", settings_body(request, f"Bluesky did not accept that login: {e}"))
+        return page(_("Settings"), settings_body(request, _("Bluesky did not accept that login: {error}").format(error=e)))
     bluesky.save_credentials(handle, password, service)
     if loop_running():
         wake()
@@ -2138,7 +2216,7 @@ async def github_action(request: Request) -> Response:
             GITHUB_LOGIN.clear()
             GITHUB_LOGIN.update(await run_in_threadpool(github.start_login))
         except Exception as e:             # no OAuth app, device flow off, network
-            return page("Settings", settings_body(request, f"GitHub did not start the sign-in: {e}"))
+            return page(_("Settings"), settings_body(request, _("GitHub did not start the sign-in: {error}").format(error=e)))
         return go("/settings")
     if do == "cancel":
         GITHUB_LOGIN.clear()
@@ -2159,13 +2237,13 @@ async def github_action(request: Request) -> Response:
             else:
                 await run_in_threadpool(github.link_site, str(form.get("repo") or "")[:300])
         except Exception as e:             # private, no access, holds other files, network
-            return page("Settings", settings_body(request, f"The site wasn't linked: {e}"))
+            return page(_("Settings"), settings_body(request, _("The site wasn't linked: {error}").format(error=e)))
         orchestrator.refresh_feed()        # the feeds use the site's address from now on
         try:
             await run_in_threadpool(github.sync, clock.now())   # files only; the loop records each article's link
         except Exception as e:
-            return page("Settings", settings_body(request, f"The site is linked, but the first push failed: {e}. "
-                                                            "The loop tries again each time it posts."))
+            return page(_("Settings"), settings_body(request, _("Linked, but the first push failed: {error}. The loop "
+                                                                 "retries on each post.").format(error=e)))
         if loop_running():
             wake()
         return go("/settings", done="github_linked")
@@ -2204,29 +2282,39 @@ def epic_datalist() -> str:
 
 # ---------- anything waiting on a human: one look for every decision ----------
 
-ASK_ACTION = {"review": "Read the brief", "publish": "Read the article", "parked": "See why it stopped"}
+ASK_ACTION = {"review": "Review brief", "publish": "Review article", "parked": "See why"}
+
+RATING_SHORT = {"logic": "claim and logic", "intrigue": "intrigue", "sources": "sources"}   # a review card's line
+
+def rating_summary(r: ArticleRating) -> str:
+    """ "Rated 24/30", or "Not rated: why", in the UI's language."""
+    if r.error:
+        return _("Not rated: {why}").format(why=r.error)
+    return _("Rated {total}/{most}").format(total=r.total, most=RATING_SCALE * len(RATING_FACTORS))
 
 def rating_line(r: ArticleRating) -> str:
     """One line for a review card: "Rated 24/30 by the Research Assistant (claim and logic 8, intrigue 8, sources 8)."."""
     if r.error:
-        return f"Not rated: {r.error}"
-    return (f"{r.summary()} by the Research Assistant (claim and logic {r.logic}, intrigue {r.intrigue}, "
-            f"sources {r.sources}).")
+        return rating_summary(r)
+    return _("{rated} by the Research Assistant ({scores}).").format(
+        rated=rating_summary(r), scores=", ".join(f"{_(name)} {getattr(r, key)}" for key, name in RATING_SHORT.items()))
 
 def rating_html(r: ArticleRating) -> str:
     """The rating on a mission page: the total, then each factor's score and the rater's reason."""
     if r.error:
-        return f'<div class="rating"><p class="muted">{escape(r.summary())}. It went to your review unrated.</p></div>'
-    rows = "".join(f'<li><span class="score">{getattr(r, key)}/{RATING_SCALE}</span><strong>{escape(name)}</strong>'
+        return f'<div class="rating"><p class="muted">{escape(rating_summary(r))}. {_("It went to your review unrated.")}</p></div>'
+    rows = "".join(f'<li><span class="score">{getattr(r, key)}/{RATING_SCALE}</span><strong>{escape(_(name))}</strong>'
                    f'{": " + escape(getattr(r, key + "_why")) if getattr(r, key + "_why").strip() else ""}</li>'
                    for key, name in RATING_FACTORS.items())
-    return (f'<div class="rating"><p><strong>{escape(r.summary())}</strong> by the Research Assistant; '
-            f'{RATING_FAIL_AT} or less goes back to the writer.</p><ul>{rows}</ul></div>')
+    lead = _("{rated} by the Research Assistant. {n} or less goes back to the writer.").format(
+        rated=f"<strong>{escape(rating_summary(r))}</strong>", n=RATING_FAIL_AT)
+    return f'<div class="rating"><p>{lead}</p><ul>{rows}</ul></div>'
 
 def ask(color: str, title: str, badge: str, body: str, actions: str, link: str = "") -> str:
     """A decision waiting on the human, the same for a brief, an article, a parked mission or a proposed epic:
     the finger, what it is, a colored badge, what to know, and the buttons that decide it."""
     name = f'<a class="topic" href="{link}">{escape(title)}</a>' if link else f'<span class="topic">{escape(title)}</span>'
+    badge = badge and _(badge)
     tag = f'<span class="badge {color}">{escape(badge)}</span>' if badge else ""
     return (f'<div class="ask {color}"><div class="ask-head">{icon("touch")}{name}{tag}</div>'
             f'{body}<div class="ask-actions">{actions}</div></div>')
@@ -2235,7 +2323,7 @@ def mission_ask(m: Mission, epics: dict[str, Epic]) -> str:
     color, href = tone(m), f"/m/{quote(m.slug)}"
     return ask(color, m.topic, label(m),
                f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)} · {escape(next_step(m))}</div>',
-               f'<a class="btn primary" href="{href}">{ASK_ACTION[color]}</a>', href)
+               f'<a class="btn primary" href="{href}">{_(ASK_ACTION[color])}</a>', href)
 
 def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
@@ -2248,23 +2336,22 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
         ms = [m for m in missions if m.epic == e.slug]
         slug = quote(e.slug)
         items = "".join(f'<li><a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>'
-                        + (f' <span class="hint">· if rejected: {escape(epics[m.epic_fallback].title)}</span>'
-                           if m.epic_fallback in epics else ' <span class="hint">· if rejected: no epic</span>')
+                        + (f' <span class="hint">· {_("if rejected: {epic}").format(epic=escape(epics[m.epic_fallback].title))}</span>'
+                           if m.epic_fallback in epics else f' <span class="hint">· {_("if rejected: no epic")}</span>')
                         + "</li>" for m in ms)
         move = ""
         if active:
             options = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>' for a in active)
-            move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="Existing epic">'
-                    f'{options}</select><button>Move them there</button></form>')
-        who = "The Theorist" if e.title.lower() in theorist else "The mission finder"
+            move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="{_("Existing epic")}">'
+                    f'{options}</select><button>{_("Move to epic")}</button></form>')
+        who = _("Proposed by Theorist") if e.title.lower() in theorist else _("Proposed by mission finder")
         out.append(ask(
-            "propose", e.title, "New epic",
-            f'<div class="sub">{who} proposes this epic for {len(ms)} missions. Edit the name before approving to '
-            f'rename it; reject puts each mission back in the epic shown beside it.</div><ul>{items}</ul>',
+            "propose", e.title, _("New epic"),
+            f'<div class="sub">{who} · {_n("{n} mission", "{n} missions", len(ms))}</div><ul>{items}</ul>',
             f'<form method="post" action="/epics/{slug}/approve">'
-            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
-            f'<button class="primary">Approve epic</button></form>{move}'
-            f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form>'))
+            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+            f'<button class="primary">{_("Approve epic")}</button></form>{move}'
+            f'<form method="post" action="/epics/{slug}/reject"><button>{_("Reject")}</button></form>'))
     return out
 
 def mission_link(slug: str) -> str:
@@ -2278,16 +2365,15 @@ def combine_proposals() -> list[str]:
         items = "".join(f'<li>{mission_link(s)}'
                         + (f' <span class="hint">· {escape(label(m))}</span>' if (m := store.get_mission(s)) else "")
                         + "</li>" for s in c.members)
-        epic = f" It goes in the epic {escape(c.epic)}." if c.epic else ""
+        epic = f'<div class="sub">{_("Epic")}: {escape(c.epic)}</div>' if c.epic else ""
         why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
         out.append(ask(
-            "propose", c.topic, "Combine missions",
-            f'<div class="sub">{"The chat assistant" if c.by == "chat" else "The Theorist"} proposes combining these {len(c.members)} missions into one bigger '
-            f'mission. Approving queues it (its brief still comes to you) and stops these; any that reached writing '
-            f'meanwhile carry on.{epic}</div>{why}<ul>{items}</ul>'
-            f'<details><summary>Objective</summary><p>{escape(c.objective)}</p></details>',
-            f'<form method="post" action="/combines/{quote(c.slug)}/approve"><button class="primary">Combine them</button></form>'
-            f'<form method="post" action="/combines/{quote(c.slug)}/reject"><button>Keep them separate</button></form>'))
+            "propose", c.topic, _("Combine missions"),
+            f'<div class="sub">{(_("Researcher Chat proposes combining {n} missions into one.") if c.by == "chat" else _("Theorist proposes combining {n} missions into one.")).format(n=len(c.members))}</div>'
+            f'{epic}{why}<ul>{items}</ul>'
+            f'<details><summary>{_("Objective")}</summary><p>{escape(c.objective)}</p></details>',
+            f'<form method="post" action="/combines/{quote(c.slug)}/approve"><button class="primary">{_("Combine")}</button></form>'
+            f'<form method="post" action="/combines/{quote(c.slug)}/reject"><button>{_("Keep separate")}</button></form>'))
     return out
 
 def connections(m: Mission) -> str:
@@ -2295,37 +2381,36 @@ def connections(m: Mission) -> str:
     to remove it, plus a form to link it to another mission by hand."""
     slug, rows = quote(m.slug), []
     if m.combined_into:
-        rows.append(f"<li>Combined into {mission_link(m.combined_into)}, which carries its work on.</li>")
+        rows.append(f"<li>{_('Combined into {mission}').format(mission=mission_link(m.combined_into))}</li>")
     if m.combines:
-        rows.append("<li>Combines " + ", ".join(mission_link(s) for s in m.combines) + ".</li>")
+        rows.append(f"<li>{_('Combines {missions}').format(missions=', '.join(mission_link(s) for s in m.combines))}</li>")
     for k in store.links_of(m.slug):
         other = store.get_mission(k.other(m.slug))
         state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
-        who = {"theorist": "the Theorist", "human": "you", "chat": "the chat assistant"}.get(k.by, k.by)
+        who = {"theorist": _("Theorist"), "human": _("you"), "chat": _("Researcher Chat")}.get(k.by, k.by)
         why = f": {escape(k.why)}" if k.why else ""
-        rows.append(f'<li class="link-row">Linked to {mission_link(k.other(m.slug))}{state} '
-                    f'<span class="hint">by {escape(who)}</span>{why}'
+        rows.append(f'<li class="link-row">{_("Linked to {mission}").format(mission=mission_link(k.other(m.slug)))}{state} '
+                    f'<span class="hint">{_("by {who}").format(who=escape(who))}</span>{why}'
                     f'<form method="post" action="/m/{slug}/unlink" class="inline">'
                     f'<input type="hidden" name="other" value="{escape(k.other(m.slug), quote=True)}">'
-                    f'<button>Unlink</button></form></li>')
+                    f'<button>{_("Unlink")}</button></form></li>')
     form = ""
     if m.state != State.COMBINED:
         options = "".join(f'<option value="{escape(o.slug, quote=True)}">{escape(o.topic)}</option>'
                           for o in store.all_missions() if o.slug != m.slug and o.state != State.COMBINED
                           and (is_open(m) or is_open(o)) and not store.get_link(m.slug, o.slug))
         if options:
-            form = (f'<details><summary>Link it to another mission</summary>'
+            form = (f'<details><summary>{_("Link to another mission")}</summary>'
                     f'<form method="post" action="/m/{slug}/link" class="actions">'
-                    f'<label for="link-to" style="margin-top:0">Mission <span class="hint">an open mission, or a '
-                    f'published article</span></label><select id="link-to" name="to">{options}</select>'
-                    f'<label for="link-why">Why <span class="hint">the shared thread; research sees it</span></label>'
+                    f'<label for="link-to" style="margin-top:0">{_("Mission")} <span class="hint">{_("open, or published")}'
+                    f'</span></label><select id="link-to" name="to">{options}</select>'
+                    f'<label for="link-why">{_("Why")} <span class="hint">{_("research sees this")}</span></label>'
                     f'<input type="text" id="link-why" name="why" maxlength="300">'
-                    f'<p><button>Link</button></p></form></details>')
+                    f'<p><button>{_("Link")}</button></p></form></details>')
     if not rows and not form:
         return ""
-    body = f'<ul class="places">{"".join(rows)}</ul>' if rows else \
-        '<p class="hint">Not connected to any other mission yet.</p>'
-    return heading("link", "Connections", len(rows) or None, cls="sec") + body + form
+    body = f'<ul class="places">{"".join(rows)}</ul>' if rows else f'<p class="hint">{_("No connections.")}</p>'
+    return heading("link", _("Connections"), len(rows) or None, cls="sec") + body + form
 
 def epic_list(missions: list[Mission]) -> str:
     active = store.all_epics("active")
@@ -2333,10 +2418,11 @@ def epic_list(missions: list[Mission]) -> str:
         return ""
     rows = "".join(
         f'<form method="post" action="/epics/{quote(e.slug)}/rename" class="inline">'
-        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
-        f'<span class="hint">{sum(m.epic == e.slug for m in missions)} missions</span><button>Rename</button></form>'
+        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+        f'<span class="hint">{_n("{n} mission", "{n} missions", sum(m.epic == e.slug for m in missions))}</span>'
+        f'<button>{_("Rename")}</button></form>'
         for e in active)
-    return heading("layers", "Epics", len(active)) + f'<div class="epics">{rows}</div>'
+    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{rows}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
 STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("research", "search", "Research"),
@@ -2356,7 +2442,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     color = tone(m)
     working, idle = working_on(m, now), next_step(m)
     if m.state == State.DONE and m.published_at and not m.publish_requests:
-        working, idle = "", f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+        working, idle = "", _("Published {date}").format(date=f"{m.published_at:%b %-d, %Y}") + f" · {channel_names(m)}"
     sub = working or idle
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
@@ -2380,7 +2466,7 @@ def publish_queue(missions: list[Mission]) -> list[tuple[str, str, list[tuple[st
     site = [(m.slug, m.topic, False) for m in missions if m.state == State.ARTICLE_READY and m.reviewed]
     site += [(m.slug, titles.get(m.slug, m.topic), True) for m in missions
              if m.state == State.DONE and "site" in m.publish_requests]
-    out = [("site", "Local site", site)] if site else []
+    out = [("site", _("Local site"), site)] if site else []
     for c in live_channels():
         entries = [(e["slug"], e.get("title") or e["slug"], c.KEY in by_slug[e["slug"]].publish_requests)
                    for e in orchestrator.queue(c) if e["slug"] in by_slug]
@@ -2392,24 +2478,24 @@ def queue_card(queued: list, count: int) -> str:
     """The Missions page's one card for everything waiting to be published; the queue is on /published."""
     places = " · ".join(f"{escape(name)} {len(entries)}" for _, name, entries in queued)
     return (f'<a class="card publish" href="/published#queue"><div class="row"><span class="topic">'
-            f'{count} article{"" if count == 1 else "s"} queued</span><span class="badge publish">Publishing</span></div>'
-            f'<div class="sub">{places} · see the queue</div></a>')
+            f'{_n("{n} article queued", "{n} articles queued", count)}</span><span class="badge publish">{_("Publishing")}</span></div>'
+            f'<div class="sub">{places}</div></a>')
 
 def queue_section(queued: list) -> str:
     """The Published page's queue: each place, then its articles in the order they go out."""
     if not queued:
-        return (heading("clock", "Queue", 0, "queue")
-                + '<p class="muted">Nothing waiting. Every article has reached every place it is going.</p>')
+        return (heading("clock", _("Queue"), 0, "queue")
+                + f'<p class="muted">{_("Nothing queued.")}</p>')
     parts = []
     for key, name, entries in queued:
         items = "".join(
             f'<li><a href="{f"#a-{escape(slug)}" if key != "site" or asked else f"/m/{quote(slug)}"}">{escape(title)}</a>'
-            + (" · <strong>requested</strong>" if asked else "") + "</li>"
+            + (f' · <strong>{_("requested")}</strong>' if asked else "") + "</li>"
             for slug, title, asked in entries)
         parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span></h3>'
                      f'<ol class="queue">{items}</ol>')
     total = len({slug for _, _, entries in queued for slug, _, _ in entries})
-    return heading("clock", "Queue", total, "queue") + "".join(parts)
+    return heading("clock", _("Queue"), total, "queue") + "".join(parts)
 
 # ---------- pages ----------
 
@@ -2432,23 +2518,28 @@ async def can_start() -> bool:
     return ok
 
 def _mark(ok: bool) -> str:
-    return (f'<span class="mark ok" title="Done">{icon("check")}</span>' if ok
-            else '<span class="mark todo" title="To do"></span>')
+    return (f'<span class="mark ok" title="{_("Done")}">{icon("check")}</span>' if ok
+            else f'<span class="mark todo" title="{_("To do")}"></span>')
 
 def _step(n: int, title: str, ok: bool, body: str) -> str:
     return (f'<li class="setup-step{" done" if ok else ""}"><div class="setup-head">{_mark(ok)}'
             f'<strong>{n}. {escape(title)}</strong></div><div class="setup-body">{body}</div></li>')
 
+def _open_link(link: str) -> str:
+    if not link:
+        return ""
+    new_tab = ' target="_blank" rel="noopener"' if link.startswith("http") else ""
+    return f' <a href="{escape(link)}"{new_tab}>{_("Open")}</a>'
+
 def _fixes(found: list) -> str:
-    return "".join(f'<p class="hint">{escape(c.detail)} {escape(c.fix)}'
-                   + (f' <a href="{escape(c.link)}" target="_blank" rel="noopener">Open</a>' if c.link.startswith("http") else
-                      f' <a href="{escape(c.link)}">Open</a>' if c.link else "") + "</p>" for c in found if not c.ok)
+    return "".join(f'<p class="hint">{escape(c.detail)} {escape(c.fix)}{_open_link(c.link)}</p>' for c in found if not c.ok)
 
 def search_form(back: str) -> str:
+    label = escape(_("Brave Search API key"), quote=True)
     return (f'<form method="post" action="/settings/search" class="inline setup-form">'
             f'<input type="hidden" name="back" value="{back}">'
-            f'<input type="password" name="key" autocomplete="off" placeholder="Brave Search API key" aria-label="Brave Search API key" required>'
-            f'<button>Check and save</button></form>')
+            f'<input type="password" name="key" autocomplete="off" placeholder="{label}" aria-label="{label}" required>'
+            f'<button>{_("Check and save")}</button></form>')
 
 def setup_card(found: list | None = None) -> str:
     """The home page's first run: connect a model, web search, something to work on, start. Shown until every
@@ -2468,44 +2559,49 @@ def setup_card(found: list | None = None) -> str:
         body = _fixes(model_checks)
         if settings.missing_models() and conn["ok"] and conn["models"]:
             body += ('<form method="post" action="/settings/ollama-connect" class="inline"><input type="hidden" name="back" value="/">'
-                     f'<button class="primary">Connect Ollama</button><span class="hint">gives each worker one of your '
-                     f'{len(conn["models"])} installed models</span></form>')
+                     f'<button class="primary">{_("Connect Ollama")}</button><span class="hint">'
+                     f'{_n("gives each worker one of your {n} model", "gives each worker one of your {n} models", len(conn["models"]))}'
+                     f'</span></form>')
         elif settings.missing_models() and not conn["ok"]:
-            body += (f'<p><a class="btn" href="{doctor.OLLAMA_DOWNLOAD}" target="_blank" rel="noopener">Get Ollama</a> '
-                     f'<span class="hint">free, runs on this computer; open it, pull a model, then come back</span></p>')
-        body += '<p class="hint">Or use a cloud model (Claude, GPT, Gemini and more): <a href="/settings#providers">add its API key</a>.</p>'
+            body += (f'<p><a class="btn" href="{doctor.OLLAMA_DOWNLOAD}" target="_blank" rel="noopener">{_("Get Ollama")}</a> '
+                     f'<span class="hint">{_("free, runs on this computer. Pull a model, then come back.")}</span></p>')
+        cloud = _("Or use a cloud model: {link}.").format(link=f'<a href="/settings#providers">{_("add an API key")}</a>')
+        body += f'<p class="hint">{cloud}</p>'
     tool_checks = [c for c in found if c.key in ("search", "npx", "uvx")]
     tools_ok = all(c.ok for c in tool_checks)
-    tools = (f'<p class="hint">Research can search the web and read pages.</p>' if tools_ok else
-             '<p class="hint">Research searches the web with Brave Search (there is a free tier).</p>'
-             + (search_form("/") + f'<p class="hint"><a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">Get a key</a>. '
-                'It stays on this machine.</p>' if not by["search"].ok else "")
+    get_key = (f'<p class="hint"><a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a key")}</a>. '
+               f'{_("It stays on this machine.")}</p>')
+    tools = (f'<p class="hint">{_("Research can search the web and read pages.")}</p>' if tools_ok else
+             f'<p class="hint">{_("Research searches the web with Brave Search (free tier available).")}</p>'
+             + (search_form("/") + get_key if not by["search"].ok else "")
              + _fixes([c for c in tool_checks if c.key != "search"]))
     work_ok = by["work"].ok
     chips = "".join(f'<button type="button" class="chip" data-line="{escape(line, quote=True)}">{escape(line)}</button>'
                     for line in INSPIRATIONS)
     work = (f'<p class="hint">{escape(by["work"].detail)}</p>' if work_ok else
-            '<p class="hint">Give the mission finder a line to explore, and it finds its own missions. Or add one yourself.</p>'
+            f'<p class="hint">{_("Give the mission finder a line to explore, or add a mission yourself.")}</p>'
             f'<form method="post" action="/inspiration" class="inline setup-form">'
-            f'<input type="text" id="setup-line" name="inspiration" maxlength="500" placeholder="A question worth digging into" aria-label="A line for the mission finder to explore">'
-            f'<button>Save inspiration</button></form><div class="chips">{chips}</div>'
+            f'<input type="text" id="setup-line" name="inspiration" maxlength="500" '
+            f'placeholder="{escape(_("A question worth digging into"), quote=True)}" '
+            f'aria-label="{escape(_("Inspiration line"), quote=True)}">'
+            f'<button>{_("Save inspiration")}</button></form><div class="chips">{chips}</div>'
             f'<p><button type="button" class="btn" onclick="document.getElementById(\'add-mission\').click()">'
-            f'{icon("plus")}Add a mission instead</button></p>')
+            f'{icon("plus")}{_("Add a mission instead")}</button></p>')
     can = all(c.ok for c in found if c.blocks_loop)
-    start = ('<p class="hint">Press play at the top of the page. While it runs, briefs and articles wait for your '
-             'review below; the Auto switch approves briefs for you, never publishing.</p>' if can else
-             '<p class="hint">Play works once a model is connected.</p>')
-    steps = (_step(1, "Connect a model", models_ok, body) + _step(2, "Web search", tools_ok, tools)
-             + _step(3, "Give it something to work on", work_ok, work) + _step(4, "Start the loop", loop_running(), start))
+    start = (f'<p class="hint">{_("Press play at the top. Briefs and articles wait for your review below.")}</p>' if can else
+             f'<p class="hint">{_("Play works once a model is connected.")}</p>')
+    steps = (_step(1, _("Connect a model"), models_ok, body) + _step(2, _("Web search"), tools_ok, tools)
+             + _step(3, _("Something to work on"), work_ok, work) + _step(4, _("Start the loop"), loop_running(), start))
     left = sum(not ok for ok in (models_ok, tools_ok, work_ok))
-    return (f'<section class="setup actions" id="setup" aria-label="Setup">'
-            f'<div class="setup-top"><h2>{icon("compass")}Get started</h2>'
-            f'<form method="post" action="/setup/dismiss"><button class="link" title="Hide setup; Settings → Setup brings it back">Hide</button></form></div>'
-            f'<p class="hint">{left} step{"" if left == 1 else "s"} left. Nothing here is required to look around.</p>'
+    return (f'<section class="setup actions" id="setup" aria-label="{_("Setup")}">'
+            f'<div class="setup-top"><h2>{icon("compass")}{_("Get started")}</h2>'
+            f'<form method="post" action="/setup/dismiss"><button class="link" '
+            f'title="{escape(_("Hide setup. Settings → Setup brings it back."), quote=True)}">{_("Hide")}</button></form></div>'
+            f'<p class="hint">{_n("{n} step left. None of it is needed to look around.", "{n} steps left. None of it is needed to look around.", left)}</p>'
             f'<ol class="setup-steps">{steps}</ol>'
-            f'<p class="setup-more">New here? <a href="/about" target="_blank">See how the desk works</a> · '
-            f'<button type="button" class="link" data-ask="How do I get Mission Loop set up, and what do I still need?">'
-            f'{icon("message")}Ask the Researcher Chat</button></p></section>{SETUP_JS}')
+            f'<p class="setup-more"><a href="/about" target="_blank">{_("How it works")}</a> · '
+            f'<button type="button" class="link" data-ask="{escape(_("How do I set up Mission Loop, and what is left?"), quote=True)}">'
+            f'{icon("message")}{_("Ask Researcher Chat")}</button></p></section>{SETUP_JS}')
 
 SETUP_JS = """<script>
 document.addEventListener("click", e => {
@@ -2521,52 +2617,172 @@ def setup_section(conn: dict) -> str:
     found = doctor.checks(conn=conn)
     rows = "".join(f'<li class="{"ok" if c.ok else "todo"}">{_mark(c.ok)}<span><strong>{escape(c.title)}</strong>: '
                    f'{escape(c.detail)}' + (f' <span class="hint">{escape(c.fix)}</span>' if c.fix else "")
-                   + (f' <a href="{escape(c.link)}"{" target=_blank rel=noopener" if c.link.startswith("http") else ""}>Open</a>'
-                      if c.link and not c.ok else "") + "</span></li>" for c in found)
+                   + (_open_link(c.link) if not c.ok else "") + "</span></li>" for c in found)
     waiting = doctor.waiting() if loop_running() else None
-    note = (f'<p class="hint"><strong>The loop is waiting:</strong> {escape(waiting["reason"])}.</p>' if waiting else "")
-    again = ('<form method="post" action="/setup/show" class="inline"><button>Show setup on the Missions page</button></form>'
+    note = (f'<p class="hint"><strong>{_("Loop waiting:")}</strong> {escape(waiting["reason"])}.</p>' if waiting else "")
+    again = (f'<form method="post" action="/setup/show" class="inline"><button>{_("Show setup on the Missions page")}</button></form>'
              if settings.setup_dismissed() and not doctor.done(found) else "")
-    summary = ("Everything is set up." if doctor.done(found) else
-               "The loop can start; the rest helps it do its job." if all(c.ok for c in found if c.blocks_loop) else
-               "The loop can't start until a model is connected.")
-    return (f'<div class="actions"><p>{summary} The same checks: '
-            f'<code>python run.py doctor</code>.</p>{note}<ul class="checks">{rows}</ul>{again}</div>')
+    summary = (_("Everything is set up.") if doctor.done(found) else
+               _("The loop can start. The rest helps it work.") if all(c.ok for c in found if c.blocks_loop) else
+               _("The loop can't start until a model is connected."))
+    cli = _("Same checks: {command}.").format(command="<code>python run.py doctor</code>")
+    return (f'<div class="actions"><p>{summary} {cli}</p>'
+            f'{note}<ul class="checks">{rows}</ul>{again}</div>')
 
 def search_section() -> str:
     key = settings.search_key()
     if key and settings.search_key_saved():
-        state = ('A Brave Search key is saved on this machine (<code>data/search.json</code>).'
-                 '<form method="post" action="/settings/search" class="inline"><input type="hidden" name="remove" value="1">'
-                 '<button>Remove key</button></form>')
+        state = (_("Brave Search key saved in {file}.").format(file="<code>data/search.json</code>")
+                 + '<form method="post" action="/settings/search" class="inline"><input type="hidden" name="remove" value="1">'
+                 f'<button>{_("Remove key")}</button></form>')
     elif key:
-        state = "A Brave Search key is set in <code>.env</code>. Paste one here to use it instead."
+        state = _("Brave Search key set in {file}. Paste one here to use it instead.").format(file="<code>.env</code>")
     else:
-        state = (f'No key yet, so research can\'t search the web (it can still read pages). '
-                 f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">Get a free key from Brave</a>.')
+        state = (_("No key. Research can read pages but not search the web.") + " "
+                 f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a free key from Brave")}</a>.')
     status = toolbox_status()
-    return (f'{part("search", "Web search", "search")}<div class="actions"><p>{state}</p>'
+    return (f'{part("search", _("Web search"), "search")}<div class="actions"><p>{state}</p>'
             f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
 
 def toolbox_status() -> str:
     from agents import toolbox
     found = toolbox.server_status(["search", "fetch"])
     bad = [f"{name}: {why}" for name, why in found.items() if why and "not installed" in why]
-    return (f'<p class="hint">{escape("; ".join(bad))}. Install with <code>brew install node uv</code>.</p>' if bad else "")
+    install = _("Install with {command}.").format(command="<code>brew install node uv</code>")
+    return f'<p class="hint">{escape("; ".join(bad))}. {install}</p>' if bad else ""
+
+MCP_COPY_JS = """<script>
+(() => {
+const t = s => (window.I18N || {})[s] || s;
+document.querySelectorAll(".mcp [data-copy]").forEach(b => b.onclick = async () => {
+  const src = document.getElementById(b.dataset.copy), text = src.value ?? src.textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = t("Copied"); }
+  catch { src.select?.(); b.textContent = t("Press Ctrl/Cmd-C"); }
+  setTimeout(() => b.textContent = t("Copy"), 1600);
+});
+document.querySelectorAll(".mcp [data-show]").forEach(b => b.onclick = () => {
+  const f = document.getElementById(b.dataset.show), hidden = f.type === "password";
+  f.type = hidden ? "text" : "password"; b.textContent = t(hidden ? "Hide" : "Show");
+});
+})();
+</script>"""
+
+def mcp_setups(address: str, token: str) -> list[tuple[str, str, str]]:
+    """Ready-to-paste setups for the apps people connect most: (id, name and where it goes, text)."""
+    name = mcp_share.NAME
+    entry = {"type": "http", "url": address, "headers": {"Authorization": f"Bearer {token}"}}
+    return [
+        ("claude-code", _("Claude Code: run in a terminal"),
+         f'claude mcp add --transport http {name} {address} --header "Authorization: Bearer {token}"'),
+        ("json", _("Cursor, VS Code, LM Studio, Windsurf and most others: add to mcp.json"),
+         json.dumps({"mcpServers": {name: entry}}, indent=2)),
+        ("desktop", _("Claude Desktop: add to claude_desktop_config.json (needs Node)"),
+         json.dumps({"mcpServers": {name: {"command": "npx", "args": [
+             "-y", "mcp-remote", address, "--allow-http", "--header", f"Authorization:Bearer {token}"]}}}, indent=2)),
+    ]
+
+def mcp_section() -> str:
+    """Settings -> MCP server: share every tool Researcher Chat has with other apps on this network (mcp_share.py)."""
+    st = mcp_share.status()
+    on = settings.mcp_share()
+    intro = (f'<p class="hint">{_("Lets other apps on your network use every tool Researcher Chat has: missions, epics, briefs, the board, the library and web research.")} '
+             f'{_("Only devices on this network get in, and each needs the token. Nothing goes through the cloud. Approving and publishing stay here.")}</p>')
+    switch = (f'<form method="post" action="/settings/mcp"><input type="hidden" name="do" value="{"off" if on else "on"}">'
+              f'<label class="switch"><input type="checkbox" role="switch"{" checked" if on else ""} '
+              f'onchange="this.form.requestSubmit()">{_("Share on this network")}</label>'
+              f'<noscript><p><button>{_("Stop sharing") if on else _("Share")}</button></p></noscript></form>')
+    if not on:
+        return f'<div class="actions mcp">{intro}{switch}</div>'
+    if st["starting"]:
+        state = f'<p class="hint">{_("Starting… refresh in a moment.")}</p>'
+    elif not st["running"]:
+        why = st["error"] or _("it runs only while this app is open")
+        state = (f'<p class="warn">{icon("alert")}{_("On, but not running: {why}.").format(why=escape(why))}</p>'
+                 f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="on">'
+                 f'<button>{_("Try again")}</button></form>')
+    else:
+        servers = {}
+        for server, tool in st["tools"]:
+            servers.setdefault(server, []).append(tool)
+        rows = "".join(f'<li><strong>{escape(s)}</strong> <span class="hint">{escape(", ".join(sorted(ts)))}</span></li>'
+                       for s, ts in servers.items())
+        not_shared = _("not shared: {why}")
+        skipped = "".join(f'<li><strong>{escape(s)}</strong> <span class="hint">{not_shared.format(why=escape(why))}</span></li>'
+                          for s, why in st["skipped"].items())
+        search = ("" if "search" in servers or "search" in st["skipped"] else
+                  f'<li><strong>search</strong> <span class="hint">{not_shared.format(why=_("no Brave Search key (add one under Research)"))}</span></li>')
+        sharing = _("Sharing {n} tools on port {port}.").format(n=len(st["tools"]), port=st["port"])
+        state = (f'<p>{icon("check")}{sharing}</p>'
+                 f'<details><summary>{_("The tools")}</summary><ul class="mcp-tools">{rows}{skipped}{search}</ul></details>')
+    address, token = mcp_share.url(), settings.mcp_token()
+    local = mcp_share.url("127.0.0.1")
+    firewall = _("If another device can't connect, allow incoming connections for Python in System Settings → Network → Firewall.")
+    setups = "".join(
+        f'<details{" open" if n == 0 else ""}><summary>{escape(title)}</summary>'
+        f'<pre class="mcp-snippet" id="mcp-{sid}">{escape(text)}</pre>'
+        f'<p><button type="button" data-copy="mcp-{sid}">{_("Copy")}</button></p></details>'
+        for n, (sid, title, text) in enumerate(mcp_setups(address, token)))
+    connect = (f'<label for="mcp-url">{_("Address")}</label><div class="inline">'
+               f'<input type="text" id="mcp-url" value="{escape(address, quote=True)}" readonly>'
+               f'<button type="button" data-copy="mcp-url">{_("Copy")}</button></div>'
+               f'<p class="hint">{_("On this computer, {address} works too.").format(address=f"<code>{escape(local)}</code>")} '
+               f'{firewall}</p>'
+               f'<label for="mcp-token">{_("Token")}</label><div class="inline">'
+               f'<input type="password" id="mcp-token" value="{escape(token, quote=True)}" readonly autocomplete="off">'
+               f'<button type="button" data-show="mcp-token">{_("Show")}</button>'
+               f'<button type="button" data-copy="mcp-token">{_("Copy")}</button></div>'
+               f'<p class="hint">{_("Apps send it as {header}. Keep it like a password: anyone on your network with it can use the tools.").format(header="<code>Authorization: Bearer &lt;token&gt;</code>")}</p>'
+               f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="token">'
+               f'<button>{_("New token")}</button><span class="hint">{_("Apps with the old one stop working.")}</span></form>')
+    port = (f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="port">'
+            f'<label for="mcp-port" style="margin:0">{_("Port")}</label>'
+            f'<input type="number" id="mcp-port" name="port" value="{settings.mcp_port()}" min="1024" max="65535" '
+            f'style="width:6rem"><button>{_("Save")}</button></form>')
+    return (f'<div class="actions mcp">{intro}{switch}{state}{connect}'
+            f'{part("plug", _("Connect an app"))}{setups}{port}</div>{MCP_COPY_JS}')
+
+async def save_mcp(request: Request) -> Response:
+    """Settings -> MCP server: switch sharing on or off, make a new token, or change the port."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    do = str(form.get("do") or "")
+    back = "/settings#mcp"
+    if do == "off":
+        settings.set_mcp_share(False)
+        await run_in_threadpool(mcp_share.stop)
+        return go(back, done="mcp_off")
+    if do == "token":
+        settings.new_mcp_token()
+        return go(back, done="mcp_token")
+    if do == "port":
+        try:
+            settings.set_mcp_port(int(str(form.get("port") or "")))
+        except ValueError:
+            return go(back, error="mcp_port")
+        if settings.mcp_share():
+            await run_in_threadpool(mcp_share.stop)
+            if await run_in_threadpool(mcp_share.start):
+                return go(back, error="mcp_start")
+        return go(back, done="mcp_port")
+    settings.set_mcp_share(True)
+    settings.mcp_token()                   # made now, so the page has one to show
+    if await run_in_threadpool(mcp_share.start):
+        return go(back, error="mcp_start")
+    return go(back, done="mcp_on")
 
 def publication_section() -> str:
     name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
     return (f'<form method="post" action="/settings/publication" class="actions">'
-            f'<p class="hint">How the published site introduces itself: its pages, About page and feeds. '
-            f'Saving redraws every published page.</p>'
-            f'<label for="pub-name">Name</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
+            f'<p class="hint">{_("Name, tagline and About text for the published site and feeds. Saving redraws every page.")}</p>'
+            f'<label for="pub-name">{_("Name")}</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
             f'value="{escape(name, quote=True)}" placeholder="{settings.PUBLICATION_DEFAULT}">'
-            f'<label for="pub-tagline">Tagline <span class="hint">optional: one line under the name on the article list</span></label>'
+            f'<label for="pub-tagline">{_("Tagline")} <span class="hint">{_("optional, shown under the name")}</span></label>'
             f'<input type="text" id="pub-tagline" name="tagline" maxlength="{settings.TAGLINE_MAX}" value="{escape(tag, quote=True)}">'
-            f'<label for="pub-about">About statement <span class="hint">optional: your words at the top of the About page; '
-            f'a blank line starts a new paragraph. Empty: the built-in description.</span></label>'
+            f'<label for="pub-about">{_("About statement")} <span class="hint">'
+            f'{_("optional, top of the About page. A blank line starts a paragraph. Empty: the built-in text.")}</span></label>'
             f'<textarea id="pub-about" name="about" rows="5" maxlength="{settings.ABOUT_MAX}">{escape(about_text)}</textarea>'
-            f'<p><button>Save publication</button></p></form>')
+            f'<p><button>{_("Save publication")}</button></p></form>')
 
 async def save_search(request: Request) -> Response:
     if not same_origin(request):
@@ -2575,6 +2791,7 @@ async def save_search(request: Request) -> Response:
     back = _back(form) if form.get("back") else "/settings"
     if form.get("remove"):
         settings.forget_search_key()
+        await run_in_threadpool(mcp_share.restart)   # the search tool goes from what is shared
         return go(back, done="search_off")
     key = str(form.get("key") or "").strip()
     if not key or len(key) > 200 or any(c.isspace() for c in key):
@@ -2583,6 +2800,7 @@ async def save_search(request: Request) -> Response:
     if not ok:
         return go(back, error="search_key")
     settings.save_search_key(key)
+    await run_in_threadpool(mcp_share.restart)       # the search tool joins what is shared
     return go(back, done="search_unchecked" if note else "search_saved")
 
 async def save_publication(request: Request) -> Response:
@@ -2632,19 +2850,19 @@ async def home(request: Request) -> HTMLResponse:
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
     asks += [(6, a) for a in epic_proposals(missions) + combine_proposals()]
-    body.append(heading("touch", "Needs you", len(asks), "needs-you"))
-    body.append("".join(a for _, a in sorted(asks, key=lambda a: a[0]))
-                or '<p class="muted empty">Nothing is waiting on you.</p>')
+    body.append(heading("touch", _("Needs you"), len(asks), "needs-you"))
+    body.append("".join(a for _rank, a in sorted(asks, key=lambda a: a[0]))
+                or f'<p class="muted empty">{_("Nothing needs you.")}</p>')
 
     # In progress, by stage. assets/flow.js relights cards in place; researchers may only visit data-lab-ok groups.
     going = flow(m for m in missions if in_progress(m) and stage_of(m) != "publishing")
     queued = publish_queue(missions)
     waiting = {slug for _, _, entries in queued for slug, _, _ in entries}
-    body.append(heading("activity", "In progress", len(going) + len(waiting)))
+    body.append(heading("activity", _("In progress"), len(going) + len(waiting)))
     if not going and not waiting:
-        body.append('<p class="muted empty">Nothing in progress. Add a mission above, or set an inspiration line '
-                    'and start the loop.</p>')
+        body.append(f'<p class="muted empty">{_("Nothing in progress.")}</p>')
     for key, name, title in STAGES:
+        title = _(title)
         if key == "publishing":
             if waiting:
                 body.append(f'<h3 class="stage">{icon(name)}<span>{title}</span><span class="n">{len(waiting)}</span></h3>'
@@ -2660,12 +2878,12 @@ async def home(request: Request) -> HTMLResponse:
     body.append(epic_list(missions))
     tail = log_tail()
     if tail:
-        body.append(f'<details><summary>{icon("terminal")}Loop log (data/loop.log)</summary><pre class="notes">'
+        body.append(f'<details><summary>{icon("terminal")}{_("Loop log")}</summary><pre class="notes">'
                     + escape("\n".join(tail)) + "</pre></details>")
     done = sum(m.state == State.DONE for m in missions)   # the very last thing, for anyone looking for it
-    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published</span>'
-                f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
-                f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
+    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}{_("Published")}</span>'
+                f'<span class="badge">{_n("{n} article", "{n} articles", done)}</span></div>'
+                f'<div class="sub">{_("Where each article went, and republish")}</div></a>')
     if lab:
         body.append(script("researchers.js"))
     return page("Mission Loop", "\n".join(body), poll=True)
@@ -2675,35 +2893,35 @@ def new_mission() -> str:
     epic and short name) in a dialog that posts to /missions like the CLI's add. The page's own refresh holds off
     while it is open."""
     steps = [
-        ("What should the loop research?", """<label for="topic">Topic <span class="hint">what to research, in one line</span></label>
-  <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">"""),
-        ("What would answer it?", """<label for="objective">Objective <span class="hint">optional: the question to answer, what counts as evidence, any hypothesis to test</span></label>
+        (_("Topic"), f"""<label for="topic">{_("Topic")} <span class="hint">{_("one line")}</span></label>
+  <input type="text" id="topic" name="topic" required placeholder="{escape(_("e.g. Did the new transit levy pass, and who paid for the campaign?"), quote=True)}">"""),
+        (_("Objective"), f"""<label for="objective">{_("Objective")} <span class="hint">{_("optional: the question, what counts as evidence, a hypothesis")}</span></label>
   <textarea id="objective" name="objective" rows="5"></textarea>"""),
-        ("Where does it belong?", """<label for="epic">Epic <span class="hint">optional: pick one, or type a new name of 1 to 4 words</span></label>
-  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="e.g. Fed Policy Capture">
-  <label for="slug">Short name <span class="hint">optional; made from the topic if left blank</span></label>
+        (_("Epic"), f"""<label for="epic">{_("Epic")} <span class="hint">{_("optional, pick or type 1–4 words")}</span></label>
+  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="{escape(_("e.g. Fed Policy Capture"), quote=True)}">
+  <label for="slug">{_("Short name")} <span class="hint">{_("optional, made from the topic")}</span></label>
   <input type="text" id="slug" name="slug" placeholder="transit-levy">
-  <p class="hint wiz-sum"></p>"""),
+  <p class="hint wiz-sum" data-prefix="{escape(_("Adding:"), quote=True)}"></p>"""),
     ]
     panes = "".join(f'<fieldset class="wiz-step" data-step="{i}"{"" if i == 0 else " hidden"}>'
-                    f'<legend>Step {i + 1} of {len(steps)}: {title}</legend>{fields}</fieldset>'
+                    f'<legend>{_("Step {n} of {total}").format(n=i + 1, total=len(steps))}: {title}</legend>{fields}</fieldset>'
                     for i, (title, fields) in enumerate(steps))
     if loop_running():
-        go_label, go_title = "Add and research next", "The Research Assistant takes it as soon as it finishes its current task."
+        go_label, go_title = _("Add and research next"), _("Research Assistant takes it next.")
     else:
-        go_label, go_title = "Add and start loop", "Starts the loop with the Research Assistant on this mission first."
+        go_label, go_title = _("Add and start loop"), _("Starts the loop on this mission first.")
     return (epic_datalist()
             + f'<button type="button" class="card add-mission" id="add-mission" aria-haspopup="dialog" '
-              f'aria-controls="wizard">{icon("plus")}{icon("pencil")}<span>Add a mission</span></button>'
+              f'aria-controls="wizard">{icon("plus")}{icon("pencil")}<span>{_("Add a mission")}</span></button>'
             + f'''<dialog id="wizard" class="wizard" aria-labelledby="wizard-title">
 <form method="post" action="/missions">
-  <header><strong id="wizard-title">{icon("pencil")}New mission</strong>
-    <button type="button" class="wiz-close" aria-label="Close">&times;</button></header>
-  <ol class="wiz-dots" aria-hidden="true">{"".join("<li></li>" for _ in steps)}</ol>
+  <header><strong id="wizard-title">{icon("pencil")}{_("New mission")}</strong>
+    <button type="button" class="wiz-close" aria-label="{_("Close")}">&times;</button></header>
+  <ol class="wiz-dots" aria-hidden="true">{"".join("<li></li>" for _step in steps)}</ol>
   {panes}
-  <p class="wiz-nav"><button type="button" class="wiz-back" hidden>Back</button>
-    <button type="button" class="primary wiz-next">Next</button>
-    <span class="wiz-add" hidden><button class="primary">Add mission</button>
+  <p class="wiz-nav"><button type="button" class="wiz-back" hidden>{_("Back")}</button>
+    <button type="button" class="primary wiz-next">{_("Next")}</button>
+    <span class="wiz-add" hidden><button class="primary">{_("Add mission")}</button>
     <button class="wiz-go" name="go" value="start" title="{escape(go_title)}">{icon("play")}{go_label}</button></span></p>
 </form></dialog>{WIZARD_JS}''')
 
@@ -2723,7 +2941,7 @@ WIZARD_JS = """<script>
       steps.forEach((s, n) => s.hidden = n !== i);
       dots.forEach((d, n) => d.className = n < i ? "done" : n === i ? "on" : "");
       back.hidden = i === 0; next.hidden = i === steps.length - 1; add.hidden = !next.hidden;
-      if (i === steps.length - 1) dlg.querySelector(".wiz-sum").textContent = "Adding: " + topic.value.trim();
+      if (i === steps.length - 1) { const sum = dlg.querySelector(".wiz-sum"); sum.textContent = sum.dataset.prefix + " " + topic.value.trim(); }
       const first = steps[i].querySelector("input, textarea");
       if (first) first.focus();
     }
@@ -2750,44 +2968,43 @@ WIZARD_JS = """<script>
 def actions_for(m: Mission) -> str:
     slug = quote(m.slug)
     def send_back(what: str, placeholder: str) -> str:
-        return (f'<details class="send-back"><summary>Send it back with notes</summary>'
-                f'<form method="post" action="/m/{slug}/reject"><label for="notes">What should the {what} fix?</label>'
-                f'<textarea id="notes" name="notes" rows="4" required placeholder="{placeholder}"></textarea>'
-                f'<p><button>Send back to {what}</button></p></form></details>')
+        return (f'<details class="send-back"><summary>{_("Send back with notes")}</summary>'
+                f'<form method="post" action="/m/{slug}/reject"><label for="notes">{what}</label>'
+                f'<textarea id="notes" name="notes" rows="4" required placeholder="{escape(placeholder, quote=True)}"></textarea>'
+                f'<p><button>{_("Send back")}</button></p></form></details>')
     if m.state == State.BRIEF_READY and not m.approved:
-        return ask("review", "Approve the brief, or send it back", "Brief ready",
-                   '<p class="hint">Read it below. Approving sends it to the writer.</p>',
-                   f'<form method="post" action="/m/{slug}/approve"><button class="primary">Approve brief</button></form>'
-                   + send_back("researcher", "e.g. Find the FAA's own incident report; the thesis overstates the denial."))
+        return ask("review", _("Review brief"), "Brief ready", "",
+                   f'<form method="post" action="/m/{slug}/approve"><button class="primary">{_("Approve brief")}</button></form>'
+                   + send_back(_("Notes for the researcher"),
+                               _("e.g. Find the FAA's own incident report; the thesis overstates the denial.")))
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        where = (f"Publishing writes it to the local site (site/{escape(m.slug)}/)"
-                 + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled() else "")
-                 + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".")
+        where = _("Publishes to: {places}").format(places=", ".join([_("Local site")] + [c.NAME for c in live_channels()]))
         rated = f'<p class="hint">{escape(rating_line(m.article_rating))}</p>' if m.article_rating else ""
-        return ask("publish", "Publish the article, or send it back", "Article ready", f'<p class="hint">{where}</p>{rated}',
-                   f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
-                   f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
-                   + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings."))
+        return ask("publish", _("Review article"), "Article ready", f'<p class="hint">{escape(where)}</p>{rated}',
+                   f'<form method="post" action="/m/{slug}/publish"><button class="primary">{_("Publish article")}</button></form>'
+                   f'<a class="btn" href="/m/{slug}/preview" target="_blank">{_("Open preview")}</a>'
+                   + send_back(_("Notes for the writer"),
+                               _("e.g. The second section repeats the first; lead with the FAA findings.")))
     if m.state == State.PARKED:
-        what = "article" if orchestrator.parked_while_writing(m) else "brief"
+        writing = orchestrator.parked_while_writing(m)
         if orchestrator.parked_draft(m):
-            push = f'<form method="post" action="/m/{slug}/push"><button>Push through anyway</button></form>'
-            push_hint = (f"Push through sends the last failed {what} on to your review. It stays marked as "
-                         f"failing its check, including on the published page.")
+            push = f'<form method="post" action="/m/{slug}/push"><button>{_("Push through anyway")}</button></form>'
+            push_hint = (_("Push through: send the last failed article to review, marked as failed.") if writing
+                         else _("Push through: send the last failed brief to review, marked as failed."))
         else:
             push = ""
-            push_hint = f"It can't be pushed through because no attempt left a finished {what}."
-        return ask("parked", "Requeue it" + (", or push it through" if push else ""), "Parked",
-                   f'<p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
-                   f'below so the agent can learn from them. {push_hint}</p>',
-                   f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>{push}')
+            push_hint = _("Can't push through: no finished article.") if writing else _("Can't push through: no finished brief.")
+        requeue = _("Requeue: {n} new attempts, notes kept.").format(n=m.max_attempts)
+        return ask("parked", next_step(m), "Parked",
+                   f'<p class="hint">{requeue} {push_hint}</p>',
+                   f'<form method="post" action="/m/{slug}/requeue"><button class="primary">{_("Requeue")}</button></form>{push}')
     if m.state == State.DONE:
         rows = places(m)
         return (f'<div class="actions"><div class="buttons">'
-                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the local site</a>'
-                f'<a class="btn" href="/published">All published articles</a></div>'
-                f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul class="places">{places_html(m, rows)}</ul>'
-                f'<p class="hint" style="margin-bottom:.2rem">Publish it again</p>{publish_form(m, rows, f"/m/{slug}")}</div>')
+                f'<a class="btn" href="/site/{slug}/" target="_blank">{_("View on local site")}</a>'
+                f'<a class="btn" href="/published">{_("All published")}</a></div>'
+                f'<p class="hint" style="margin-bottom:.2rem">{_("Published to")}</p><ul class="places">{places_html(m, rows)}</ul>'
+                f'<p class="hint" style="margin-bottom:.2rem">{_("Publish it again")}</p>{publish_form(m, rows, f"/m/{slug}")}</div>')
     return ""
 
 async def published_page(request: Request) -> HTMLResponse:
@@ -2801,20 +3018,20 @@ async def published_page(request: Request) -> HTMLResponse:
     queues = {c.KEY: [] for c in live} | {key: [slug for slug, _, _ in entries] for key, _, entries in queued}
     queues.pop("site", None)
     epics = {e.slug: e for e in store.all_epics()}
-    body = [flash(request), '<p><a class="back" href="/">&larr; Back to missions</a></p>', "<h1>Published</h1>",
-            f'<p>{len(missions)} article{"" if len(missions) == 1 else "s"} on the local site. '
-            f'<a class="btn" href="/site/" target="_blank">Open the local site</a> '
-            f'<a class="btn" href="/settings#publishing">Publishing settings</a></p>']
-    rows = ['<li><strong>Local site</strong>: the foundation, always on · files in <code>site/</code> · '
+    body = [flash(request), f'<p><a class="back" href="/">&larr; {_("Missions")}</a></p>', f'<h1>{_("Published")}</h1>',
+            f'<p>{_n("{n} article", "{n} articles", len(missions))} · '
+            f'<a class="btn" href="/site/" target="_blank">{_("Open the local site")}</a> '
+            f'<a class="btn" href="/settings#publishing">{_("Publishing settings")}</a></p>']
+    rows = [f'<li><strong>{_("Local site")}</strong>: {_("always on")} · <code>site/</code> · '
             '<a href="/site/feed.xml" target="_blank">RSS</a> · <a href="/site/feed.json" target="_blank">JSON Feed</a></li>']
     rows += [f"<li>{channel_status(c)}</li>" for c in live]
     if not live:
-        rows.append('<li class="muted">No channels yet. Add one on the <a href="/settings#publishing">Settings</a> page.</li>')
-    body.append(f'{heading("send", "Where articles go")}<ul class="places">{"".join(rows)}</ul>')
+        rows.append(f'<li class="muted">{_("No channels. Add one in {settings}.").format(settings=SETTINGS_LINK())}</li>')
+    body.append(f'{heading("send", _("Channels"))}<ul class="places">{"".join(rows)}</ul>')
     body.append(queue_section(queued))
-    body.append(heading("newspaper", "Articles"))
+    body.append(heading("newspaper", _("Articles")))
     if not missions:
-        body.append('<p class="muted">Nothing published yet. Articles show up here once you publish them from the Missions page.</p>')
+        body.append(f'<p class="muted">{_("Nothing published yet.")}</p>')
     for m in missions:
         rows = places(m, queues)
         when = f"{m.published_at:%b %-d, %Y}" if m.published_at else ""
@@ -2822,15 +3039,15 @@ async def published_page(request: Request) -> HTMLResponse:
             f'<div class="card pub{" publish" if m.publish_requests else ""}" id="a-{escape(m.slug)}">'
             f'<div class="row"><a class="topic" href="/site/{quote(m.slug)}/" target="_blank">{escape(titles.get(m.slug, m.topic))}</a>'
             f'<span class="badge{" publish" if m.publish_requests else ""}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">mission page</a></div>'
+            f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">{_("mission page")}</a></div>'
             f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
-    return page("Published", "\n".join(body), poll=True)
+    return page(_("Published"), "\n".join(body), poll=True)
 
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]
     m = store.get_mission(slug)
     if not m:
-        return page("Not found", '<h1>No such mission</h1><p><a href="/">Back to missions</a></p>')
+        return page(_("Not found"), f'<h1>{_("No such mission")}</h1><p><a href="/">{_("Back to missions")}</a></p>')
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request),
             f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
@@ -2841,61 +3058,60 @@ async def mission(request: Request) -> Response:
     step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
-    ask = escape(f"Where is the mission {slug} at, and what is taking so long?", quote=True)
-    body.append(f'<p><button type="button" class="btn" data-ask="{ask}">Ask the assistant about this mission</button></p>')
+    ask = escape(_("Where is the mission {slug} at, and what is taking so long?").format(slug=slug), quote=True)
+    body.append(f'<p><button type="button" class="btn" data-ask="{ask}">{_("Ask chat about this mission")}</button></p>')
     body.append(actions_for(m))
     current = epics.get(m.epic)
-    hint = " (proposed; approve it on the home page)" if current and current.status == "proposed" else ""
+    hint = " " + _("(proposed)") if current and current.status == "proposed" else ""
     body.append(f'{epic_datalist()}<form method="post" action="/m/{quote(slug)}/epic" class="inline">'
-                f'<label for="epic" style="margin:0">Epic<span class="hint">{hint}</span></label>'
+                f'<label for="epic" style="margin:0">{_("Epic")}<span class="hint">{hint}</span></label>'
                 f'<input type="text" id="epic" name="epic" list="epic-names" maxlength="48" '
-                f'value="{escape(current.title if current else "", quote=True)}" placeholder="none">'
-                f'<button>Save epic</button></form>')
+                f'value="{escape(current.title if current else "", quote=True)}" placeholder="{_("none")}">'
+                f'<button>{_("Save")}</button></form>')
     body.append(connections(m))
 
     if m.validator_notes:
-        title = "Why it was parked" if m.state == State.PARKED else \
-                "Feedback being worked on" if m.validator_notes.startswith("Human reviewer feedback") else \
-                "Why the last draft was sent back" if m.rejected_article and m.rejected_article.rating else \
-                "Last check's notes"
-        name = "alert" if m.state == State.PARKED or not title.startswith("Feedback") else "message"
-        body.append(f'{heading(name, title, cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
+        title = "Why it stopped" if m.state == State.PARKED else \
+                "Your feedback" if m.validator_notes.startswith("Human reviewer feedback") else \
+                "Why it went back" if m.rejected_article and m.rejected_article.rating else \
+                "Check notes"
+        name = "message" if title == "Your feedback" else "alert"
+        body.append(f'{heading(name, _(title), cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
     if m.unchecked_brief:
-        body.append(heading("alert", "Brief pushed through despite failing the source check", cls="sec")
+        body.append(heading("alert", _("Brief pushed through: failed source check"), cls="sec")
                     + f'<pre class="notes">{escape(m.unchecked_brief)}</pre>')
     if m.unchecked_article:
-        body.append(heading("alert", "Article pushed through despite failing its check", cls="sec")
+        body.append(heading("alert", _("Article pushed through: failed article check"), cls="sec")
                     + f'<pre class="notes">{escape(m.unchecked_article)}</pre>')
 
     brief, article = _brief(slug), _article(slug)
     checked = not m.unchecked_brief
     preview = Path("missions") / slug / "preview.html"
     if m.article_rating and m.state in (State.ARTICLE_READY, State.DONE):
-        body.append(f'{heading("scale", "Rating", cls="sec")}{rating_html(m.article_rating)}')
+        body.append(f'{heading("scale", _("Rating"), cls="sec")}{rating_html(m.article_rating)}')
     if article and preview.exists() and m.state in (State.ARTICLE_READY, State.DONE, State.WRITING):
-        body.append(f'{heading("newspaper", "Article", cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
+        body.append(f'{heading("newspaper", _("Article"), cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
     if brief and m.state == State.BRIEF_READY:
-        body.append(f'{heading("search", "Research brief", cls="sec")}<div class="doc">{brief_html(brief, checked)}</div>')
+        body.append(f'{heading("search", _("Research brief"), cls="sec")}<div class="doc">{brief_html(brief, checked)}</div>')
     elif brief:
-        body.append(f'<details><summary>{icon("search")}Research brief</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
+        body.append(f'<details><summary>{icon("search")}{_("Research brief")}</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
     rejected = Path("missions") / slug / "brief.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.RESEARCHING, State.QUEUED):
-        body.append(f'<details><summary>{icon("cross")}Last brief that failed the source check</summary>'
+        body.append(f'<details><summary>{icon("cross")}{_("Last failed brief")}</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
     rejected = Path("missions") / slug / "article.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.WRITING):
-        what = "was sent back by its rating" if m.rejected_article and m.rejected_article.rating else "failed its check"
-        body.append(f'<details><summary>{icon("cross")}Last article that {what}</summary>'
+        failed = _("Last low-rated article") if m.rejected_article and m.rejected_article.rating else _("Last failed article")
+        body.append(f'<details><summary>{icon("cross")}{failed}</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
 
     events = store.events(slug)
     if events:
         rows = "".join(f'<tr><td class="when">{escape(e["at"][:16].replace("T", " "))}</td>'
-                       f'<td>{escape(LABELS.get(State(e["to_state"]), e["to_state"]))}</td>'
+                       f'<td>{escape(_(LABELS.get(State(e["to_state"]), e["to_state"])))}</td>'
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
-        body.append(f'{heading("history", "History", cls="sec")}<table class="events">{rows}</table>'
-                    f'<p><a class="steps-all" href="/log?m={quote(slug)}">Every agent step on this mission, with how '
-                    f'long each took &rarr;</a></p>')
+        body.append(f'{heading("history", _("History"), cls="sec")}<table class="events">{rows}</table>'
+                    f'<p><a class="steps-all" href="/log?m={quote(slug)}">{_("Step log")} &rarr;</a></p>')
     return page(m.topic, "\n".join(body), poll=True)
 
 async def preview(request: Request) -> Response:
@@ -2931,6 +3147,7 @@ CHAT_JS = """<script>
   const log = document.getElementById("chat-log"), form = document.getElementById("chat-form");
   const box = document.getElementById("chat-q"), pickModel = document.getElementById("chat-model");
   const hint = document.getElementById("chat-hint"), suggest = document.getElementById("chat-suggest");
+  const T = window.I18N || {}, t = s => T[s] || s;
   const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false, crews = {};
@@ -2982,11 +3199,11 @@ CHAT_JS = """<script>
     let data = {models: [], default: ""};
     try { data = await (await fetch("/chat/models")).json(); } catch (e) {}
     const saved = (() => { try { return localStorage.getItem("chat-model"); } catch (e) { return null; } })();
-    pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} (default, shared with the loop)` : m, m)));
+    pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} ${t("(default)")}` : m, m)));
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " Web search needs a Brave key (Settings → Web search); it can still read pages you link.";
+    else if (data.web === false) hint.textContent += " " + t("Web search off. Add a Brave key in Settings → Web search.");
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
@@ -3010,15 +3227,15 @@ CHAT_JS = """<script>
   function save() { history = history.slice(-20); store("chat-history", history); }
   async function wait(pending, request) {
     box.disabled = true;
-    const note = show("assistant", "Looking…", "", "wait");
+    const note = show("assistant", t("Looking…"), "", "wait");
     let answer, model = pending.model;
     try {
       const r = await request();
       const data = await r.json();
-      answer = data.lost ? "That answer was lost when the UI restarted. Ask again?" : data.answer;
+      answer = data.lost ? t("Answer lost when the UI restarted. Ask again.") : data.answer;
     } catch (e) {
       if (leaving) return;                     // the page is going; the next one picks it up
-      answer = "Researcher Chat didn't answer. Is the UI still running?";
+      answer = t("No answer. Is the UI still running?");
     }
     note.remove();
     if ((store("chat-pending") || {}).id !== pending.id) return;      // cleared while it was thinking
@@ -3039,11 +3256,11 @@ CHAT_JS = """<script>
       body: JSON.stringify({question, model, id, history: past})}));
   }
   function transcript() {
-    return history.map(h => h.role === "user" ? `You: ${h.content}`
-                                              : `Researcher Chat${h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
+    return history.map(h => h.role === "user" ? `${t("You")}: ${h.content}`
+                                              : `${t("Researcher Chat")}${h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
   }
   async function copy() {
-    const text = transcript(), was = "Copy";
+    const text = transcript(), was = t("Copy");
     let ok = !!text;
     if (ok) {
       try { await navigator.clipboard.writeText(text); }
@@ -3054,7 +3271,7 @@ CHAT_JS = """<script>
         t.remove();
       }
     }
-    copyBtn.textContent = !text ? "Nothing yet" : ok ? "Copied" : "Copy failed";
+    copyBtn.textContent = !text ? t("Nothing to copy") : ok ? t("Copied") : t("Copy failed");
     clearTimeout(copy.timer); copy.timer = setTimeout(() => { copyBtn.textContent = was; }, 1500);
   }
   let leaving = false;
@@ -3083,23 +3300,24 @@ CHAT_JS = """<script>
 </script>"""
 
 def chat_widget() -> str:
-    chips = "".join(f'<button type="button">{escape(q)}</button>' for q in SUGGESTIONS)
+    chips = "".join(f'<button type="button">{escape(_(q))}</button>' for q in SUGGESTIONS)
     sprites_src = asset("researchers.js")
+    chat = escape(_("Researcher Chat"), quote=True)
     guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{sprites_src}"></div>'
              if settings.animations() else "")
-    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Researcher Chat" aria-expanded="false"
+    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="{chat}" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
-<aside id="chat-panel" class="chat-panel" aria-label="Researcher Chat" hidden>{guide}
-<header><strong>Researcher Chat</strong><span><button type="button" id="chat-copy" title="Copy the conversation">Copy</button>
- <button type="button" id="chat-clear" title="Start over">Clear</button>
- <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
-<label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
-<p class="hint" id="chat-hint">It reads what the loop is doing, searches the web, can add a mission or move one to an epic, and works with the loop off.</p>
+<aside id="chat-panel" class="chat-panel" aria-label="{chat}" hidden>{guide}
+<header><strong>{chat}</strong><span><button type="button" id="chat-copy" title="{_("Copy the conversation")}">{_("Copy")}</button>
+ <button type="button" id="chat-clear" title="{_("Start over")}">{_("Clear")}</button>
+ <button type="button" id="chat-close" aria-label="{_("Close")}">×</button></span></header>
+<label class="model">{_("Model")} <select id="chat-model" aria-label="{_("Model")}"></select></label>
+<p class="hint" id="chat-hint">{_("Ask about the loop, or search the web.")}</p>
 <div class="chat-log" id="chat-log" aria-live="polite"></div>
 <div class="suggest" id="chat-suggest">{chips}</div>
 <form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"
- placeholder="Where is the grid outage mission at?" aria-label="Your question"></textarea>
-<button class="primary">Ask</button></form>
+ placeholder="{escape(_("Where is the grid outage mission at?"), quote=True)}" aria-label="{_("Your question")}"></textarea>
+<button class="primary">{_("Ask")}</button></form>
 </aside>{CHAT_JS}"""
 
 async def chat_models(request: Request) -> JSONResponse:
@@ -3110,7 +3328,7 @@ async def chat_models(request: Request) -> JSONResponse:
         found = await run_in_threadpool(agents.chat_catalog)
     except Exception:
         return JSONResponse({"models": [MODEL], "default": MODEL, "crews": {MODEL: chat_crew(MODEL)}, "web": web,
-                             "error": "Ollama isn't reachable, so Researcher Chat can't answer. Start the Ollama app."})
+                             "error": _("Can't reach Ollama. Start it to use chat.")})
     found = found or [{"name": MODEL, **chat_crew(MODEL)}]
     return JSONResponse({"models": [c["name"] for c in found], "default": found[0]["name"], "web": web,
                          "crews": {c["name"]: {"crew": c["crew"], "family": c["family"]} for c in found}})
@@ -3130,7 +3348,7 @@ def _answer(question: str, history: list, model: str | None) -> str:
     try:
         return agents.chat(question, history, model)
     except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
-        return f"I couldn't answer just now ({type(e).__name__}: {str(e)[:200]}). Is Ollama running?"
+        return _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
 
 def _keep_job(job_id: str, job: concurrent.futures.Future) -> None:
     CHAT_JOBS[job_id] = job
@@ -3147,7 +3365,7 @@ async def chat_ask(request: Request) -> Response:
         job_id = str(data.get("id") or "")[:64]
         history = history if isinstance(history, list) else []
     except (ValueError, AttributeError):
-        return JSONResponse({"answer": "That question didn't arrive in one piece. Try again."}, status_code=400)
+        return JSONResponse({"answer": _("That question didn't arrive in one piece. Try again.")}, status_code=400)
     job = _chat_pool.submit(_answer, question, [h for h in history if isinstance(h, dict)], model)
     if job_id:
         _keep_job(job_id, job)
@@ -3169,19 +3387,22 @@ LOG_PAGE = 200                             # steps per page of the full log
 def step_row(e: dict, topics: dict[str, str], live: bool = False) -> str:
     """One row of the full log: when it ended, which agent, on what, on which worker, how long, how it ended."""
     if live:
-        when, took_ = "now", f'<span data-since="{float(e["since"])}">{elapsed(e["since"])}</span> so far'
-        out = '<span class="out live">working</span>'
+        when = _("now")
+        took_ = _("{time} so far").format(time=f'<span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>')
+        out = f'<span class="out live">{_("working")}</span>'
     else:
-        when = datetime.fromtimestamp(float(e["ended"])).strftime("%b %-d %H:%M:%S")
+        when = datetime.fromtimestamp(float(e["ended"])).strftime("%Y-%m-%d %H:%M:%S")
         took_ = took(e["ended"] - e["since"])
         kind = e.get("outcome", "done")
-        out = (f'<span class="out {kind}">{OUTCOME.get(kind, "done")}</span>'
+        out = (f'<span class="out {kind}">{_(OUTCOME.get(kind, "done"))}</span>'
                + (f' <span class="muted">{escape(e["why"])}</span>' if e.get("why") else ""))
     task = (f'<a href="/m/{quote(e["slug"])}">{escape(topics.get(e["slug"], e["slug"]))}</a>' if e.get("slug")
-            else f'<span class="muted">{PAST.get(e["agent"], "the whole desk")}</span>')
-    who = settings.seat_name(e.get("worker", "")) or "Desk"
-    return (f'<tr><td class="when">{when}</td><td><strong>{activity.AGENTS[e["agent"]]}</strong></td><td>{task}</td>'
+            else f'<span class="muted">{_(PAST.get(e["agent"], "all missions"))}</span>')
+    who = seat_name(e.get("worker", "")) or _("Desk")
+    return (f'<tr><td class="when">{when}</td><td><strong>{agent_name(e["agent"])}</strong></td><td>{task}</td>'
             f'<td class="when">{escape(who)}</td><td class="took">{took_}</td><td>{out}</td></tr>')
+
+LOG_COLUMNS = ("Ended", "Step", "Mission", "Worker", "Took", "Outcome")
 
 async def log_page(request: Request) -> HTMLResponse:
     """The full step log (activity.LOG): every agent step the loop has finished, newest first, with how long each
@@ -3199,28 +3420,31 @@ async def log_page(request: Request) -> HTMLResponse:
     pages = max(1, -(-len(steps) // LOG_PAGE))
     page_no = min(page_no, pages)
     shown = steps[(page_no - 1) * LOG_PAGE: page_no * LOG_PAGE]
-    back = (f'<a class="back" href="/m/{quote(slug)}">&larr; Back to the mission</a>' if slug
-            else '<a class="back" href="/">&larr; Back to missions</a>')
-    whose = f' on <a href="/m/{quote(slug)}">{escape(topics.get(slug, slug))}</a>' if slug else ""
+    back = (f'<a class="back" href="/m/{quote(slug)}">&larr; {_("Back to the mission")}</a>' if slug
+            else f'<a class="back" href="/">&larr; {_("Back to missions")}</a>')
     total = sum(e["ended"] - e["since"] for e in steps)
-    body = [f'<p>{back}</p>', "<h1>Step log</h1>",
-            f'<p class="muted">{len(steps)} finished step{"" if len(steps) == 1 else "s"}{whose}, '
-            f'{took(total)} of agent work in all. Saved on this machine in <code>{escape(str(activity.LOG))}</code>.'
-            + (' <a href="/log">Show every mission</a>.' if slug else "") + "</p>"]
+    count = _n("{n} step", "{n} steps", len(steps)).format(n=len(steps))
+    if slug:
+        count = _("{steps} on {mission}").format(
+            steps=count, mission=f'<a href="/m/{quote(slug)}">{escape(topics.get(slug, slug))}</a>')
+    summary = _("{steps} · {time} in all · saved in {file}").format(
+        steps=count, time=took(total), file=f"<code>{escape(str(activity.LOG))}</code>")
+    body = [f'<p>{back}</p>', f'<h1>{_("Step log")}</h1>',
+            f'<p class="muted">{summary}'
+            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "") + "</p>"]
     rows = [step_row(e, topics, live=True) for e in (live if page_no == 1 else [])]
     rows += [step_row(e, topics) for e in shown]
     if rows:
-        body.append('<table class="events steps-log"><tr><td class="when">Ended</td><td class="when">Step</td>'
-                    '<td class="when">Mission</td><td class="when">Worker</td><td class="when">Took</td>'
-                    f'<td class="when">Outcome</td></tr>{"".join(rows)}</table>')
+        head = "".join(f'<td class="when">{_(h)}</td>' for h in LOG_COLUMNS)
+        body.append(f'<table class="events steps-log"><tr>{head}</tr>{"".join(rows)}</table>')
     else:
-        body.append('<p class="muted">No steps yet. Each agent step is written here as it finishes, once the loop runs.</p>')
+        body.append(f'<p class="muted">{_("No steps yet.")}</p>')
     if pages > 1:
         link = lambda n, label: f'<a class="btn" href="/log?{("m=" + quote(slug) + "&") if slug else ""}page={n}">{label}</a>'
-        body.append(f'<p>{link(page_no - 1, "&larr; Newer") if page_no > 1 else ""} '
-                    f'<span class="muted">Page {page_no} of {pages}</span> '
-                    f'{link(page_no + 1, "Older &rarr;") if page_no < pages else ""}</p>')
-    return page("Step log", "".join(body), poll=True)
+        body.append(f'<p>{link(page_no - 1, "&larr; " + _("Newer")) if page_no > 1 else ""} '
+                    f'<span class="muted">{_("Page {n} of {total}").format(n=page_no, total=pages)}</span> '
+                    f'{link(page_no + 1, _("Older") + " &rarr;") if page_no < pages else ""}</p>')
+    return page(_("Step log"), "".join(body), poll=True)
 
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
@@ -3244,9 +3468,9 @@ BOARD_LINK_JS = """<script>
 def board_link(slug: str, real: bool = False) -> str:
     """A small "On the board" link to the board, zoomed onto this mission (a span inside a card, which is a link)."""
     if real:
-        return f'<a class="onboard" href="/board?focus={quote(slug)}">{ICON_BOARD}On the board</a>'
+        return f'<a class="onboard" href="/board?focus={quote(slug)}">{ICON_BOARD}{_("On the board")}</a>'
     return (f'<span class="onboard" role="link" tabindex="0" data-board="{escape(slug, quote=True)}" '
-            f'title="Show it on the board">{ICON_BOARD}On the board</span>')
+            f'title="{escape(_("Show on the board"), quote=True)}">{ICON_BOARD}{_("On the board")}</span>')
 
 PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
          State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
@@ -3288,22 +3512,23 @@ def board_state() -> dict:
             thesis = brief.thesis if brief else m.brief_sources.thesis if m.brief_sources else ""
             sources = len(brief.sources) if brief else 0
             links = strung.get(n["id"], 0)
-            meta = [f"{sources} source{'s' * (sources != 1)}" if sources else "",
-                    f"{links} connection{'s' * (links != 1)}" if links else "",
-                    f"attempt {m.attempts} of {m.max_attempts}" if m.state == State.RESEARCHING and m.attempts else "",
-                    f"combined into {m.combined_into}" if m.combined_into else ""]
+            meta = [_n("{n} source", "{n} sources", sources) if sources else "",
+                    _n("{n} connection", "{n} connections", links) if links else "",
+                    _("attempt {n} of {total}").format(n=m.attempts, total=m.max_attempts)
+                    if m.state == State.RESEARCHING and m.attempts else "",
+                    _("combined into {mission}").format(mission=m.combined_into) if m.combined_into else ""]
             n.update(title=article.title if article else m.topic, short=_cut(article.title if article else m.topic, 90),
                      thesis=_cut(thesis or m.objective or m.topic, board.PREVIEW_CHARS),
-                     thesis_label="Thesis" if thesis else "Objective", stage=label(m), paper=paper(m),
+                     thesis_label=_("Thesis") if thesis else _("Objective"), stage=label(m), paper=paper(m),
                      epic=epics[m.epic].title if m.epic in epics else "", url=f"/m/{quote(m.slug)}",
-                     open="Open article" if article else "Open brief" if brief else "Open mission",
+                     open=_("Open article") if article else _("Open brief") if brief else _("Open mission"),
                      meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED,
                      worker=live.get(m.slug) if live.get(m.slug) in settings.WORKERS else "")
         else:
             count = members.get(n["slug"], 0)
             e = epics.get(n["slug"])
-            n.update(title=e.title if e else "Unsorted", proposed=bool(e and e.status == "proposed"),
-                     count_text=f"{count} mission{'s' * (count != 1)}")
+            n.update(title=e.title if e else _("Unsorted"), proposed=bool(e and e.status == "proposed"),
+                     count_text=_n("{n} mission", "{n} missions", count))
     data.update(poll=board.POLL_SECONDS * 1000, size_min=board.SIZE_MIN, size_max=board.SIZE_MAX,
                 style=settings.board_style(), animations=settings.animations())
     data["sig"] = hashlib.sha1(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:12]
@@ -3336,19 +3561,20 @@ def board_style_panel(style: dict) -> str:
     """The board's own gear: surface, cards, string and its colour, changed in place (assets/board.js)."""
     def seg(key: str, options: dict) -> str:
         return (f'<div class="seg" data-key="{key}">' + "".join(
-            f'<button type="button" data-value="{v}" class="{"on" if style[key] == v else ""}">{escape(n)}</button>'
+            f'<button type="button" data-value="{v}" class="{"on" if style[key] == v else ""}">{escape(_(n))}</button>'
             for v, n in options.items()) + "</div>")
     dots = "".join(f'<button type="button" class="dot{" on" if style["color"] == c else ""}" data-kind="{kind}" '
-                   f'data-value="{c}" style="--c:{c}" title="{escape(name)}" aria-label="{escape(name)}"'
+                   f'data-value="{c}" style="--c:{c}" title="{escape(_(name))}" aria-label="{escape(_(name))}"'
                    f'{"" if kind == style["string"] else " hidden"}></button>'
                    for kind, colors in settings.BOARD_STRINGS.items() for name, c in colors.items())
-    return (f'<div class="board-style" hidden><div class="lbl">Surface</div>{seg("surface", settings.BOARD_SURFACES)}'
-            f'<div class="lbl">Cards</div>{seg("cards", settings.BOARD_CARDS)}'
-            f'<div class="lbl">Joined by</div>{seg("string", settings.BOARD_STRING_NAMES)}'
-            f'<div class="lbl">Colour</div><div class="dots">{dots}'
-            f'<label class="dot own" title="Your own colour"><input type="color" value="{style["color"]}" '
-            f'aria-label="Your own colour"></label></div>'
-            f'<a class="more" href="/settings#board">Also on the Settings page</a></div>')
+    own = escape(_("Your own colour"), quote=True)
+    return (f'<div class="board-style" hidden><div class="lbl">{_("Surface")}</div>{seg("surface", settings.BOARD_SURFACES)}'
+            f'<div class="lbl">{_("Cards")}</div>{seg("cards", settings.BOARD_CARDS)}'
+            f'<div class="lbl">{_("Joined by")}</div>{seg("string", settings.BOARD_STRING_NAMES)}'
+            f'<div class="lbl">{_("Colour")}</div><div class="dots">{dots}'
+            f'<label class="dot own" title="{own}"><input type="color" value="{style["color"]}" '
+            f'aria-label="{own}"></label></div>'
+            f'<a class="more" href="/settings#board">{_("Settings")}</a></div>')
 
 # A click on one of the Settings page's board choices sends that choice alone (`changed`), so a page showing an older
 # look (the gear on the board changed it in another tab, or the browser restored old ticks) never saves the rest back.
@@ -3359,28 +3585,27 @@ def board_style_form() -> str:
     style = settings.board_style()
     def choice(key: str, options: dict) -> str:
         return "".join(f'<label><input type="radio" name="{key}" value="{v}"{" checked" if style[key] == v else ""} '
-                       f'onchange="{BOARD_PICK}">{escape(n)}</label>' for v, n in options.items())
+                       f'onchange="{BOARD_PICK}">{escape(_(n))}</label>' for v, n in options.items())
     colors = settings.BOARD_STRINGS[style["string"]]
     swatches = "".join(
         f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
         f'{" checked" if style["color"] == c else ""} onchange="{BOARD_PICK}"><span class="dab"></span>'
-        f'{escape(n)}</label>' for n, c in colors.items())
+        f'{escape(_(n))}</label>' for n, c in colors.items())
     presets = {c for kind in settings.BOARD_STRINGS.values() for c in kind.values()}
     own = style["color"] not in presets
     swatches += (f'<label class="swatch own{" set" if own else ""}" style="--c:{style["color"]};--ink:{settings.ink_on(style["color"])}">'
-                 f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="Your own colour" '
+                 f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="{escape(_("Your own colour"), quote=True)}" '
                  f'onchange="this.form.querySelectorAll(\'input[name=color]\').forEach(r => r.checked = false); '
-                 f'this.form.changed.value = \'color\'; this.form.requestSubmit()">Your own</label>')
+                 f'this.form.changed.value = \'color\'; this.form.requestSubmit()">{_("Your own")}</label>')
     return f"""<form method="post" action="/settings/board-style" class="actions display" id="board" autocomplete="off">
   <input type="hidden" name="changed" value="">
-  <h3>{icon("board")}Board</h3>
-  <p class="hint">How the <a href="/board">board</a> looks: its surface, its cards, and what joins them. The gear on the
-  board changes the same thing.</p>
-  <div class="choice" role="radiogroup" aria-label="Surface">{choice("surface", settings.BOARD_SURFACES)}</div>
-  <p></p><div class="choice" role="radiogroup" aria-label="Cards">{choice("cards", settings.BOARD_CARDS)}</div>
-  <p></p><div class="choice" role="radiogroup" aria-label="Joined by">{choice("string", settings.BOARD_STRING_NAMES)}</div>
-  <p></p><div class="swatches" role="radiogroup" aria-label="Colour">{swatches}</div>
-  <noscript><p><button>Save</button></p></noscript>
+  <h3>{icon("board")}{_("Board")}</h3>
+  <p class="hint">{_("Surface, cards and string for the {board}. Same as the gear on the board.").format(board=f'<a href="/board">{_("board")}</a>')}</p>
+  <div class="choice" role="radiogroup" aria-label="{_("Surface")}">{choice("surface", settings.BOARD_SURFACES)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="{_("Cards")}">{choice("cards", settings.BOARD_CARDS)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="{_("Joined by")}">{choice("string", settings.BOARD_STRING_NAMES)}</div>
+  <p></p><div class="swatches" role="radiogroup" aria-label="{_("Colour")}">{swatches}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>"""
 
 def _board_style_from(values) -> dict:
@@ -3426,8 +3651,8 @@ async def board_page(request: Request) -> Response:
     data = await run_in_threadpool(board_state)
     focus = request.query_params.get("focus", "")
     raw = json.dumps(data).replace("<", "\\u003c")   # no "</script>" or "<!--" can end the data block
-    empty = "" if data["notes"] else ('<p class="board-empty">Nothing on the board yet. '
-                                      '<a href="/">Add a mission</a> and it shows up here.</p>')
+    empty = "" if data["notes"] else (f'<p class="board-empty">{_("Board empty.")} '
+                                      f'<a href="/">{_("Add a mission")}</a></p>')
     style = data["style"]
     looks = (f'surface-{style["surface"]} cards-{style["cards"]} str-{style["string"]}'
              + (" animate" if data["animations"] else ""))
@@ -3437,20 +3662,29 @@ async def board_page(request: Request) -> Response:
             f'<div class="world"><svg class="strings" aria-hidden="true"></svg></div>{empty}'
             f'<div class="board-crumb" hidden></div>'
             f'<div class="board-pop" hidden></div>'
-            f'<div class="board-legend"><span><i class="e"></i>Epic</span><span><i class="l"></i>Link</span>'
-            f'<span><i class="m"></i>Same source or mention</span></div>'
+            f'<div class="board-legend"><span><i class="e"></i>{_("Epic")}</span><span><i class="l"></i>{_("Links")}</span>'
+            f'<span><i class="m"></i>{_("Same source or mention")}</span></div>'
             f'<div class="board-zoom"></div>'
-            f'<div class="board-tools"><button type="button" data-tool="out" title="Zoom out" aria-label="Zoom out">−</button>'
-            f'<button type="button" data-tool="in" title="Zoom in" aria-label="Zoom in">+</button>'
-            f'<button type="button" data-tool="fit" title="Fit everything" aria-label="Fit everything">'
-            f'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>'
-            f'<button type="button" data-tool="style" title="Board style" aria-label="Board style" '
+            f'<div class="board-tools"><button type="button" data-tool="out" title="{_("Zoom out")}" aria-label="{_("Zoom out")}">{ICON_ZOOM_OUT}</button>'
+            f'<button type="button" data-tool="in" title="{_("Zoom in")}" aria-label="{_("Zoom in")}">{ICON_ZOOM_IN}</button>'
+            f'<button type="button" data-tool="fit" title="{_("Fit everything")}" aria-label="{_("Fit everything")}">{ICON_FIT}</button>'
+            f'<button type="button" data-tool="style" title="{_("Board style")}" aria-label="{_("Board style")}" '
             f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
             f'</div><script type="application/json" id="board-data">{raw}</script>'
-            f'{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
-    return page("Board", body)
+            f'{script_i18n("board.js")}{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
+    return page(_("Board"), body)
+
+# The board's tools are drawn, not typed: a "−" or "+" glyph sits on its font's baseline, never in the middle.
+ICON_ZOOM_OUT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>'
+ICON_ZOOM_IN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg>'
+ICON_FIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>'
 
 BOARD_CSS = """
+/* the view's offsets and zoom, which only a moving surface's own background reads: never inherited, so moving the
+   view restyles the board alone, not its hundreds of notes and strings */
+@property --gx { syntax:"<length>"; inherits:false; initial-value:0px; }
+@property --gy { syntax:"<length>"; inherits:false; initial-value:0px; }
+@property --gz { syntax:"<number>"; inherits:false; initial-value:1; }
 body:has(.board-wrap) { overflow-x:hidden; }
 body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap { --string:#c0242b; position:relative; width:calc(100vw - 2rem); margin-left:calc(50% - 50vw + 1rem);
@@ -3467,14 +3701,16 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
   box-shadow:inset 0 0 0 12px #6e4a2a, inset 0 0 0 14px #4c321b, inset 0 0 60px rgba(0,0,0,.35); }
 .board-wrap:active { cursor:grabbing; }
 .board-wrap .world { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
-.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible; }
+.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible;   /* board.js sizes it */
+  filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }       /* one shadow for every string, never one each */
 .board-wrap .str path { fill:none; stroke-linecap:round; }
-.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }
+.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; }
 .board-wrap .str.link .line { stroke-width:1.8; }
 .board-wrap .str.mention .line { stroke-width:1.3; stroke-dasharray:5 4; opacity:.8; }
 .board-wrap .str .hit { stroke:transparent; stroke-width:12; pointer-events:stroke; }
 .board-wrap .str.epic .hit { pointer-events:none; }
 .board-wrap .faded { opacity:.2; filter:saturate(.3); transition:opacity .3s; }
+.board-wrap .str.faded { filter:none; }                     /* the strings are one colour: fading is enough */
 .board-wrap .note { border:none; margin:0; }                /* not the site's .note */
 .board-wrap .note { --s:1; position:absolute; transform:translate(-50%,-50%) rotate(var(--r,0deg));
   width:calc(160px * var(--s)); padding:calc(20px * var(--s)) calc(13px * var(--s)) calc(11px * var(--s));
@@ -3554,9 +3790,9 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-zoom { position:absolute; right:206px; top:36px; font:600 11px system-ui, sans-serif; color:rgba(255,255,255,.9);
   text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:3; }
 .board-tools { position:absolute; right:24px; top:24px; display:flex; gap:6px; z-index:3; }
-.board-tools button { width:38px; height:38px; border:none; display:grid; place-items:center; font:600 18px system-ui, sans-serif;
-  color:var(--fg); cursor:pointer; }
-.board-tools svg { width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; }
+.board-tools button { width:38px; height:38px; padding:0; border:none; display:grid; place-items:center; line-height:0;
+  color:var(--fg); cursor:pointer; }                         /* padding:0: the app's button padding pushed icons off centre */
+.board-tools svg { display:block; width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; stroke-linecap:round; }
 .board-empty { position:absolute; inset:0; display:grid; place-items:center; margin:0; color:#fff;
   font:italic 1.2rem Georgia, serif; text-shadow:0 1px 3px rgba(0,0,0,.6); }
 .board-empty a { color:#fff; }
@@ -3582,16 +3818,25 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
   box-shadow:inset 0 0 0 10px #d3d8dc, inset 0 0 0 11px #b6bcc2, inset 0 -40px 70px rgba(0,0,0,.07); }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-zoom { color:#555; text-shadow:none; }
 .board-wrap.surface-dark .note.unsorted, .board-wrap.surface-dark .board-empty { color:#cfe2ff; }
+/* on the dark boards the controls are lifted off the board with a lighter face and a thin light ring, or a dark
+   theme's buttons (#151517) vanish on night (#0d1220) and arcade (#1d2b53) */
+.board-wrap:is(.surface-dark, .surface-arcade) :is(.board-crumb, .board-legend, .board-tools button, .board-style) {
+  background:color-mix(in srgb, var(--bg) 86%, #9fb4d8); box-shadow:0 0 0 1px rgba(200,220,255,.28), 0 6px 16px rgba(0,0,0,.55); }
+.board-wrap:is(.surface-dark, .surface-arcade) .board-tools button:hover { box-shadow:0 0 0 1px rgba(200,220,255,.6), 0 6px 16px rgba(0,0,0,.55); }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty, .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty a { color:#555; text-shadow:none; }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .note.unsorted { color:#6b6b70; }
 
 /* ---------- what joins them: string (default), laser, wire ---------- */
-.board-wrap.str-laser .str .line { stroke-width:1.7; filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser svg.strings { filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser .str .line { stroke-width:1.7; }
 .board-wrap.str-laser .str .core { stroke:#fff; stroke-width:.6; opacity:.9; }
 .board-wrap.str-laser .str.mention .line, .board-wrap.str-laser .str.mention .core { stroke-dasharray:6 6; }
-.board-wrap.str-laser.animate .str .line { animation:laser 2.6s ease-in-out infinite alternate; }
+/* the pulse fades the whole layer of strings, which the compositor does alone: pulsing each string repainted the
+   whole board every frame, and a zoomed-in board fell behind and showed flat patches of cork */
+.board-wrap.str-laser.animate svg.strings { animation:laser 2.6s ease-in-out infinite alternate; }
 @keyframes laser { from { opacity:.65; } to { opacity:1; } }
-.board-wrap.str-wire .str .line { stroke-width:2; filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire svg.strings { filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire .str .line { stroke-width:2; }
 .board-wrap.str-wire .str .core { stroke:rgba(255,255,255,.6); stroke-width:.7; transform:translate(-.4px, -.5px); }
 .board-wrap.str-wire .str.mention .line { stroke-dasharray:none; stroke-width:1.2; opacity:.75; }
 .board-wrap.str-laser .board-legend i { box-shadow:0 0 6px var(--string); }
@@ -3650,7 +3895,8 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 /* ---------- cards: hologram ---------- */
 .board-wrap.cards-hologram .note { --holo:#7fd8ff; color:#e8fbff; background:linear-gradient(160deg, color-mix(in srgb, var(--holo) 22%, transparent),
   color-mix(in srgb, var(--holo) 8%, transparent)), repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px);
-  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px; backdrop-filter:blur(2px);
+  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px;
+  background-color:rgba(6,12,24,.5);                         /* a tint, not a backdrop blur: strings behind stay faint */
   box-shadow:0 0 14px color-mix(in srgb, var(--holo) 45%, transparent), inset 0 0 18px color-mix(in srgb, var(--holo) 25%, transparent);
   text-shadow:0 0 6px color-mix(in srgb, var(--holo) 70%, transparent); }
 .board-wrap.cards-hologram .note .t { font-family:"SF Mono", Menlo, Consolas, monospace; font-weight:600; letter-spacing:.01em; }
@@ -3686,7 +3932,7 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap.cards-hologram.animate .note:nth-child(3n) { animation-delay:-2.3s; }
 .board-wrap.cards-hologram.animate .note:nth-child(3n+1) { animation-delay:-4.6s; }
 @keyframes holo { 0%, 92%, 100% { opacity:1; } 93% { opacity:.72; } 94% { opacity:1; } 96% { opacity:.85; } }
-@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap .str .line { animation:none !important; } }
+@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap svg.strings { animation:none !important; } }
 
 /* ---------- the gear's panel ---------- */
 .board-style { position:absolute; right:24px; top:72px; width:300px; max-width:calc(100% - 48px); z-index:5; cursor:auto;
@@ -3706,7 +3952,6 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-style .dot.own { position:relative; overflow:hidden; background:conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
 .board-style .dot.own input { position:absolute; inset:-6px; width:40px; height:40px; opacity:0; cursor:pointer; }
 .board-style .more { display:block; margin-top:.8rem; font-size:12px; }
-.board-tools button svg { width:18px; height:18px; fill:none; stroke:var(--fg); stroke-width:1.8; }
 /* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
 .board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
   pointer-events:none; image-rendering:pixelated; }
@@ -3726,7 +3971,8 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 
 /* ---------- strings: pixel (right-angle elbows) ---------- */
 .board-wrap.str-pixel .str path { stroke-linecap:square; stroke-linejoin:miter; }
-.board-wrap.str-pixel .str .line { stroke-width:3; filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel svg.strings { filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel .str .line { stroke-width:3; }
 .board-wrap.str-pixel .str.link .line { stroke-width:2.5; }
 .board-wrap.str-pixel .str.mention .line { stroke-width:2; stroke-dasharray:6 6; opacity:.9; }
 .board-wrap.str-pixel .board-legend i { border-top-width:3px; }
@@ -3774,26 +4020,24 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 def avatar_link() -> str:
     """The Settings page's way into the studio, with what is customised so far."""
     n, off = len(avatars.custom()), len(avatars.off())
-    bits = [f"{n} of your own" if n else "", f"{off} staying home" if off else ""]
-    now = " · ".join(b for b in bits if b) or "just the twelve built-in researchers"
+    bits = [_n("{n} of your own", "{n} of your own", n) if n else "", _n("{n} staying home", "{n} staying home", off) if off else ""]
+    now = " · ".join(b for b in bits if b) or _("built-in researchers only")
     return f"""<div class="actions display avatar-link">
-  <h3>{icon("person")}Avatars</h3>
-  <p class="hint">Dress a researcher from pieces, or ask a model to draw one. They join their crew and drop by like
-  everyone else; switch anyone off to keep them home. Right now: {escape(now)}.</p>
-  <p><a class="btn" href="/avatars">Open the avatar studio</a>
-  <a class="btn" href="/sprites">Open the sprite studio</a></p>
-  <p class="hint">The sprite studio is for writing a sprite's spec by hand (<code>SPRITES.md</code>) and seeing it
-  drawn in every pose.</p>
+  <h3>{icon("person")}{_("Avatars")}</h3>
+  <p class="hint">{_("Build a researcher from pieces, or ask a model to draw one. Now: {now}.").format(now=escape(now))}</p>
+  <p><a class="btn" href="/avatars">{_("Avatar studio")}</a>
+  <a class="btn" href="/sprites">{_("Sprite studio")}</a></p>
+  <p class="hint">{_("Sprite studio: write a sprite spec by hand ({file}) and see every pose.").format(file="<code>SPRITES.md</code>")}</p>
 </div>"""
 
 async def avatars_page(request: Request) -> HTMLResponse:
-    body = (f'<style>{AVATAR_CSS}</style><h1>Avatar studio</h1>'
-            f'<p class="hint lede">Build a researcher from pieces, like dressing a paper doll, or tell a model what you want. '
-            f'Saved avatars join their crew and visit the missions with everyone else. They stay on this machine '
-            f'(<code>data/sprites.json</code>).</p>'
-            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>The studio needs JavaScript.</noscript></div>'
-            f'{script("researchers.js")}{script("avatars.js")}')
-    return page("Avatar studio", body)
+    lede = _("Build a researcher from pieces, or describe one to a model. Saved avatars join their crew. "
+             "Stored in {file}.").format(file="<code>data/sprites.json</code>")
+    body = (f'<style>{AVATAR_CSS}</style><h1>{_("Avatar studio")}</h1>'
+            f'<p class="hint lede">{lede}</p>'
+            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>{_("The studio needs JavaScript.")}</noscript></div>'
+            f'{script("researchers.js")}{script_i18n("avatars.js")}{script("avatars.js")}')
+    return page(_("Avatar studio"), body)
 
 async def sprite_studio(request: Request) -> Response:
     """The sprite studio (tools/sprites.html): a sprite's spec on the left, the real renderer on the right. The page
@@ -3801,10 +4045,10 @@ async def sprite_studio(request: Request) -> Response:
     try:
         html = (TOOLS / "sprites.html").read_text()
     except OSError:
-        return PlainTextResponse("The sprite studio's page (tools/sprites.html) is missing from this copy.", status_code=404)
+        return PlainTextResponse(_("tools/sprites.html is missing."), status_code=404)
     html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"')
     html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")')
-    html = html.replace("<!--back-->", '<p><a href="/settings">&larr; Back to Settings</a></p>')
+    html = html.replace("<!--back-->", f'<p><a href="/settings">&larr; {_("Settings")}</a></p>')
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 async def sprite_example(request: Request) -> Response:
@@ -3834,7 +4078,7 @@ async def avatar_ask(request: Request) -> JSONResponse:
     data = await _json(request)
     spec, look = data.get("spec"), data.get("look")
     if not isinstance(spec, dict) or len(json.dumps(spec)) > avatars.MAX_SPEC * 2:
-        return JSONResponse({"error": "That avatar didn't arrive in one piece; try again."}, status_code=400)
+        return JSONResponse({"error": _("Avatar arrived incomplete. Try again.")}, status_code=400)
     errors = data.get("errors") if isinstance(data.get("errors"), list) else None
     try:
         out = await run_in_threadpool(agents.edit_avatar, spec, str(data.get("message") or ""),
@@ -3845,10 +4089,10 @@ async def avatar_ask(request: Request) -> JSONResponse:
     except ValueError as e:                # a picture that didn't decode, or was too big
         return JSONResponse({"error": str(e)}, status_code=400)
     except asyncio.TimeoutError:
-        return JSONResponse({"error": "The model took too long; try a smaller model or a simpler ask."}, status_code=504)
+        return JSONResponse({"error": _("Model took too long. Try a smaller model or a simpler ask.")}, status_code=504)
     except Exception as e:                 # Ollama closed, model missing
-        return JSONResponse({"error": f"The model couldn't answer ({type(e).__name__}: {str(e)[:160]}). Is Ollama running?"},
-                            status_code=502)
+        why = f"{type(e).__name__}: {str(e)[:160]}"
+        return JSONResponse({"error": _("Model didn't answer ({error}). Is Ollama running?").format(error=why)}, status_code=502)
     return JSONResponse(out)
 
 async def avatar_save(request: Request) -> JSONResponse:
@@ -3871,9 +4115,9 @@ async def avatar_action(request: Request) -> JSONResponse:
             avatars.set_on(key, action == "on")
         elif action == "delete":
             if not avatars.delete(key):
-                return JSONResponse({"error": f"There is no avatar called {key}."}, status_code=404)
+                return JSONResponse({"error": _("No avatar called {key}.").format(key=key)}, status_code=404)
         else:
-            return JSONResponse({"error": "Unknown action."}, status_code=404)
+            return JSONResponse({"error": _("Unknown action.")}, status_code=404)
     except avatars.AvatarError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({"ok": True})
@@ -4217,11 +4461,13 @@ app = Starlette(routes=[
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/mcp", save_mcp, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
+    Route("/settings/language", save_language, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
     Route("/settings/board-style", save_board_style, methods=["POST"]),
     Route("/auto", save_auto, methods=["POST"]),
