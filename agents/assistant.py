@@ -25,10 +25,26 @@ from pathlib import Path
 import ollama
 import library, settings
 from agents import llm, providers
-from agents.toolbox import Toolbox
+from agents.toolbox import Toolbox, server_status
 
 def default_model() -> str:
-    return settings.chat_model()
+    """The configured chat model; on a fresh clone with no model chosen anywhere yet, the first installed model that
+    can call tools (else a connected cloud provider's first), so the chat can help with setup before the workers
+    have models."""
+    return settings.chat_model() or _first_usable()
+
+def _first_usable() -> str:
+    try:
+        for m in sorted(_ollama().list().models, key=lambda m: m.model):
+            if _can_use_tools(m.model):
+                return m.model
+    except Exception:
+        pass
+    for pid in settings.cloud_providers():
+        names = providers.models(pid)[0]
+        if names:
+            return settings.model_ref(pid, names[0])
+    return ""
 
 def _ollama() -> ollama.Client:
     return ollama.Client(host=settings.ollama_host(), timeout=10)
@@ -54,7 +70,8 @@ failing every attempt is parked; the human can requeue it or push its draft thro
 record shows) or possibilities (labelled, not verified). The mission finder adds missions from the human's inspiration line; the Theorist
 looks across the desk, evolves the line, proposes epics (themes), missions and combines, and links missions.
 Loop tools: loop_status, list_missions, mission_status, agent_steps, search_missions, publication_status,
-list_epics, theorist_notes, desk_overview. search_library finds what the desk's briefs and articles say (claims,
+list_epics, theorist_notes, desk_overview, setup_status (setup questions, or when
+nothing happens). search_library finds what the desk's briefs and articles say (claims,
 quotes, sections). Web tools: search, fetch, find_in_page, wayback_versions. Link every web page you rely on as
 [title](url); never invent a URL.
 Change things only when asked: add_mission (search_missions first), set_mission_epic, set_inspiration,
@@ -63,6 +80,8 @@ Approve, publish, start and stop are UI buttons, not your tools.
 Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know."""
 
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
+NO_MODEL = ("I need a model to answer. Open Ollama with a model installed (ollama.com/download), or add a cloud "
+            "provider's API key on the Settings page, then ask again.")
 
 def _can_use_tools(name: str) -> bool:
     if settings.split_model(name)[0] != settings.LOCAL:
@@ -123,8 +142,8 @@ def pick(model: str | None) -> str:
         return default
 
 def web_search() -> bool:
-    """Brave's search needs a key; reading pages (fetch, find_in_page) works without one."""
-    return bool(os.environ.get("BRAVE_API_KEY"))
+    """Brave's search needs a key (saved on the Settings page or in .env) and npx; reading pages works without."""
+    return not server_status(["search"], CONFIG)["search"]
 
 def servers() -> list[str]:
     return [LOOP_SERVER, LIBRARY_SERVER, *WEB_SERVERS, *(["search"] if web_search() else [])]
@@ -150,6 +169,8 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
         return "Ask me what the loop is doing, or where a mission is."
     messages = [{"role": "system", "content": SYSTEM}, *_history(history), {"role": "user", "content": question}]
     model = model or default_model()
+    if not model:
+        return NO_MODEL
     factory = toolbox_factory or (lambda names: Toolbox(names, config_path=CONFIG))
     try:
         async with asyncio.timeout(TIME_LIMIT), factory(servers()) as tb:

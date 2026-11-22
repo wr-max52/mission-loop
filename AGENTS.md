@@ -11,15 +11,17 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+`data/providers.json` the cloud model providers' API keys and `data/search.json` the Brave Search key: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+- First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
+  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
+- CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 611 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 638 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -49,6 +51,27 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   no Ollama. "Connect Ollama" on the Settings page is the one-click start for a fresh clone: it checks Ollama
   answers and gives each worker without a model one of the installed ones (biggest to the PI, smallest to the
   Research Assistant; never overwrites a choice). Researcher Chat's picker lists cloud models too.
+- Setup check (`doctor.py`): one list of what this machine still needs, each with how to fix it: a model for each
+  worker that's on, those models answering (`deep=True` asks `llm.ready`, else Ollama's quick `llm.connection` and
+  whether a cloud provider has a key), the Brave key, `npx` and `uvx` (from `toolbox.server_status`), and something to
+  work on (a mission or an inspiration line). `python run.py doctor` prints it (exit 1 while a model is missing), the
+  Settings page's Setup section shows it, Researcher Chat reads it (`setup_status`), and the home page's Get started
+  card (`ui.setup_card`) walks through it: Connect Ollama (or links to get Ollama or add a cloud key), the Brave key
+  (checked with Brave by `doctor.check_search_key`, `TRANSPORT` for tests; offline it is saved with a note, a refusal
+  is not saved), an inspiration line with example lines (`ui.INSPIRATIONS`) or Add a mission, then play. The card goes
+  once every check passes, or when hidden (`settings.setup_dismissed`; Settings → Setup brings it back). It never
+  blocks anything. Every CLI command creates the database first (`run._start`), `ui` refuses a port with a live
+  listener (`run._port_free`) and writes the site's index and About page when `site/` has none, so `/site/` and the
+  top bar's About (`/about`) work before anything is published.
+- An honest loop: play (and Add and start loop) asks `agents.ready` first (`ui.can_start`) and refuses with the
+  reason. A running loop that can't work records why in `data/waiting.json` (`doctor.set_waiting`, logged once per
+  reason) and checks again every `run.WAIT_RETRY` (30 s) instead of resting; the top bar then says Waiting (amber,
+  the reason on hover) instead of Running, and the loop panel says what to fix. It is cleared when the loop can work
+  or stops.
+- Personalization: Settings → Publication sets the published site's name (`settings.publication_name`, default
+  "Mission Loop"), a tagline (under the index's heading and as the feeds' description) and an About statement (its
+  paragraphs open the About page, else the built-in line). Saving redraws every published page, the index, the About
+  page and the feeds (`orchestrator.refresh_site`). Nothing is stored at the defaults.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -352,7 +375,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - `agents/__init__.py` is still the only switchboard. Validators never call the LLM.
 - Tools are MCP servers, always: a new agent tool goes in a small server module registered in `mcp.json`
   (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
-  so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`.
+  so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`, which `toolbox.CONFIG`
+  finds next to the code whatever the working folder. A server this machine can't run is skipped, not fatal: its
+  command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty (the
+  search server's `BRAVE_API_KEY`, which `settings.search_key` also reads from `data/search.json`). `Toolbox.skipped`
+  says which and why; the finder stops with that reason instead of searching with no tool.
 - Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and the desk's findings, looks
   things up on the web, and can do everything the Theorist can (read the desk as it does, search the library, evolve
   the line, propose epics and combines, link missions, queue a mission, ask for its turn), through the Theorist's own
@@ -375,7 +402,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
   `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
   and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
-  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`; `mission_status` names a mission's links and
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`, and
+  `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and
   combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
   panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
@@ -386,7 +414,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   stage or work. The panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists).
   By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
   then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
-  reloading it.
+  reloading it. With no model chosen anywhere (a fresh clone) it uses the first installed model that can call tools,
+  else a connected cloud provider's first, so it can help with setup; with none at all it says how to get one.
 - Stopping and progress (`stopping.py`, `checkpoint.py`): the database otherwise changes only when a task ends,
   so long tasks save each finished piece the moment it is done through `checkpoint.save`, and the orchestrator
   writes it (`orchestrator.save_progress`, set up per worker task in `_as_worker`). A checkpoint writes only the
@@ -518,7 +547,11 @@ appearance and hides its own switch; the published site keeps its switch for rea
 
 | You want to | Command |
 |---|---|
-| Open the UI | `python run.py ui` → http://127.0.0.1:8770 |
+| Install and open it the first time | `./start.sh` (again any time to start the app) |
+| Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
+| Check this machine's setup | `python run.py doctor`, or Settings → Setup |
+| Set the published site's name, tagline and About statement | Settings → Publication |
+| Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |

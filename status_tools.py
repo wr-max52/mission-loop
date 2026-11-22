@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, agents, orchestrator, settings, store, trail
+import activity, agents, doctor, orchestrator, settings, store, trail
 from agents import bluesky, f916, github, theorist
 from contracts import Mission, State, epic_title, words
 
@@ -89,7 +89,9 @@ def loop_status() -> str:
     """Is the loop running, which agent is working on which mission right now and for how long,
     how many missions are in each stage, which ones wait for the human, and the last lines of the loop's log."""
     running = orchestrator.loop_running()
+    waiting = doctor.waiting() if running else None
     lines = ["Loop: " + ("stopping after its current task" if running and orchestrator.STOP_FLAG.exists()
+                         else f"waiting, it can't work: {waiting['reason']}" if waiting
                          else "running" if running else "off (no agent is working)")]
     now = _working()
     for e in now:                          # the two workers can each be busy at once
@@ -364,6 +366,21 @@ def set_mission_epic(slug: str, epic: str) -> str:
         return f"{m.topic[:80]} [{m.slug}] is no longer in an epic."
     title = store.get_epic(store.get_mission(m.slug).epic).title
     return f"{m.topic[:80]} [{m.slug}] is now in the epic {title}" + (" (a new epic)." if new else ".")
+
+@server.tool()
+def setup_status() -> str:
+    """This machine's setup, as the Settings page's Setup section shows it: a model for each worker and whether it
+    answers, the web search key, npx and uvx for the research tools, and something to work on. Each item not done
+    says how to fix it. Call this when the human asks how to set up, or why nothing is happening."""
+    found = doctor.checks()
+    lines = [("done: " if c.ok else "TO DO: ") + f"{c.title}: {c.detail}" + (f" Fix: {c.fix}" if c.fix else "")
+             for c in found]
+    waiting = doctor.waiting() if orchestrator.loop_running() else None
+    if waiting:
+        lines.append(f"The loop is running but waiting: {waiting['reason']}")
+    lines.append("Settings are on the Settings page (/settings); the home page's Get started card walks through them."
+                 if not doctor.done(found) else "Everything is set up.")
+    return "\n".join(lines)
 
 # ---------- everything the Theorist can do ----------
 

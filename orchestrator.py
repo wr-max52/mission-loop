@@ -920,6 +920,12 @@ def _refresh_pages(missions: list[Mission]) -> None:
     if published:
         publisher.rebuild_index()
 
+def refresh_site() -> None:
+    """The publication's name or About statement changed: redraw every published page, the index, the About page
+    and the feeds (and the previews waiting for review)."""
+    _refresh_pages(store.all_missions())
+    publisher.rebuild_index()
+
 def refresh_feed() -> None:
     """Articles published before meta.json carried their text get it now, and the index and feeds are
     rebuilt so a changed site URL shows up. Cheap: it reads one small file per published article."""
