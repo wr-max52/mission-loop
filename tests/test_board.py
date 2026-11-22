@@ -306,12 +306,39 @@ def test_the_loop_takes_a_board_turn_when_it_is_due(monkeypatch, stub_agents):
     monkeypatch.setattr(agents, "tidy_board", stubs.tidy_board)
     store.save_theory({"at": "2026-01-01T00:00:00+00:00", "fingerprint": "old", "turn": 2, "kind": "ideas",
                        "patterns": ["Earlier pattern"]})
-    orchestrator.THINK_FLAG.parent.mkdir(exist_ok=True)
-    orchestrator.THINK_FLAG.touch()
     orchestrator.run_until_idle(lambda: NOW)
     last = store.last_theory()
     assert (last["turn"], last["kind"], last["moved"]) == (3, "board", [])
     assert last["ideas"]["patterns"] == ["Earlier pattern"]
+
+def test_asking_the_theorist_on_a_board_turn_gets_ideas(monkeypatch):
+    small_desk()
+    monkeypatch.setattr(agents, "tidy_board", lambda now: pytest.fail("an ask went to the board"))
+    asked = []
+    monkeypatch.setattr(agents, "theorize", lambda now: asked.append(now))
+    store.save_theory({"at": "2026-01-01T00:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["P"]})
+    orchestrator.THINK_FLAG.parent.mkdir(exist_ok=True)
+    orchestrator.THINK_FLAG.touch()
+    orchestrator.think(NOW)
+    assert asked == [NOW] and not orchestrator.THINK_FLAG.exists()
+
+def test_merged_or_dropped_epics_leave_no_board_row():
+    rows = lambda slug: store.conn().execute("SELECT COUNT(*) FROM board WHERE kind = 'epic' AND id = ?",
+                                             (slug,)).fetchone()[0]
+    a, b = store.create_epic("Dam Money"), store.create_epic("Water Rights")
+    store.save_mission(Mission(slug="m1", topic="One", epic=a.slug))
+    store.save_mission(Mission(slug="m2", topic="Two", epic=b.slug))
+    board.layout()
+    assert rows(a.slug) == 1
+    orchestrator.merge_epic(a.slug, b.slug, NOW)
+    assert rows(a.slug) == 0
+    p = store.create_epic("Permit Money")
+    with store.conn() as c:
+        c.execute("UPDATE epics SET status = 'proposed' WHERE slug = ?", (p.slug,))
+    board.layout()
+    assert rows(p.slug) == 1
+    orchestrator._drop_empty_proposals()
+    assert rows(p.slug) == 0
 
 def test_a_failed_board_turn_counts_and_keeps_the_ideas(monkeypatch):
     small_desk()

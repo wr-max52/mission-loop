@@ -1,6 +1,6 @@
 import httpx, pytest
-import agents, library, orchestrator, settings, store, wayback
-from agents import bluesky, custom, f916, github, llm, providers, stubs
+import agents, doctor, library, orchestrator, settings, store, wayback
+from agents import bluesky, custom, f916, github, llm, providers, stubs, toolbox
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
                    "models": [{"name": "small-test:1b", "size": 1_600_000_000},
@@ -34,6 +34,10 @@ def fresh(tmp_path, monkeypatch):
     for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):
         monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
     monkeypatch.setattr(llm, "connection", lambda timeout=2: FAKE_CONNECTION)   # never asks a real Ollama
+    monkeypatch.setattr(agents, "ready", lambda: (True, "test models"))          # play's check: the fake models answer
+    monkeypatch.setattr(toolbox, "WHICH", lambda command: f"/usr/bin/{command}")  # npx and uvx, whatever this machine has
+    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
     for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL", "MISSION_LOOP_GITHUB_URL",
                 "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL"):
         monkeypatch.delenv(var, raising=False)           # nor may a real .env point tests at another server

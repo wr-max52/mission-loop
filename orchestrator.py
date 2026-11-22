@@ -599,9 +599,10 @@ def think(now):
     the others look across the desk (agents.theorize). It only reads; apply_theory or apply_board makes the
     changes. A failure is noted (and counted as a turn), so it waits THEORY_GAP before trying again, and never
     holds up the loop."""
+    asked = THINK_FLAG.exists()
     THINK_FLAG.unlink(missing_ok=True)
     turn = theory_turn()
-    kind = "board" if board_turn(turn) else "ideas"
+    kind = "board" if board_turn(turn) and not asked else "ideas"   # an ask is for ideas; the board waits for its next turn
     try:
         activity.begin("", "theorist")
         return agents.tidy_board(now) if kind == "board" else agents.theorize(now)
@@ -920,6 +921,12 @@ def _refresh_pages(missions: list[Mission]) -> None:
     if published:
         publisher.rebuild_index()
 
+def refresh_site() -> None:
+    """The publication's name or About statement changed: redraw every published page, the index, the About page
+    and the feeds (and the previews waiting for review)."""
+    _refresh_pages(store.all_missions())
+    publisher.rebuild_index()
+
 def refresh_feed() -> None:
     """Articles published before meta.json carried their text get it now, and the index and feeds are
     rebuilt so a changed site URL shows up. Cheap: it reads one small file per published article."""
@@ -933,6 +940,7 @@ def _drop_empty_proposals() -> None:
     for e in store.all_epics("proposed"):
         if e.slug not in used:
             store.delete_epic(e.slug)
+            store.delete_board_note("epic", e.slug)
 
 def _move(missions: list[Mission], epic: str, now, note: str) -> None:
     for m in missions:
@@ -975,6 +983,7 @@ def merge_epic(slug: str, into: str, now) -> None:
     missions = _in_epic(slug)
     _move(missions, into, now, f"moved to epic {target.title}")
     store.delete_epic(slug)
+    store.delete_board_note("epic", slug)       # its pin goes with it
     _refresh_pages(missions)
 
 def reject_epic(slug: str, now) -> None:

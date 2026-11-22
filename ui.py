@@ -16,7 +16,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, board, clock, library, orchestrator, settings, stopping, store
+import activity, agents, board, clock, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -91,6 +91,12 @@ MESSAGES = {
     "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
     "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
     "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
+    "search_saved": "Web search key checked and saved. Research searches the web from its next task.",
+    "search_unchecked": "Web search key saved, but Brave couldn't be asked about it just now. If research can't search, check the key.",
+    "search_off": "Web search key removed from this machine.",
+    "setup_hidden": "Setup hidden. Settings → Setup shows what is left and brings it back.",
+    "setup_shown": "Setup is back at the top of the Missions page.",
+    "publication_saved": "Publication saved. The site's pages, About page and feeds use it now.",
 }
 ERRORS = {
     "combine": "That combine can't go ahead now: a worker is busy with one of its missions, or they moved on.",
@@ -122,6 +128,11 @@ ERRORS = {
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
     "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
     "places": "Tick at least one place to publish it to.",
+    "notready": "The loop can't start yet",
+    "search_key": "Brave refused that key. Copy it again from your Brave Search API dashboard.",
+    "search_format": "That doesn't look like a Brave API key: paste it without spaces.",
+    "publication": f"Too long: the name can be {settings.NAME_MAX} characters, the tagline {settings.TAGLINE_MAX} "
+                   f"and the About statement {settings.ABOUT_MAX}.",
 }
 
 # ---------- loop status ----------
@@ -258,7 +269,8 @@ def signature() -> str:
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
     working = ",".join(f'{e["worker"]}:{e["slug"]}:{e["agent"]}' for e in running_now())
     raw = ("".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
-           f"|{settings.auto_mode()}")
+           f"|{settings.auto_mode()}|{(doctor.waiting() or {}).get('reason', '')}|{settings.setup_dismissed()}"
+           f"|{bool(settings.search_key())}")
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 # ---------- page shell ----------
@@ -394,6 +406,31 @@ label { display:block; font-size:.85rem; font-weight:600; margin:.8rem 0 .3rem; 
 .code-big code { font-size:1.6rem; letter-spacing:.15em; padding:.3rem .6rem; }
 .inline-buttons button { margin-right:.4rem; }
 .actions { border:1px solid var(--rule); border-radius:10px; padding:1rem; margin:1rem 0 1.5rem; }
+.setup { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
+.setup-top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+.setup-top h2 { display:flex; align-items:center; gap:.5rem; margin:0; font-size:1.15rem; }
+.setup-top form { margin:0; }
+.setup-steps { list-style:none; padding:0; margin:.75rem 0 0; display:grid; gap:.6rem; }
+.setup-step { border:1px solid var(--rule); border-radius:8px; padding:.7rem .85rem; }
+.setup-step.done { opacity:.75; }
+.setup-head { display:flex; align-items:center; gap:.55rem; }
+.setup-body { margin-left:1.85rem; }
+.setup-body p { margin:.35rem 0; }
+.setup-form { display:flex; gap:.4rem; flex-wrap:wrap; margin:.4rem 0; }
+.setup-form input { flex:1 1 14rem; min-width:0; }
+.mark { width:1.3rem; height:1.3rem; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+        flex:none; border:2px solid var(--muted); }
+.mark.ok { background:#2f9e44; border-color:#2f9e44; color:#fff; }
+.mark svg { width:.85rem; height:.85rem; }
+.chips { display:flex; flex-wrap:wrap; gap:.35rem; margin:.3rem 0; }
+.chip { font:500 .82rem -apple-system, system-ui, sans-serif; padding:.3rem .65rem; border-radius:999px;
+        border:1px solid var(--rule); background:var(--quote); color:var(--fg); cursor:pointer; }
+.chip:hover { border-color:var(--muted); }
+button.link { background:none; border:0; padding:0; color:var(--accent); cursor:pointer; font:inherit;
+              display:inline-flex; align-items:center; gap:.3rem; text-decoration:underline; }
+.setup-more { margin:.8rem 0 0; color:var(--muted); font-size:.9rem; }
+ul.checks { list-style:none; padding:0; margin:.5rem 0; display:grid; gap:.45rem; }
+ul.checks li { display:flex; gap:.55rem; align-items:flex-start; }
 .actions .buttons { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-start; }
 .actions details { margin-top:.8rem; }
 pre.notes { white-space:pre-wrap; background:var(--quote); padding:.8rem 1rem; border-radius:8px;
@@ -656,6 +693,9 @@ def loop_button() -> str:
     elif orchestrator.STOP_FLAG.exists():
         action, ico, text, dot = "", "pause", "Stopping", "stopping"
         title = "Stopping: the agent at work saves what it has (2 minutes at most), then the loop exits."
+    elif waiting := doctor.waiting():
+        action, ico, text, dot = "stop", "pause", "Waiting", "stopping"
+        title = f"Waiting: {waiting['reason']}. It checks again every 30 seconds. Pause to stop it."
     else:
         action, ico, text, dot = "stop", "pause", "Running", "on"
         title = "Pause the loop. The agent at work saves what it has (2 minutes at most), then the loop stops."
@@ -730,12 +770,16 @@ async function refresh() {{
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
             f'<a href="/board">{ICON_BOARD}Board</a>'
-            f'<a href="/settings">{ICON_SETTINGS}Settings</a></span></nav>'
+            f'<a href="/settings">{ICON_SETTINGS}Settings</a>'
+            f'<a href="/about" target="_blank" title="How the desk works, on the published site">{icon("book")}About</a></span></nav>'
             f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
 
 def flash(request: Request) -> str:
     done, err = request.query_params.get("done"), request.query_params.get("error")
+    if err == "notready":
+        why = (doctor.waiting() or {}).get("reason", "")
+        return f'<div class="flash err">{escape(ERRORS[err])}{": " + escape(why) if why else ""}.</div>'
     if err in ERRORS:
         return f'<div class="flash err">{escape(ERRORS[err])}</div>'
     if done in MESSAGES:
@@ -808,6 +852,10 @@ def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
     if running and stopping:
         state, dot = "Loop is stopping: saving the current work (2 minutes at most)", "stopping"
+        controls = ""
+    elif running and (waiting := doctor.waiting()):
+        state, dot = (f'Loop is waiting: {escape(waiting["reason"])}. It checks again every 30 seconds. '
+                      f'<a href="/settings#setup">Settings → Setup</a> shows what to fix'), "stopping"
         controls = ""
     elif running:
         state, dot = "Loop is running. Pause it with the button at the top of the page", "on"
@@ -1125,7 +1173,7 @@ def workers_section(conn: dict, models: list[dict] | None = None) -> str:
         lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
     models = models if models is not None else llm.catalog(conn)
     cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
-    return (f'{heading("people", "Workers")}<p>{lead} The source checker, article checker and publisher are '
+    return (f'{heading("people", "Workers", anchor="workers")}<p>{lead} The source checker, article checker and publisher are '
             f'code and use no model.</p><div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
 # The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
@@ -1321,15 +1369,17 @@ async def connect_ollama(request: Request) -> Response:
     """One click: is Ollama there, and does every worker have a model? Fills in the workers that have none."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    back = _back(form) if form.get("back") else "/settings"
     conn = await run_in_threadpool(llm.connection, 5)
     if not conn["ok"]:
-        return go("/settings", error="ollama")
+        return go(back, error="ollama")
     if not conn["models"]:
-        return go("/settings", error="ollama_empty")
+        return go(back, error="ollama_empty")
     picks = ollama_picks(conn)
     for worker, model in picks.items():
         settings.set_worker(worker, model, settings.worker_on(worker))
-    return go("/settings", done="ollama_connected" if picks else "ollama_ready")
+    return go(back, done="ollama_connected" if picks else "ollama_ready")
 
 async def save_provider(request: Request) -> Response:
     if not same_origin(request):
@@ -1674,8 +1724,10 @@ def settings_body(request: Request, error: str = "") -> str:
     models = llm.catalog(conn)
     sprites = RESEARCHERS if settings.animations() else ""
     return f"""{err}<h1>Settings</h1>
+{setup_section(conn)}
 {workers_section(conn, models)}
 {connection_section(conn)}
+{search_section()}
 {library_section(conn)}
 {heading("clock", "Loop")}
 <form method="post" action="/settings/loop-every" class="inline">
@@ -1692,6 +1744,7 @@ def settings_body(request: Request, error: str = "") -> str:
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
+{publication_section()}
 {publishing_section()}
 {sprites}"""
 
@@ -2132,6 +2185,209 @@ def queue_section(queued: list) -> str:
 
 # ---------- pages ----------
 
+# ---------- first run: the setup card, Settings → Setup, web search, publication ----------
+
+INSPIRATIONS = (                       # example lines for the setup card; a click puts one in the box
+    "Who really decides what the Federal Reserve does?",
+    "Where does the money for local ballot measures come from?",
+    "What changed after the last big outage, and who paid for it?",
+    "Which promises in this year's farm bill can be checked?",
+)
+
+async def can_start() -> bool:
+    """Can the loop work right now? Records why not (doctor.waiting) so the page can say it."""
+    ok, why = await run_in_threadpool(agents.ready)
+    if ok:
+        doctor.clear_waiting()
+    else:
+        doctor.set_waiting(why)
+    return ok
+
+def _mark(ok: bool) -> str:
+    return (f'<span class="mark ok" title="Done">{icon("check")}</span>' if ok
+            else '<span class="mark todo" title="To do"></span>')
+
+def _step(n: int, title: str, ok: bool, body: str) -> str:
+    return (f'<li class="setup-step{" done" if ok else ""}"><div class="setup-head">{_mark(ok)}'
+            f'<strong>{n}. {escape(title)}</strong></div><div class="setup-body">{body}</div></li>')
+
+def _fixes(found: list) -> str:
+    return "".join(f'<p class="hint">{escape(c.detail)} {escape(c.fix)}'
+                   + (f' <a href="{escape(c.link)}" target="_blank" rel="noopener">Open</a>' if c.link.startswith("http") else
+                      f' <a href="{escape(c.link)}">Open</a>' if c.link else "") + "</p>" for c in found if not c.ok)
+
+def search_form(back: str) -> str:
+    return (f'<form method="post" action="/settings/search" class="inline setup-form">'
+            f'<input type="hidden" name="back" value="{back}">'
+            f'<input type="password" name="key" autocomplete="off" placeholder="Brave Search API key" aria-label="Brave Search API key" required>'
+            f'<button>Check and save</button></form>')
+
+def setup_card(found: list | None = None) -> str:
+    """The home page's first run: connect a model, web search, something to work on, start. Shown until every
+    check passes or the human hides it; it never blocks anything (Settings → Setup brings it back)."""
+    if settings.setup_dismissed():
+        return ""
+    conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
+    found = found if found is not None else doctor.checks(conn=conn)
+    if doctor.done(found):
+        return ""
+    by = {c.key: c for c in found}
+    model_checks = [c for c in found if c.key in ("models", "connection")]
+    models_ok = all(c.ok for c in model_checks)
+    if models_ok:
+        body = f'<p class="hint">{escape(by["models"].detail)}.</p>'
+    else:
+        body = _fixes(model_checks)
+        if settings.missing_models() and conn["ok"] and conn["models"]:
+            body += ('<form method="post" action="/settings/ollama-connect" class="inline"><input type="hidden" name="back" value="/">'
+                     f'<button class="primary">Connect Ollama</button><span class="hint">gives each worker one of your '
+                     f'{len(conn["models"])} installed models</span></form>')
+        elif settings.missing_models() and not conn["ok"]:
+            body += (f'<p><a class="btn" href="{doctor.OLLAMA_DOWNLOAD}" target="_blank" rel="noopener">Get Ollama</a> '
+                     f'<span class="hint">free, runs on this computer; open it, pull a model, then come back</span></p>')
+        body += '<p class="hint">Or use a cloud model (Claude, GPT, Gemini and more): <a href="/settings#providers">add its API key</a>.</p>'
+    tool_checks = [c for c in found if c.key in ("search", "npx", "uvx")]
+    tools_ok = all(c.ok for c in tool_checks)
+    tools = (f'<p class="hint">Research can search the web and read pages.</p>' if tools_ok else
+             '<p class="hint">Research searches the web with Brave Search (there is a free tier).</p>'
+             + (search_form("/") + f'<p class="hint"><a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">Get a key</a>. '
+                'It stays on this machine.</p>' if not by["search"].ok else "")
+             + _fixes([c for c in tool_checks if c.key != "search"]))
+    work_ok = by["work"].ok
+    chips = "".join(f'<button type="button" class="chip" data-line="{escape(line, quote=True)}">{escape(line)}</button>'
+                    for line in INSPIRATIONS)
+    work = (f'<p class="hint">{escape(by["work"].detail)}</p>' if work_ok else
+            '<p class="hint">Give the mission finder a line to explore, and it finds its own missions. Or add one yourself.</p>'
+            f'<form method="post" action="/inspiration" class="inline setup-form">'
+            f'<input type="text" id="setup-line" name="inspiration" maxlength="500" placeholder="A question worth digging into" aria-label="A line for the mission finder to explore">'
+            f'<button>Save inspiration</button></form><div class="chips">{chips}</div>'
+            f'<p><button type="button" class="btn" onclick="document.getElementById(\'add-mission\').click()">'
+            f'{icon("plus")}Add a mission instead</button></p>')
+    can = all(c.ok for c in found if c.blocks_loop)
+    start = ('<p class="hint">Press play at the top of the page. While it runs, briefs and articles wait for your '
+             'review below; the Auto switch approves briefs for you, never publishing.</p>' if can else
+             '<p class="hint">Play works once a model is connected.</p>')
+    steps = (_step(1, "Connect a model", models_ok, body) + _step(2, "Web search", tools_ok, tools)
+             + _step(3, "Give it something to work on", work_ok, work) + _step(4, "Start the loop", loop_running(), start))
+    left = sum(not ok for ok in (models_ok, tools_ok, work_ok))
+    return (f'<section class="setup actions" id="setup" aria-label="Setup">'
+            f'<div class="setup-top"><h2>{icon("compass")}Get started</h2>'
+            f'<form method="post" action="/setup/dismiss"><button class="link" title="Hide setup; Settings → Setup brings it back">Hide</button></form></div>'
+            f'<p class="hint">{left} step{"" if left == 1 else "s"} left. Nothing here is required to look around.</p>'
+            f'<ol class="setup-steps">{steps}</ol>'
+            f'<p class="setup-more">New here? <a href="/about" target="_blank">See how the desk works</a> · '
+            f'<button type="button" class="link" data-ask="How do I get Mission Loop set up, and what do I still need?">'
+            f'{icon("message")}Ask the Researcher Chat</button></p></section>{SETUP_JS}')
+
+SETUP_JS = """<script>
+document.addEventListener("click", e => {
+  const chip = e.target.closest(".chip[data-line]");
+  if (!chip) return;
+  const box = document.getElementById("setup-line");
+  if (box) { box.value = chip.dataset.line; box.focus(); }
+});
+</script>"""
+
+def setup_section(conn: dict) -> str:
+    """Settings → Setup: every check with what to do, and the way back to the home page's setup card."""
+    found = doctor.checks(conn=conn)
+    rows = "".join(f'<li class="{"ok" if c.ok else "todo"}">{_mark(c.ok)}<span><strong>{escape(c.title)}</strong>: '
+                   f'{escape(c.detail)}' + (f' <span class="hint">{escape(c.fix)}</span>' if c.fix else "")
+                   + (f' <a href="{escape(c.link)}"{" target=_blank rel=noopener" if c.link.startswith("http") else ""}>Open</a>'
+                      if c.link and not c.ok else "") + "</span></li>" for c in found)
+    waiting = doctor.waiting() if loop_running() else None
+    note = (f'<p class="hint"><strong>The loop is waiting:</strong> {escape(waiting["reason"])}.</p>' if waiting else "")
+    again = ('<form method="post" action="/setup/show" class="inline"><button>Show setup on the Missions page</button></form>'
+             if settings.setup_dismissed() and not doctor.done(found) else "")
+    summary = ("Everything is set up." if doctor.done(found) else
+               "The loop can start; the rest helps it do its job." if all(c.ok for c in found if c.blocks_loop) else
+               "The loop can't start until a model is connected.")
+    return (f'{heading("compass", "Setup", anchor="setup")}<div class="actions"><p>{summary} The same checks: '
+            f'<code>python run.py doctor</code>.</p>{note}<ul class="checks">{rows}</ul>{again}</div>')
+
+def search_section() -> str:
+    key = settings.search_key()
+    if key and settings.search_key_saved():
+        state = ('A Brave Search key is saved on this machine (<code>data/search.json</code>).'
+                 '<form method="post" action="/settings/search" class="inline"><input type="hidden" name="remove" value="1">'
+                 '<button>Remove key</button></form>')
+    elif key:
+        state = "A Brave Search key is set in <code>.env</code>. Paste one here to use it instead."
+    else:
+        state = (f'No key yet, so research can\'t search the web (it can still read pages). '
+                 f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">Get a free key from Brave</a>.')
+    status = toolbox_status()
+    return (f'{heading("search", "Web search", anchor="search")}<div class="actions"><p>{state}</p>'
+            f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
+
+def toolbox_status() -> str:
+    from agents import toolbox
+    found = toolbox.server_status(["search", "fetch"])
+    bad = [f"{name}: {why}" for name, why in found.items() if why and "not installed" in why]
+    return (f'<p class="hint">{escape("; ".join(bad))}. Install with <code>brew install node uv</code>.</p>' if bad else "")
+
+def publication_section() -> str:
+    name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
+    return (f'{heading("newspaper", "Publication", anchor="publication")}'
+            f'<form method="post" action="/settings/publication" class="actions">'
+            f'<p class="hint">How the published site introduces itself: its pages, About page and feeds. '
+            f'Saving redraws every published page.</p>'
+            f'<label for="pub-name">Name</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
+            f'value="{escape(name, quote=True)}" placeholder="{settings.PUBLICATION_DEFAULT}">'
+            f'<label for="pub-tagline">Tagline <span class="hint">optional: one line under the name on the article list</span></label>'
+            f'<input type="text" id="pub-tagline" name="tagline" maxlength="{settings.TAGLINE_MAX}" value="{escape(tag, quote=True)}">'
+            f'<label for="pub-about">About statement <span class="hint">optional: your words at the top of the About page; '
+            f'a blank line starts a new paragraph. Empty: the built-in description.</span></label>'
+            f'<textarea id="pub-about" name="about" rows="5" maxlength="{settings.ABOUT_MAX}">{escape(about_text)}</textarea>'
+            f'<p><button>Save publication</button></p></form>')
+
+async def save_search(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    back = _back(form) if form.get("back") else "/settings"
+    if form.get("remove"):
+        settings.forget_search_key()
+        return go(back, done="search_off")
+    key = str(form.get("key") or "").strip()
+    if not key or len(key) > 200 or any(c.isspace() for c in key):
+        return go(back, error="search_format")
+    ok, note = await run_in_threadpool(doctor.check_search_key, key)
+    if not ok:
+        return go(back, error="search_key")
+    settings.save_search_key(key)
+    return go(back, done="search_unchecked" if note else "search_saved")
+
+async def save_publication(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        settings.set_publication(str(form.get("name") or "")[:500], str(form.get("tagline") or "")[:500],
+                                 str(form.get("about") or "")[:5000])
+    except ValueError:
+        return go("/settings#publication", error="publication")
+    await run_in_threadpool(orchestrator.refresh_site)
+    return go("/settings#publication", done="publication_saved")
+
+async def setup_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    action = request.path_params["action"]
+    if action == "dismiss":
+        settings.set_setup_dismissed(True)
+        return go("/", done="setup_hidden")
+    if action == "show":
+        settings.set_setup_dismissed(False)
+        return go("/", done="setup_shown")
+    return PlainTextResponse("Unknown action.", status_code=404)
+
+async def about(request: Request) -> Response:
+    """The About page lives on the published site; make sure it is there (a fresh clone has published nothing)."""
+    if not (publisher.SITE / "about" / "index.html").exists():
+        await run_in_threadpool(publisher.rebuild_index)
+    return RedirectResponse("/site/about/", status_code=303)
+
 async def home(request: Request) -> HTMLResponse:
     """The flow chart read from its end: what needs you, then what is in progress closest to published first,
     grouped by stage; then the inputs (inspiration, epics). Adding a mission is one slim card right under the
@@ -2143,7 +2399,8 @@ async def home(request: Request) -> HTMLResponse:
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     lab = settings.animations()
-    body = [flash(request), loop_panel("/"), new_mission()]
+    setup = await run_in_threadpool(setup_card)  # it asks Ollama, which may be slow or off: never on the event loop
+    body = [flash(request), setup, loop_panel("/"), new_mission()]
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
@@ -2495,7 +2752,7 @@ CHAT_JS = """<script>
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " Web search needs a Brave key (BRAVE_API_KEY in .env); it can still read pages you link.";
+    else if (data.web === false) hint.textContent += " Web search needs a Brave key (Settings → Web search); it can still read pages you link.";
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
@@ -3222,7 +3479,8 @@ def same_origin(request: Request) -> bool:
 
 def go(path: str, done: str = "", error: str = "") -> RedirectResponse:
     q = f"?error={error}" if error else f"?done={done}" if done else ""
-    return RedirectResponse(path + q, status_code=303)
+    path, _, fragment = path.partition("#")   # the message goes before a #section, or the server never sees it
+    return RedirectResponse(path + q + (f"#{fragment}" if fragment else ""), status_code=303)
 
 def _back(form) -> str:
     back = str(form.get("back") or "/")
@@ -3329,6 +3587,8 @@ async def add_mission(request: Request) -> Response:
         wake()
         done = "added_next" if rush else "added"
     elif rush:
+        if not await can_start():
+            return go(f"/m/{quote(slug)}", error="notready")
         start_loop(settings.loop_every())
         done = "added_started"
     else:
@@ -3418,6 +3678,8 @@ async def loop_action(request: Request) -> Response:
             every = max(1.0, float(form.get("every") or settings.loop_every()))
         except ValueError:
             every = settings.loop_every()
+        if not await can_start():
+            return go(back, error="notready")
         start_loop(every)
         return go(back, done="started")
     if action == "stop":
@@ -3438,6 +3700,10 @@ app = Starlette(routes=[
     Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
+    Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/publication", save_publication, methods=["POST"]),
+    Route("/setup/{action}", setup_action, methods=["POST"]),
+    Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),

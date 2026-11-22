@@ -30,6 +30,7 @@ def entries(site: Path | None = None) -> list[dict]:
 def rebuild_index(site: Path | None = None) -> Path:
     """site/index.html, feed.json and feed.xml, all from the same entries."""
     site = site or SITE
+    site.mkdir(parents=True, exist_ok=True)   # a fresh clone has no site/ yet
     found = entries(site)
     (site / "feed.json").write_text(feed_json(found, settings.site_url()))
     (site / "feed.xml").write_text(feed_xml(found, settings.site_url()))
