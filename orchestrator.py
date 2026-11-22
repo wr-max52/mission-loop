@@ -326,6 +326,14 @@ def _refresh_pages(missions: list[Mission]) -> None:
     if published:
         publisher.rebuild_index()
 
+def refresh_feed() -> None:
+    """Articles published before meta.json carried their text get it now, and the index and feeds are
+    rebuilt so a changed site URL shows up. Cheap: it reads one small file per published article."""
+    stale = publisher.missing_text()
+    _refresh_pages([m for m in store.all_missions() if m.slug in stale])
+    if publisher.entries():
+        publisher.rebuild_index()
+
 def _drop_empty_proposals() -> None:
     used = {m.epic for m in store.all_missions()}
     for e in store.all_epics("proposed"):
@@ -415,6 +423,7 @@ def run_until_idle(now_fn, max_ticks: int = 100) -> int:
     """One pass. Existing missions go first so the finder never delays work a human just approved;
     whatever it finds is then researched in the same pass. Last, anything published (now or earlier)
     goes out to 1F916 if today's post there is still free."""
+    refresh_feed()
     total = _run_missions(now_fn, max_ticks)
     found = find_new_missions(now_fn())
     if found:

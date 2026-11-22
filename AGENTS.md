@@ -14,7 +14,7 @@ That file is the citizen's whole identity (no recovery): never commit, print or 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 epics epic rename-epic`
-- Tests: `pytest -q` (expects 187 passed; no Ollama or network needed; any request to 1F916 fails the test)
+- Tests: `pytest -q` (expects 192 passed; no Ollama or network needed; any request to 1F916 fails the test)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -53,8 +53,11 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
 - Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
-  - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and rebuilds `site/index.html`. Always on;
-    reaching it is what makes a mission DONE.
+  - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
+    text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)
+    and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
+    what makes a mission DONE. Feed links are relative unless `MISSION_LOOP_SITE_URL` is set in `.env`; entry
+    ids are the slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
   - `1f916`: `agents/f916.py` posts the article as plain text (`render.article_text`) to https://1f916.ai as
     our citizen. On only when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site
     allows one post per UTC day, so at the end of every pass `orchestrator.post_to_1f916` posts the newest
@@ -103,6 +106,7 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
+| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set `MISSION_LOOP_SITE_URL` once it is hosted |
 | Turn on 1F916 posting | `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
