@@ -11,6 +11,11 @@ cat ears, a tail that wags, a flask and her own quirk).
 
 ## How animation works (why a spec never animates anything)
 
+The look is the handheld era's (think of a 16-bit town full of small people): saturated colors, every material
+shaded light to dark, outlines tinted instead of black. The engine does that part: it makes a spec's colors a
+little more vivid and derives the shades, so give flat base colors and let it shade them. Everyone also blinks and
+breathes without a spec asking.
+
 Each frame an action (walk, read, dig, eureka, ...) returns a **pose**: where the arms are (`["up", 0]`), the leg
 swing, a crouch, a nod, the eyes, the mouth, the brows. The body is then drawn from that pose: legs, torso, head
 and arms are placed from anchors (hips, shoulders, the head's base row, each hand), and every part is drawn
@@ -38,7 +43,7 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 2. **One size.** Height and build are set by the engine (and vary a little per visit); a spec can't change them.
    Maps must stay inside their layer's box (below), so every sprite fits the body the animations were made for.
 3. **Faces are drawn by code.** Eyes, brows and mouth change with every pose (happy `^ ^`, wide, half-lidded,
-   a smirk). A map may not put a pixel on the face box (head layer, x 0 to 5, y 1 to 7). Use `face`, `facial`,
+   a smirk). A map may not put a pixel on the face box (head layer, x -1 to 6, y 1 to 8). Use `face`, `facial`,
    `brow`, `mouth`, `lash`, `lids`, `freckles` for the face.
 4. **Facing right, y up.** Every map is drawn facing right; facing left mirrors it. In a map, rows run top to
    bottom as written, but `at` and the boxes count y **up** from the anchor.
@@ -46,8 +51,9 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 6. **Content.** Sprites are cheerful researchers for a work tool. Refuse nudity or sexual content, gore,
    hateful symbols, real people's likenesses and brand logos; draw everyone clothed.
 7. **Keep it small and readable.** About 1 CSS pixel per sprite pixel: two to four colors per added part, no
-   single stray pixels (every colored pixel gets a dark outline, so a lone pixel becomes a 3x3 blob; draw thin
-   lines with `k`, which is never outlined again).
+   single stray pixels (every colored pixel gets an outline in the deep shade of its own color, the way
+   handheld-era sprites are edged, so a lone pixel becomes a 3x3 blob; draw thin lines with `k`, which is never
+   outlined again and takes the deep shade of the color beside it).
 8. **Check, then fix.** `validateSprite(spec)` returns `{ ok, errors }`; each error says what to change.
 
 ## The spec
@@ -58,7 +64,7 @@ Anything else (a new kind of motion, a new action) is a code change in `research
   "name": "Dr. Nova",
   "worker": "assistant",
   "hair": ["#f2f0f7", "#c9b8e8"],
-  "maps": [{ "layer": "head", "at": [-4, 12], "rows": [".h.....h.", "hrh...hrh", "hhh...hhh"], "pal": { "r": "#ffb3c7" } }],
+  "maps": [{ "layer": "head", "at": [-4, 14], "rows": [".h.....h.", "hrh...hrh", "hhh...hhh"], "pal": { "r": "#ffb3c7" } }],
   "quirk": { "dur": 2.4, "keys": [{ "t": 0, "armF": ["up", 0], "eyes": "wide" }, { "t": 0.8, "hop": 3, "icon": "heart" }] }
 }
 ```
@@ -68,7 +74,7 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 | `base` | required: the starting sprite | a built-in key |
 | `name` | required: shown when they speak as themselves | 1 to 24 letters, digits, spaces, `. ' -` |
 | `worker` | whose crew they join | `assistant` (young), `pi` (tenured) |
-| `style` | hair | `short receding bob bigcurly long crop neat spiky` |
+| `style` | hair | `short tousled receding bob bigcurly long crop neat spiky` |
 | `head` | headwear (`null` for none) | `hijab cap beanie hardhat deerstalker propeller` |
 | `outfit` | clothes | `labcoat suit hoodie sweater cardigan vest overalls jacket abaya trench tshirt` |
 | `legs` | | `pants skirt` |
@@ -111,9 +117,10 @@ A map is a picture in letters, pinned to a layer:
   visit's colors: `s` skin, `S` skin shade, `h` hair, `H` hair shade, `l` hair light, `t` top, `T` top shade,
   `c` shirt, `p` pants, `P` pants shade, `o` shoes, `k` outline ink, `w` white. `pal` can't redefine a slot.
 
-Head geometry, for placing things: the head is 12 x 12 with its outline, x -5 to 6, y 0 to 11 from its anchor.
-The skin is x -4 to 5, y 1 to 10. Eyes are 2 pixels wide at x 0 and x 3, rows y 4 to 6; the mouth is around
-x 2 to 5, y 1 to 3; the ear is at x -3 to -2, y 4 to 6. Hair reaches y 12 or 13; most hats reach y 13 to 17.
+Head geometry, for placing things: the head is 14 x 13 with its outline, x -6 to 7, y 0 to 12 from its anchor:
+big for the body, so the face has room. The skin is x -5 to 6, y 1 to 11. Eyes are 2 pixels wide at x 0 and x 4,
+rows y 4 to 6, with brows at y 8 or 9; the mouth is around x 2 to 5, y 1 to 3; the ear is at x -4 to -3, y 4 to 6.
+Hair reaches y 14 or 15; most hats reach y 14 to 18.
 The torso is about 12 wide (x -6 to 5) and 11 to 13 tall above the hips; the front of the body is +x.
 
 ## Props
