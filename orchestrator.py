@@ -2,7 +2,7 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity, checkpoint
+import activity, board, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
 from agents import bluesky, f916, github, publisher
@@ -136,6 +136,7 @@ def _write_brief(m: Mission, now) -> str:
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
+        _mentions(m.slug)
         m.unchecked_brief = ""
         path = _write_brief_md(m, brief)
         m.validator_notes = ""
@@ -200,6 +201,7 @@ def step(m: Mission, now) -> str | None:
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
+            _mentions(m.slug)
             m.unchecked_article, m.article_draft = "", None
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
@@ -302,12 +304,14 @@ def push_through(m: Mission, now) -> None:
     before = m.state
     if isinstance(draft, RejectedBrief):
         store.save_artifact(m.slug, "brief", draft.brief)
+        _mentions(m.slug)
         m.unchecked_brief, m.rejected_brief, m.approved = draft.notes, None, False
         _write_brief_md(m, draft.brief)
         m.state = State.BRIEF_READY
         note = "failed brief pushed through by human"
     else:
         store.save_artifact(m.slug, "article", draft.article)
+        _mentions(m.slug)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
         m.article_draft = None
         _write_article_review(m, _brief(m), draft.article)
@@ -357,6 +361,14 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
             break
         changed += 1
     return changed
+
+def _mentions(slug: str) -> None:
+    """The cork board's mentions for a mission whose brief or article was just saved. Display only: a failure is
+    printed and never stops the work."""
+    try:
+        board.find_mentions(slug)
+    except Exception as e:
+        print(f"board mentions for {slug} failed: {type(e).__name__}: {e}", flush=True)
 
 PROGRESS = ("brief_pick", "brief_sources", "article_draft")   # Mission fields an agent saves mid-task
 
@@ -473,7 +485,10 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     continue
                 if before == "theorist":   # applied here, between tasks, so no worker saves over its changes
                     busy = {m.slug for _, m, _ in running.values() if m}
-                    changed += apply_theory(result, now_fn(), busy) if result else 0
+                    if result is not None and hasattr(result, "moves"):   # a board turn
+                        changed += apply_board(result, now_fn())
+                    else:
+                        changed += apply_theory(result, now_fn(), busy) if result else 0
                     continue
                 if m is None:
                     changed += result
@@ -539,6 +554,17 @@ def find_new_missions(now) -> int:
 # ---------- the Theorist: looks across the desk, evolves the line ----------
 
 THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless a human asks (THINK_FLAG)
+BOARD_EVERY = 3                            # every third Theorist turn only arranges the cork board (#69)
+
+def theory_turn() -> int:
+    """The number the Theorist's next turn will have (data/theory.json counts them, failed ones included)."""
+    try:
+        return int(store.last_theory().get("turn") or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+def board_turn(turn: int) -> bool:
+    return turn % BOARD_EVERY == 0
 
 def desk_fingerprint() -> str:
     """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
@@ -569,16 +595,21 @@ def theorist_due(now) -> bool:
         return True
 
 def think(now):
-    """The Theorist's turn, on a worker's thread. It only reads; apply_theory makes the changes. A failure is
-    noted, so it waits THEORY_GAP before trying again, and never holds up the loop."""
+    """The Theorist's turn, on a worker's thread: every BOARD_EVERY-th turn arranges the board (agents.tidy_board),
+    the others look across the desk (agents.theorize). It only reads; apply_theory or apply_board makes the
+    changes. A failure is noted (and counted as a turn), so it waits THEORY_GAP before trying again, and never
+    holds up the loop."""
     THINK_FLAG.unlink(missing_ok=True)
+    turn = theory_turn()
+    kind = "board" if board_turn(turn) else "ideas"
     try:
         activity.begin("", "theorist")
-        return agents.theorize(now)
+        return agents.tidy_board(now) if kind == "board" else agents.theorize(now)
     except Exception as e:
         why = f"{type(e).__name__}: {e}"
-        print(f"theorist failed: {why}", flush=True)
-        store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "failed": why})
+        print(f"theorist {'board turn ' if kind == 'board' else ''}failed: {why}", flush=True)
+        failed = {"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": turn, "kind": kind, "failed": why}
+        store.save_theory(failed | ({"ideas": store.last_ideas()} if kind == "board" else {}))
         return None
     finally:
         activity.clear()
@@ -645,12 +676,29 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
 
     if theory.library:
         notes.append(theory.library)
-    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "patterns": theory.patterns,
+    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "ideas",
+                       "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
                        "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes,
                        "lookups": theory.lookups})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
+
+def apply_board(tidy, now) -> int:
+    """A board turn's moves, on the main thread between tasks, saved as the Theorist's. It may move notes a human
+    dragged. The last turn that looked across the desk stays in theory.json under "ideas", for the notes."""
+    moved, notes = [], list(tidy.dropped)
+    for mv in tidy.moves:
+        prefix, _, slug = mv.id.partition(":")
+        try:
+            board.move("epic" if prefix == "e" else "mission", slug, mv.x, mv.y, mv.size, by="theorist")
+            moved.append(mv.model_dump())
+        except ValueError as e:            # gone since the Theorist read the board
+            notes.append(f"{mv.id}: {e}")
+    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "board",
+                       "why": tidy.why, "moved": moved, "notes": notes, "ideas": store.last_ideas()})
+    print(f"theorist: board turn moved {len(moved)} note(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
+    return len(moved)
 
 WHO = {"theorist": "the Theorist", "chat": "the chat assistant", "human": "human"}
 

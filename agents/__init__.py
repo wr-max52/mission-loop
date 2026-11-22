@@ -1,6 +1,6 @@
 """Switchboard: the ONLY place that decides which implementation each agent uses.
 
-The orchestrator calls agents.theorize / find_missions / gather / write_brief / validate / interview / check_inbox / write /
+The orchestrator calls agents.theorize / tidy_board / find_missions / gather / write_brief / validate / interview / check_inbox / write /
 check_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
 The UI and CLI call agents.chat, Researcher Chat, which reads the loop and the web through MCP.
 Set MISSION_LOOP_STUBS=1 to run the whole loop on stubs (no Ollama, no network).
@@ -21,7 +21,7 @@ from agents.publisher import publish       # local files only, so stubs and real
 from agents import bluesky, custom, f916, github
 
 if os.environ.get("MISSION_LOOP_STUBS") == "1":
-    from agents.stubs import theorize, find_missions, gather, write_brief, validate, interview, write, check_article, chat, chat_models, chat_catalog, chat_web
+    from agents.stubs import theorize, tidy_board, find_missions, gather, write_brief, validate, interview, write, check_article, chat, chat_models, chat_catalog, chat_web
 
     def ready() -> tuple[bool, str]:
         return True, "stubs"
@@ -40,7 +40,7 @@ if os.environ.get("MISSION_LOOP_STUBS") == "1":
     def github_enabled() -> bool:
         return False
 else:
-    from agents.theorist import theorize
+    from agents.theorist import theorize, tidy_board
     from agents.finder import find_missions
     from agents.researcher import gather, write_brief
     from checks.validator import validate
@@ -58,6 +58,6 @@ else:
         """Every channel beyond the local site: the built-in ones, then the custom ones."""
         return list(CHANNELS) + custom.channels()
 
-__all__ = ["theorize", "find_missions", "gather", "write_brief", "validate", "interview", "check_inbox", "write", "check_article",
+__all__ = ["theorize", "tidy_board", "find_missions", "gather", "write_brief", "validate", "interview", "check_inbox", "write", "check_article",
            "publish", "CHANNELS", "channels", "f916_enabled", "bluesky_enabled", "github_enabled", "ready", "chat",
            "chat_models", "chat_catalog", "chat_web"]

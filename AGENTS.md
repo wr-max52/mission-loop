@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 558 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 587 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -102,6 +102,17 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
+  Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
+  included) is a board turn instead (#69): `agents.tidy_board` (`theorist.tidy_board`, the same model, one
+  structured call, no tools) reads the cork board as text with no style (every note's id, stage, title, x, y and
+  size, every string, and a rough character grid of where the clusters sit) and replies with note moves and sizes
+  and why; nothing about epics, missions, combines, links or the line. Code holds it to the board
+  (`theorist.settle_board`): known notes only, each once, at most `MAX_MOVES` (12), sizes clamped, positions kept
+  within `BOARD_MARGIN` of the board's edges, and a note dropped on another nudged to the nearest free spot; what
+  it drops is noted. `orchestrator.apply_board` saves the moves `by="theorist"` on the main thread between tasks
+  (it may move a note a human dragged) and keeps the last turn that looked across the desk under `"ideas"` in
+  `theory.json` (`store.last_ideas`), so the notes show the board turn and the turn before it. Its gating is the
+  same as any turn's.
 - Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
   so a worker saving the mission it is busy with can't save over one.
   - Links (`contracts.Link`, one row per pair, `a < b`): two missions kept separate but connected, with why: two open
@@ -394,6 +405,40 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   Pieces are short, so whatever is in flight when stop is pressed usually finishes inside the grace
   (`TURN_GRACE` 30 s for a tool turn, `GRACE` 120 s for a reply). The UI's mission cards say how far saved work
   got ("Carrying on the paused search.", "1 of 3 sections written.").
+- Cork board (`board.py`, code, no model; `/board`, the Board button between Published and Settings): every
+  mission and epic as a sticky note on one zoomable cork board, joined by string (#66, #67). A note gets a position
+  the first time the board is read and keeps it (`board` table, `contracts.BoardNote`): a new epic takes the first
+  free spot on wide rings round the centre, a new mission the first free spot spiralling out from its epic's note
+  (missions in no epic round an Unsorted label, a combined mission's members round the mission that took them
+  over), the same desk always placed the same way. Size means importance: from its stage plus a little per string
+  (`STAGE_SIZE`, `PER_STRING`), unless a human or the Theorist set one (clamped to `SIZE_MIN`..`SIZE_MAX`). Strings
+  are never stored: epic to mission, the active links, and mentions (`mentions` table, `contracts.Mention`, never on
+  the mission): `source` (two briefs cite the same page; an archived copy counts as its original), `name` (a brief
+  or article contains another mission's full topic or article title, `MIN_NAME` (4)+ words, or its slug written with
+  its hyphens, whole phrase), both found by `board.find_mentions` whenever a brief or article is saved
+  (`orchestrator._mentions`; display only, a failure is printed) and for an older desk the first time a board opens
+  each server start (`find_all_mentions`: each mission read once, pairs checked once, one transaction; an artifact
+  that won't load is skipped); and `background` (research was shown a related
+  published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
+  transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
+  a note and its corner resizes it (`POST /board/move`, saved `by="human"`; only a resize fixes the size; the Theorist's board turn may move it later), a
+  mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
+  the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more
+  string away, All) that fades the rest and glides to fit. It polls `/api/board` every `POLL_SECONDS` and updates
+  in place, so a new mission appears on its own. Every mission card and mission page has "On the board"
+  (`/board?focus=<slug>`, zoomed onto it). Its look (#68) is the gear on the board or Settings → Display → Board, the
+  same setting (`settings.board_style`, saved in `data/settings.json` only when not cork, sticky notes and red
+  string): a surface (cork, paper, grid, night, fridge, arcade; grid, night and arcade move with the view), cards (sticky notes;
+  fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
+  tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
+  panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
+  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour. A card's colour is its
+  stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
+  a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
+  researcher from that worker's crew: on a sticky note it stands inside the card on its bottom edge (the busy note
+  grows room there) and tilts with it; on the other styles it walks along the top, which stays level. Laser pulses and holograms
+  flicker only while Animations are on. Board notes override the published site's `.note` and `.epic` styles,
+  which share their class names.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -497,6 +542,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
+| See every mission and epic on one map | Board in the UI's top bar, or On the board on any mission card |
 | Pick each worker's model, how many of it run at once, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
 | Point at another Ollama | the Ollama address under Model providers on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Start on a fresh clone with Ollama | Settings → Model providers → Connect Ollama (fills in each worker's model), then play |

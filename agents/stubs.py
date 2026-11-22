@@ -7,6 +7,11 @@ def theorize(now=None):
     line = store.get_inspiration()
     return Theory(patterns=["Stub pattern"], inspiration=line, why="stub: nothing new", based_on=line)
 
+def tidy_board(now=None):
+    """A board turn that leaves the board as it is."""
+    from agents.theorist import BoardTidy
+    return BoardTidy(why="stub: the board reads well as it is")
+
 def find_missions(inspiration: str, topics: list[str], now=None, epics=None) -> list[MissionIdea]:
     return [MissionIdea(topic=f"Stub lead {len(topics) + 1} from {inspiration}",
                         objective="Stub objective", source_url="https://a.example.com/lead")]
