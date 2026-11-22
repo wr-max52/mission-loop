@@ -15,6 +15,7 @@ STOP_FLAG = Path("data/STOP")
 WAKE_FLAG = Path("data/WAKE")             # the UI touches this so a resting loop looks for work now
 THINK_FLAG = Path("data/THINK")           # the UI or `run.py theorize` touches this: the Theorist's turn comes next
 LOCK_FILE = Path("data/loop.lock")         # held by whichever run/loop is working
+PUBLISH_LOCK = Path("data/publish.lock")   # held during a publishing pass, the loop's or the UI's, so two never overlap
 
 def loop_running() -> bool:
     """True while a run/loop holds the lock. We only test the lock, never keep it."""
@@ -644,19 +645,42 @@ def _drop_stale_requests() -> None:
 
 MAX_REFUSALS = 3                           # per channel per pass: a channel refusing everything stops trying
 
+class _publishing:
+    """Hold PUBLISH_LOCK for one pass: a pass started while another runs (the UI's while the loop starts, or the
+    other way round) waits for it, then finds the requests it already did gone."""
+    def __enter__(self):
+        PUBLISH_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        self.f = PUBLISH_LOCK.open("a")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
 def post_to_channels(now, max_refusals: int = MAX_REFUSALS) -> int:
     """One publishing pass: pages a human asked to rewrite, then every channel that is set up works through its
     backlog, the articles a human asked for first, as far as its allowance goes: a channel with no cap (a folder,
     a webhook) posts everything waiting, 1F916 its one a day, Bluesky one per 10-minute gap."""
     if STOP_FLAG.exists():
         return 0
-    _drop_stale_requests()
-    return republish_site(now) + sum(post_to(c, now, max_refusals) for c in agents.channels() if c.enabled())
+    with _publishing():
+        _drop_stale_requests()
+        return republish_site(now) + sum(post_to(c, now, max_refusals) for c in agents.channels() if c.enabled())
 
-def post_to(channel, now, max_refusals: int = MAX_REFUSALS) -> int:
+def publish_requested(now) -> int:
+    """With the loop off, the UI publishes what a human just asked for itself: pages to rewrite, then each
+    channel's requested entries, and nothing else from its backlog, which waits for the loop. A request that
+    fails stays requested, as in the loop's pass. Needs no model and ignores a leftover stop."""
+    with _publishing():
+        _drop_stale_requests()
+        done = republish_site(now)
+        asked = {k for m in store.all_missions() for k in m.publish_requests}
+        return done + sum(post_to(c, now, only_asked=True) for c in agents.channels() if c.enabled() and c.KEY in asked)
+
+def post_to(channel, now, max_refusals: int = MAX_REFUSALS, only_asked: bool = False) -> int:
     """Post the channel's whole backlog until it has no allowance left (its wait_until, or NoAllowance). A
     refused entry costs nothing, so the next one is tried, up to max_refusals in a pass; any other failure stops
-    this channel until its next pass (an entry a human asked for stays asked for). Returns how many posted."""
+    this channel until its next pass (an entry a human asked for stays asked for). only_asked stops at the
+    first entry nobody asked for (they come first). Returns how many posted."""
     posted = refusals = 0
     if hasattr(channel, "sync"):
         try:
@@ -669,6 +693,8 @@ def post_to(channel, now, max_refusals: int = MAX_REFUSALS) -> int:
             break
         m = store.get_mission(entry["slug"])
         asked = channel.KEY in m.publish_requests
+        if only_asked and not asked:
+            break
         until = channel.wait_until()
         if until and now < until and not (asked and getattr(channel, "MANUAL_SKIPS_WAIT", False)):
             break

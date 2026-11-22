@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 385 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 387 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -146,8 +146,11 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     A refusal costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
   - Publishing again: the Published page (or a published mission's page) ticks the local site and any channels
-    and records them in `Mission.publish_requests` (`orchestrator.request_publish`). The loop's next sweep sees
-    the new request and runs a pass, within seconds even mid-task; "site" rewrites the page and feeds (the
+    and records them in `Mission.publish_requests` (`orchestrator.request_publish`). While the loop runs, its next
+    sweep sees the new request and runs a pass, within seconds even mid-task. With the loop off the UI does it
+    itself on a background thread (`ui.publish_now` -> `orchestrator.publish_requested`): only what was asked for,
+    the rest of each channel's backlog waits for the loop, and a leftover stop doesn't block it. Every pass, the
+    loop's or the UI's, holds `data/publish.lock`, so two never overlap. "site" rewrites the page and feeds (the
     article keeps its first `published_at`). A channel's own politeness gap is skipped for a request
     (`MANUAL_SKIPS_WAIT`, Bluesky) but a real cap is not (1F916's daily post); a request that fails stays and
     goes first on the next pass. Requests for a channel since switched off are dropped.
@@ -240,8 +243,8 @@ article previews, and has buttons for approve / send back / publish / requeue / 
 the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
 progress closest to published first (publishing, writing, briefs, searches) and new missions last; published
-articles are not listed there, only a link to the Published page. The Published site button in the top bar
-opens that page (`/published`, with a link back): the local site, every channel, and each article with where it
+articles are not listed there, only the Published site card at the very bottom of the page, for anyone
+scrolling to find it. The Published site button in the top bar opens that page too (`/published`, with a link back): the local site, every channel, and each article with where it
 went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection and
 Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
@@ -292,7 +295,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | Published site in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
-| Publish an article again | tick where on the UI's Published page and press Publish (the loop does it within seconds) |
+| Publish an article again | tick where on the UI's Published page and press Publish (done within seconds; the loop needn't run) |
 | Add a custom channel | Settings → Publishing → Add a channel → Custom channel (a webhook or a folder, and a format) |
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the hosted address on the Settings page once it is hosted |
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
