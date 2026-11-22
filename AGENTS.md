@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 387 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 388 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -242,14 +242,16 @@ The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists ever
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
-progress closest to published first (publishing, writing, briefs, searches) and new missions last; published
-articles are not listed there, only the Published site card at the very bottom of the page, for anyone
-scrolling to find it. The Published site button in the top bar opens that page too (`/published`, with a link back): the local site, every channel, and each article with where it
-went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection and
+progress closest to published first (publishing, writing, briefs, searches) and new missions last. Publishing
+there is one card (`ui.queue_card`): how many articles are queued and for which places, leading to the queue on
+the Published page. Published articles are not listed there, only the Published card at the very bottom of the
+page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
+with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection and
 Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing, Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
 unlit while the loop is off: agents on a track in runtime order (publishing is one step, whatever the channels), each code check a vertical block right after the
 agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
 check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
@@ -294,7 +296,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
-| View the site | Published site in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
+| View the site | Published in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
 | Publish an article again | tick where on the UI's Published page and press Publish (done within seconds; the loop needn't run) |
 | Add a custom channel | Settings → Publishing → Add a channel → Custom channel (a webhook or a folder, and a format) |
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the hosted address on the Settings page once it is hosted |
