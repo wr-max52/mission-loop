@@ -13,6 +13,21 @@ Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
 `data/providers.json` the cloud model providers' API keys and `data/search.json` the Brave Search key: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
+## How a task becomes a merged PR (coding agents, this repo only)
+
+The written issue is what Will approves; nothing after it waits on him until the merge.
+
+1. **Issue first.** Given a task, write the issue (the write-issue skill's format) and show it. Once Will okays it,
+   create it.
+2. **Then roll.** Build it on its own branch off the latest `origin/main` without stopping to ask, and open a PR that
+   closes the issue. Opening that PR is the push the approved issue asked for.
+3. **Ready to merge, not a draft.** The PR is ready for review when opened: `pytest -q` passes, AGENTS.md (and its
+   test count) says what changed, the branch merges cleanly into `main`, and the description says what was checked
+   and what wasn't. This replaces the write-issue skill's "open it as a draft" here.
+4. **Watch it until it's merged.** For a few hours after opening it, watch the PR for review comments (in the Claude
+   desktop app, turn on the PR monitor's comment handling instead of polling) and answer or fix each one on the same
+   branch, keeping it ready to merge. Will merges; don't merge it yourself unless he asks.
+
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
