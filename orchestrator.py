@@ -988,6 +988,7 @@ def reject_epic(slug: str, now) -> None:
         _move([m], back, now, f"proposed epic {epic.title} rejected"
               + (f"; back to {store.get_epic(back).title}" if back else ""))
     store.delete_epic(slug)
+    store.delete_board_note("epic", slug)       # no pin left on the board for an epic that is gone
 
 def rename_epic(slug: str, title: str, now) -> None:
     epic, clean = store.get_epic(slug), epic_title(title)

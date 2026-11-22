@@ -250,7 +250,7 @@
   let dragEl = null, gesture = null;
   const local = e => { const r = root.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   root.addEventListener("pointerdown", e => {
-    if (e.target.closest(".board-pop, .board-tools, .board-crumb, .board-legend, .board-style") || e.button > 0) return;
+    if (e.target.closest("a, .board-pop, .board-tools, .board-crumb, .board-legend, .board-style") || e.button > 0) return;
     glideId++;                                    // a touch stops any glide
     pointers.set(e.pointerId, local(e));
     root.setPointerCapture(e.pointerId);
@@ -420,6 +420,7 @@
       if (next.same) return;
       data = next; sig = next.sig;
       look(next.style);
+      root.classList.toggle("animate", !!next.animations);   // the Settings switch takes effect without a reload
       if (opened) byId(opened) ? showPop(opened) : closePop();
     } catch (_) { /* the server is restarting; try again next time */ }
   }

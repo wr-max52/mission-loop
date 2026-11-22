@@ -162,7 +162,9 @@ def layout() -> dict:
             count[end] = count.get(end, 0) + 1
     out = []
     for e in store.all_epics():
-        n = notes[("epic", e.slug)]
+        n = notes.get(("epic", e.slug))
+        if n is None:                      # added after place() read the epics: it shows on the next poll
+            continue
         out.append({"id": f"e:{e.slug}", "kind": "epic", "slug": e.slug, "x": n.x, "y": n.y,
                     "size": n.size or EPIC_SIZE, "by": n.by})
     if ("epic", UNSORTED) in notes and any(m.state != State.COMBINED and m.epic not in {e["slug"] for e in out}
