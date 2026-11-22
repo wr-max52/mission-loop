@@ -1,6 +1,9 @@
 """Human-readable output: brief.md and article.md for review, HTML for the static site."""
+import json
 from datetime import datetime
+from email.utils import format_datetime
 from html import escape
+from xml.etree import ElementTree as ET
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
@@ -150,10 +153,10 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
         out.append("</ul>")
     return "\n".join(out)
 
-def _page(title: str, body: str, home: str) -> str:
+def _page(title: str, body: str, home: str, head: str = "") -> str:
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}</style></head>\n"
+            f"<title>{escape(title)}</title>{head}{THEME_INIT}<style>{CSS}</style></head>\n"
             f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a>{THEME_TOGGLE}</header>\n"
             f"{body}\n</main></body></html>\n")
 
@@ -245,4 +248,53 @@ def index_html(entries: list[dict]) -> str:
              f'{datetime.fromisoformat(e["published_at"]):%B %-d, %Y}</p></li>' for e in entries]
     body = "<h1>Published</h1>" + (f'<ul class="index">{"".join(items)}</ul>' if items
                                    else "<p>Nothing published yet.</p>")
-    return _page("Mission Loop", body, "./")
+    body += '<p class="meta">Subscribe: <a href="feed.xml">RSS</a> · <a href="feed.json">JSON Feed</a></p>'
+    head = ('<link rel="alternate" type="application/rss+xml" title="Mission Loop" href="feed.xml">'
+            '<link rel="alternate" type="application/feed+json" title="Mission Loop" href="feed.json">')
+    return _page("Mission Loop", body, "./", head)
+
+# ---------- feeds: the same entries as the index, with full text ----------
+
+FEED_TITLE = "Mission Loop"
+FEED_DESCRIPTION = "Every article Mission Loop has published, with its sources."
+
+def _base(site_url: str) -> str:
+    return site_url.rstrip("/") + "/" if site_url else ""
+
+def _text_html(text: str) -> str:
+    """Plain article text (render.article_text) as simple HTML for feed readers."""
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    return "".join(f"<h2>{escape(b[3:])}</h2>" if b.startswith("## ") else
+                   f"<p>{escape(b).replace(chr(10), '<br>')}</p>" for b in blocks)
+
+def feed_json(entries: list[dict], site_url: str = "") -> str:
+    """JSON Feed 1.1. Ids are the slugs, so they stay the same when a site URL is set later.
+    Without a site URL, links are relative to the feed file."""
+    base = _base(site_url)
+    feed = {"version": "https://jsonfeed.org/version/1.1", "title": FEED_TITLE, "description": FEED_DESCRIPTION}
+    if base:
+        feed |= {"home_page_url": base, "feed_url": base + "feed.json"}
+    feed["items"] = [{"id": e["slug"], "url": f'{base}{e["slug"]}/', "title": e["title"], "summary": e["dek"],
+                      "content_text": e.get("text") or e["dek"], "date_published": e["published_at"],
+                      **({"tags": [e["epic"]]} if e.get("epic") else {})} for e in entries]
+    return json.dumps(feed, indent=2, ensure_ascii=False) + "\n"
+
+def feed_xml(entries: list[dict], site_url: str = "") -> str:
+    """RSS 2.0 with the full text in content:encoded. Same ids and links as feed_json."""
+    base, content = _base(site_url), "http://purl.org/rss/1.0/modules/content/"
+    ET.register_namespace("content", content)
+    rss = ET.Element("rss", version="2.0")
+    channel = ET.SubElement(rss, "channel")
+    for tag, value in (("title", FEED_TITLE), ("link", base or "./"), ("description", FEED_DESCRIPTION)):
+        ET.SubElement(channel, tag).text = value
+    for e in entries:
+        item = ET.SubElement(channel, "item")
+        ET.SubElement(item, "title").text = e["title"]
+        ET.SubElement(item, "link").text = f'{base}{e["slug"]}/'
+        ET.SubElement(item, "guid", isPermaLink="false").text = e["slug"]
+        ET.SubElement(item, "pubDate").text = format_datetime(datetime.fromisoformat(e["published_at"]))
+        ET.SubElement(item, "description").text = e["dek"]
+        if e.get("epic"):
+            ET.SubElement(item, "category").text = e["epic"]
+        ET.SubElement(item, f"{{{content}}}encoded").text = _text_html(e.get("text") or e["dek"])
+    return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(rss, encoding="unicode") + "\n"
