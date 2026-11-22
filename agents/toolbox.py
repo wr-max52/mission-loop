@@ -1,19 +1,45 @@
 """Starts the MCP servers a mission enables and exposes their tools to the LLM.
 
 Adding a research capability = adding an entry to mcp.json. No code change.
+
+A server this machine can't run is skipped, not fatal: its command isn't installed (npx, uvx), or a variable it
+lists under "requires" is empty (the search server's Brave key). `skipped` says which and why, so research carries
+on with the tools it has and the setup check (doctor.py) can say what to install.
 """
-import json, os, re, sys
+import json, os, re, shutil, sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+import settings
 
-CONFIG = Path("mcp.json")
+CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"   # the project's, whatever the working folder
 MAX_TOOL_CHARS = 12_000                    # keeps one big page from flooding the context
+WHICH = shutil.which                       # tests swap in their own machine
+
+def _value(name: str) -> str:
+    """An environment variable, except the Brave key, which may also be saved on the Settings page."""
+    return settings.search_key() if name == settings.SEARCH_ENV else os.environ.get(name, "")
 
 def _expand(value: str) -> str:
-    """Replace ${VAR} with the environment variable's value."""
-    return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
+    """Replace ${VAR} with the variable's value."""
+    return re.sub(r"\$\{(\w+)\}", lambda m: _value(m.group(1)), value)
+
+def unavailable(spec: dict) -> str:
+    """Why this mcp.json server can't run on this machine, or "" if it can."""
+    command = spec.get("command", "")
+    if command != "python" and not WHICH(command):
+        return f"{command} is not installed"
+    missing = [var for var in spec.get("requires", []) if not _value(var)]
+    return f"{' and '.join(missing)} is not set" if missing else ""
+
+def server_status(names: list[str], config_path: Path | None = None) -> dict[str, str]:
+    """For each named server: "" if it can run here, else why not. Starts nothing."""
+    try:
+        cfg = json.loads(Path(config_path or CONFIG).read_text())
+    except (OSError, ValueError) as e:
+        return {name: f"{config_path or CONFIG} can't be read ({type(e).__name__})" for name in names}
+    return {name: unavailable(cfg[name]) if name in cfg else "not defined in mcp.json" for name in names}
 
 class Toolbox:
     def __init__(self, enabled: list[str], config_path: Path | None = None):
@@ -22,6 +48,7 @@ class Toolbox:
         self.tools: list[dict] = []        # Ollama tool schemas
         self._owner: dict[str, ClientSession] = {}
         self.server: dict[str, str] = {}   # tool name -> the mcp.json server it came from
+        self.skipped: dict[str, str] = {}  # server -> why it can't run on this machine
 
     async def __aenter__(self):
         self._stack = AsyncExitStack()
@@ -30,6 +57,10 @@ class Toolbox:
             if name not in cfg:
                 raise KeyError(f"tool server '{name}' is not defined in {self.config_path}")
             spec = cfg[name]
+            why = unavailable(spec)
+            if why:
+                self.skipped[name] = why
+                continue
             env = {**os.environ, **{k: _expand(v) for k, v in spec.get("env", {}).items()}}
             # "python" means this interpreter: launchd's PATH doesn't include the venv
             command = sys.executable if spec["command"] == "python" else spec["command"]

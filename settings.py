@@ -429,3 +429,67 @@ def add_custom_channel(name: str, kind: str, target: str, fmt: str) -> dict:
 
 def remove_custom_channel(cid: str) -> None:
     save(custom_channels=[c for c in custom_channels() if c["id"] != cid])
+
+# ---------- web search: the Brave key the research tools need ----------
+# Saved on the home page's first-run card or the Settings page into data/search.json (mode 600, never committed),
+# which wins over BRAVE_API_KEY in .env. The MCP search server gets it through agents/toolbox.py.
+
+SEARCH_FILE = Path("data/search.json")
+SEARCH_ENV = "BRAVE_API_KEY"
+SEARCH_API = "https://api.search.brave.com/res/v1/web/search"   # Brave's public API, used to check a key
+
+def search_key() -> str:
+    try:
+        found = str(json.loads(SEARCH_FILE.read_text()).get("key") or "")
+    except (OSError, ValueError, AttributeError):
+        found = ""
+    return found or _env(SEARCH_ENV)
+
+def search_key_saved() -> bool:
+    """Saved here (so it can be removed here), not only in .env."""
+    return SEARCH_FILE.exists()
+
+def save_search_key(key: str) -> None:
+    key = key.strip()
+    if not key:
+        raise ValueError("paste the key")
+    if len(key) > 200 or any(c.isspace() for c in key):
+        raise ValueError("that doesn't look like a Brave API key")
+    _write_private(SEARCH_FILE, {"key": key})
+
+def forget_search_key() -> None:
+    SEARCH_FILE.unlink(missing_ok=True)
+
+# ---------- first run and personalization ----------
+
+def setup_dismissed() -> bool:
+    """The human closed the home page's first-run card; Settings → Setup brings it back."""
+    return saved().get("setup_dismissed") == "yes"
+
+def set_setup_dismissed(on: bool) -> None:
+    save(setup_dismissed="yes" if on else "")
+
+# The publication's name, tagline and About statement: shown on the published site, its About page and its feeds.
+# Nothing is stored until a human changes them, so a fresh clone shows the defaults.
+PUBLICATION_DEFAULT = "Mission Loop"
+NAME_MAX, TAGLINE_MAX, ABOUT_MAX = 60, 160, 2000
+
+def publication_name() -> str:
+    return saved().get("publication_name") or PUBLICATION_DEFAULT
+
+def tagline() -> str:
+    return saved().get("tagline") or ""
+
+def about_statement() -> str:
+    """The human's own words for the top of the About page; "" means the built-in description."""
+    return saved().get("about_statement") or ""
+
+def set_publication(name: str, tagline_text: str, about: str) -> None:
+    """Raises ValueError when a field is too long. An empty field goes back to its default."""
+    name, tagline_text = " ".join(name.split()), " ".join(tagline_text.split())
+    about = "\n\n".join(p.strip() for p in about.replace("\r\n", "\n").split("\n\n") if p.strip())
+    for value, limit, what in ((name, NAME_MAX, "name"), (tagline_text, TAGLINE_MAX, "tagline"),
+                               (about, ABOUT_MAX, "About statement")):
+        if len(value) > limit:
+            raise ValueError(f"the {what} can be at most {limit} characters")
+    save(publication_name="" if name == PUBLICATION_DEFAULT else name, tagline=tagline_text, about_statement=about)

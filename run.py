@@ -1,13 +1,19 @@
-import fcntl, time
+import fcntl, socket, threading, time, webbrowser
 import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
-import activity, agents, clock, notify, orchestrator, store
+import activity, agents, clock, doctor, notify, orchestrator, store
 from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
 LOCK = orchestrator.LOCK_FILE
+WAIT_RETRY = 30                            # seconds between checks while the loop can't work (no model, Ollama closed)
+
+@app.callback()
+def _start():
+    """Every command finds the database ready, so a fresh clone's first command never crashes."""
+    store.init()
 
 def _lock():
     """Only one run/loop at a time, so a manual `run` can't race the background loop."""
@@ -29,11 +35,16 @@ def _set(slug: str, **fields):
         setattr(m, k, v)
     store.save_mission(m)
 
-def _ready() -> bool:
+def _ready(quiet_repeat: bool = False) -> bool:
+    """Can the models answer? If not, say why (once per reason in the loop) and record it, so the UI shows the loop
+    as waiting with the reason instead of as running."""
     ok, why = agents.ready()
-    if not ok:
-        print(f"not running: {why}", flush=True)
-    return ok
+    if ok:
+        doctor.clear_waiting()
+        return True
+    if doctor.set_waiting(why) or not quiet_repeat:
+        print(f"[{clock.now():%Y-%m-%d %H:%M}] waiting: {why}", flush=True)
+    return False
 
 @app.command()
 def init(path: str = "missions.yaml"):
@@ -203,30 +214,58 @@ def loop(every: float = typer.Option(15, help="Minutes to rest when there is not
             print(f"[{clock.now():%Y-%m-%d %H:%M}] notice: {line}", flush=True)
 
     while not orchestrator.STOP_FLAG.exists():
-        if _ready():
+        ready = _ready(quiet_repeat=True)
+        if ready:
             n = orchestrator.run_until_idle(clock.now, after_task=announce)
             if n:
                 print(f"[{clock.now():%Y-%m-%d %H:%M}] {n} task(s) ran", flush=True)
                 status()
         announce()
-        deadline = time.monotonic() + every * 60
+        deadline = time.monotonic() + (every * 60 if ready else WAIT_RETRY)   # not ready: look again soon
         while time.monotonic() < deadline and not orchestrator.STOP_FLAG.exists():
             if orchestrator.WAKE_FLAG.exists():  # a human acted in the UI: look for work now
                 orchestrator.WAKE_FLAG.unlink(missing_ok=True)
                 break
             time.sleep(2)
+    doctor.clear_waiting()
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop stopped", flush=True)
     held.close()
 
 @app.command()
-def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1")):
+def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
+       open_browser: bool = typer.Option(False, "--open", help="Open the UI in your browser once it is up")):
     """The local web UI: missions, briefs, articles, approve/reject/publish, start/stop the loop."""
     import uvicorn
     import ui as web
-    store.init()
+    from agents import publisher
+    if not _port_free(port):
+        print(f"Port {port} is already in use: the UI may already be open at http://127.0.0.1:{port}, or another "
+              f"app has the port. Pick another: python run.py ui --port {port + 1}", flush=True)
+        raise typer.Exit(1)
     Path("site").mkdir(exist_ok=True)      # /site errors if the folder is missing; publishing creates it later
-    print(f"Mission Loop UI: http://127.0.0.1:{port}  (Ctrl-C to quit)", flush=True)
+    if not (publisher.SITE / "index.html").exists():
+        publisher.rebuild_index()          # so the site and its About page open before anything is published
+    url = f"http://127.0.0.1:{port}"
+    print(f"Mission Loop UI: {url}  (Ctrl-C to quit)", flush=True)
+    if open_browser:
+        threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
+
+def _port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+@app.command("doctor")
+def doctor_cmd():
+    """Check this machine's setup: models, their connection, web search, the tools research needs."""
+    found = doctor.checks(deep=True)
+    print(doctor.report(found))
+    if any(c.blocks_loop and not c.ok for c in found):
+        raise typer.Exit(1)
 
 @app.command()
 def stop():

@@ -22,7 +22,7 @@ from pathlib import Path
 import ollama
 import settings
 from agents import llm, providers
-from agents.toolbox import Toolbox
+from agents.toolbox import Toolbox, server_status
 
 def default_model() -> str:
     return settings.chat_model()
@@ -50,7 +50,7 @@ mission failing every attempt is parked; the human can requeue it or push its dr
 adds missions from the human's inspiration line. Missions sit in epics, short themes. Claims are facts (what the
 record shows) or possibilities (labelled, not verified).
 Loop tools: loop_status, list_missions, mission_status, agent_steps, search_missions, publication_status,
-list_epics, theorist_notes. Web tools: search the web or news, fetch a page, find_in_page for exact sentences in
+list_epics, theorist_notes, setup_status (call it for setup questions or when nothing happens). Web tools: search the web or news, fetch a page, find_in_page for exact sentences in
 a long page, wayback_versions for old copies. Use the loop tools for anything about the loop and the web tools
 for the world outside it; link every page you rely on as [title](url) and never invent a URL.
 Call add_mission only when asked for a new mission; search_missions first so you don't add a duplicate, then say
@@ -119,8 +119,8 @@ def pick(model: str | None) -> str:
         return default
 
 def web_search() -> bool:
-    """Brave's search needs a key; reading pages (fetch, find_in_page) works without one."""
-    return bool(os.environ.get("BRAVE_API_KEY"))
+    """Brave's search needs a key (saved on the Settings page or in .env) and npx; reading pages works without."""
+    return not server_status(["search"], CONFIG)["search"]
 
 def servers() -> list[str]:
     return [LOOP_SERVER, *WEB_SERVERS, *(["search"] if web_search() else [])]

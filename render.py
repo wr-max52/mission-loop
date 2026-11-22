@@ -5,7 +5,7 @@ from email.utils import format_datetime
 from html import escape
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
-import flowchart, wayback
+import flowchart, settings, wayback
 from icons import icon
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
@@ -200,7 +200,7 @@ def _page(title: str, body: str, home: str, head: str = "", nav: str | None = No
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>{escape(title)}</title>{head}{THEME_INIT}<style>{CSS}</style></head>\n"
-            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">Mission Loop</a>{links}"
+            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">{escape(settings.publication_name())}</a>{links}"
             f"{THEME_TOGGLE}</header>\n{body}\n</main></body></html>\n")
 
 def epic_pill(title: str, proposed: bool = False, href: str = "") -> str:
@@ -344,12 +344,13 @@ def index_html(entries: list[dict]) -> str:
         chips += [f'<a href="{escape(tag_href("./", t))}" data-tag="{escape(t)}">{escape(t)}<span>{n}</span></a>'
                   for t, n in sorted(counts.items(), key=lambda kv: kv[0].lower())]
         tags = f'<nav class="tags" aria-label="Filter by tag">{"".join(chips)}</nav>{TAGS_JS}'
-    body = "<h1>Published</h1>" + tags + (f'<ul class="index">{"".join(items)}</ul>' if items
-                                          else "<p>Nothing published yet.</p>")
+    name, line = escape(settings.publication_name()), settings.tagline()
+    body = ("<h1>Published</h1>" + (f'<p class="dek">{escape(line)}</p>' if line else "") + tags
+            + (f'<ul class="index">{"".join(items)}</ul>' if items else "<p>Nothing published yet.</p>"))
     body += '<p class="meta">Subscribe: <a href="feed.xml">RSS</a> · <a href="feed.json">JSON Feed</a></p>'
-    head = ('<link rel="alternate" type="application/rss+xml" title="Mission Loop" href="feed.xml">'
-            '<link rel="alternate" type="application/feed+json" title="Mission Loop" href="feed.json">')
-    return _page("Mission Loop", body, "./", head, nav="articles")
+    head = (f'<link rel="alternate" type="application/rss+xml" title="{name}" href="feed.xml">'
+            f'<link rel="alternate" type="application/feed+json" title="{name}" href="feed.json">')
+    return _page(settings.publication_name(), body, "./", head, nav="articles")
 
 # Shows only the articles with the chosen tag, and keeps it in the address (?tag=) so it can be linked to.
 TAGS_JS = """<script>
@@ -435,11 +436,14 @@ def about_html() -> str:
              f'<div class="now"></div></section>')
     agents = "".join(f"<dt>{escape(name)}<small>{escape(who)}</small></dt><dd>{escape(text)}</dd>"
                      for name, who, text in AGENT_NOTES)
-    body = ("<h1>About</h1>"
-            "<p>Mission Loop is a small research desk run by AI agents, with a human editor. Every article starts "
-            "as a mission, a question worth answering, and moves along the line below, turning at each review. Code checks "
-            "the agents' work at each step, and nothing is published until a person has approved the research "
-            "and read the article.</p>"
+    name = settings.publication_name()
+    own = settings.about_statement()
+    intro = ("".join(f"<p>{escape(p)}</p>" for p in own.split("\n\n")) if own else
+             f"<p>{escape(name)} is a small research desk run by AI agents, with a human editor.</p>")
+    body = ("<h1>About</h1>" + intro +
+            "<p>Every article starts as a mission, a question worth answering, and moves along the line below, turning "
+            "at each review. Code checks the agents' work at each step, and nothing is published until a person has "
+            "approved the research and read the article.</p>"
             f"{strip}"
             '<p class="legend">Green: working now. Striped blocks: checks done by code. Dashed: a human review.</p>'
             "<h2>Who does what</h2>"
@@ -453,12 +457,15 @@ def about_html() -> str:
             '<script src="../assets/researchers.js" defer></script>'
             '<script src="../assets/flow.js" defer></script>'
             '<script src="../assets/about.js" defer></script>')
-    return _page("About · Mission Loop", body, "../", head, nav="about")
+    return _page(f"About · {name}", body, "../", head, nav="about")
 
 # ---------- feeds: the same entries as the index, with full text ----------
 
-FEED_TITLE = "Mission Loop"
-FEED_DESCRIPTION = "Every article Mission Loop has published, with its sources."
+def feed_title() -> str:
+    return settings.publication_name()
+
+def feed_description() -> str:
+    return settings.tagline() or f"Every article {settings.publication_name()} has published, with its sources."
 
 def _base(site_url: str) -> str:
     return site_url.rstrip("/") + "/" if site_url else ""
@@ -473,7 +480,7 @@ def feed_json(entries: list[dict], site_url: str = "") -> str:
     """JSON Feed 1.1. Ids are the slugs, so they stay the same when a site URL is set later.
     Without a site URL, links are relative to the feed file."""
     base = _base(site_url)
-    feed = {"version": "https://jsonfeed.org/version/1.1", "title": FEED_TITLE, "description": FEED_DESCRIPTION}
+    feed = {"version": "https://jsonfeed.org/version/1.1", "title": feed_title(), "description": feed_description()}
     if base:
         feed |= {"home_page_url": base, "feed_url": base + "feed.json"}
     feed["items"] = [{"id": e["slug"], "url": f'{base}{e["slug"]}/', "title": e["title"], "summary": e["dek"],
@@ -487,7 +494,7 @@ def feed_xml(entries: list[dict], site_url: str = "") -> str:
     ET.register_namespace("content", content)
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
-    for tag, value in (("title", FEED_TITLE), ("link", base or "./"), ("description", FEED_DESCRIPTION)):
+    for tag, value in (("title", feed_title()), ("link", base or "./"), ("description", feed_description())):
         ET.SubElement(channel, tag).text = value
     for e in entries:
         item = ET.SubElement(channel, "item")

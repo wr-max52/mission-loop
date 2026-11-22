@@ -169,7 +169,7 @@ async def test_loop_server_runs_over_mcp_from_any_folder():
     async with Toolbox(["loop"], config_path=assistant.CONFIG) as tb:
         assert {t["function"]["name"] for t in tb.tools} == {
             "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions",
-            "publication_status", "add_mission", "list_epics", "set_mission_epic", "theorist_notes"}
+            "publication_status", "add_mission", "list_epics", "set_mission_epic", "theorist_notes", "setup_status"}
         assert "Why the grid failed" in await tb.call("mission_status", {"slug": "grid"})
 
 # ---------- the assistant ----------
