@@ -296,6 +296,34 @@ h3.stage .ico { color:var(--muted); }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
         text-decoration:none; color:var(--fg); }
 .card:hover { border-color:var(--muted); }
+button.card.add-mission { display:flex; align-items:center; justify-content:center; gap:.55rem; width:100%;
+  margin:-.6rem 0 1.5rem; padding:.7rem 1rem; font:inherit; font-size:1.05rem; font-weight:700; cursor:pointer;
+  color:#237a35; background:#ebfbee; border:2px dashed #69c07a; border-radius:10px; }
+button.card.add-mission:hover { background:#d3f9d8; border-color:#2f9e44; border-style:solid; }
+button.card.add-mission .ico { width:1.25rem; height:1.25rem; }
+button.card.add-mission .ico:first-child svg { stroke-width:3; }
+:root[data-theme="dark"] button.card.add-mission { color:#8ce99a; border-color:#51cf66; background:rgba(81,207,102,.1); }
+:root[data-theme="dark"] button.card.add-mission:hover { background:rgba(81,207,102,.18); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) button.card.add-mission {
+  color:#8ce99a; border-color:#51cf66; background:rgba(81,207,102,.1); }
+  :root:not([data-theme]) button.card.add-mission:hover { background:rgba(81,207,102,.18); } }
+dialog.wizard { width:min(36rem, calc(100vw - 2rem)); box-sizing:border-box; padding:1.2rem 1.4rem; border:1px solid var(--rule);
+  border-radius:12px; background:var(--bg); color:var(--fg); }
+dialog.wizard::backdrop { background:rgba(0,0,0,.45); }
+dialog.wizard:focus { outline:none; }
+dialog.wizard [hidden] { display:none; }
+dialog.wizard header { display:flex; justify-content:space-between; align-items:center; }
+dialog.wizard header strong { display:flex; align-items:center; gap:.45rem; font:700 1.2rem Georgia, serif; }
+dialog.wizard .wiz-close { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
+dialog.wizard fieldset { border:none; padding:0; margin:0; min-width:0; }
+dialog.wizard legend { font-weight:700; margin-bottom:.4rem; padding:0; }
+dialog.wizard input, dialog.wizard textarea { width:100%; box-sizing:border-box; }
+.wiz-dots { display:flex; gap:.4rem; list-style:none; padding:0; margin:.8rem 0 1rem; }
+.wiz-dots li { flex:1; height:4px; border-radius:2px; background:var(--rule); }
+.wiz-dots li.on, .wiz-dots li.done { background:#8a2b2b; }
+.wiz-nav { display:flex; justify-content:flex-end; gap:.5rem; margin:1.2rem 0 0; }
+.wiz-nav .wiz-back { margin-right:auto; }
+.wiz-sum { overflow-wrap:anywhere; }
 .card.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
 .card.active .sub { color:var(--fg); }
 .card .row { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; }
@@ -624,7 +652,7 @@ let sig = "{signature()}";
 async function check() {{
   const busy = [...document.querySelectorAll("textarea:not(#chat-q), input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
             ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)
-            || document.body.classList.contains("chat-open");
+            || document.body.classList.contains("chat-open") || !!document.querySelector("dialog[open]");
   if (busy || document.hidden) return;
   try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig && await refresh()) sig = s; }} catch (e) {{}}
 }}
@@ -1891,7 +1919,8 @@ def queue_section(queued: list) -> str:
 
 async def home(request: Request) -> HTMLResponse:
     """The flow chart read from its end: what needs you, then what is in progress closest to published first,
-    grouped by stage; then the inputs (inspiration, epics, a new mission). Published articles live on /published:
+    grouped by stage; then the inputs (inspiration, epics). Adding a mission is one slim card right under the
+    strip that opens a wizard (new_mission). Published articles live on /published:
     the top bar's Published button, and a card at the very bottom for anyone who scrolls looking for it. What waits
     to be published is one card under In progress that leads there; the queue itself is on that page."""
     missions = store.all_missions()
@@ -1899,7 +1928,7 @@ async def home(request: Request) -> HTMLResponse:
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     lab = settings.animations()
-    body = [flash(request), loop_panel("/")]
+    body = [flash(request), loop_panel("/"), new_mission()]
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
@@ -1914,7 +1943,7 @@ async def home(request: Request) -> HTMLResponse:
     waiting = {slug for _, _, entries in queued for slug, _, _ in entries}
     body.append(heading("activity", "In progress", len(going) + len(waiting)))
     if not going and not waiting:
-        body.append('<p class="muted empty">Nothing in progress. Add a mission below, or set an inspiration line '
+        body.append('<p class="muted empty">Nothing in progress. Add a mission above, or set an inspiration line '
                     'and start the loop.</p>')
     for key, name, title in STAGES:
         if key == "publishing":
@@ -1930,17 +1959,6 @@ async def home(request: Request) -> HTMLResponse:
 
     body.append(finder_panel())
     body.append(epic_list(missions))
-    body.append(epic_datalist() + heading("pencil", "New mission") + """<form method="post" action="/missions" class="actions">
-  <label for="topic" style="margin-top:0">Topic <span class="hint">what to research, in one line</span></label>
-  <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">
-  <label for="objective">Objective <span class="hint">optional: the question to answer, what counts as evidence, any hypothesis to test</span></label>
-  <textarea id="objective" name="objective" rows="4"></textarea>
-  <label for="slug">Short name <span class="hint">optional; made from the topic if left blank</span></label>
-  <input type="text" id="slug" name="slug" placeholder="transit-levy">
-  <label for="epic">Epic <span class="hint">optional: pick one, or type a new name of 1 to 4 words</span></label>
-  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="e.g. Fed Policy Capture">
-  <p><button class="primary">Add mission</button></p>
-</form>""")
     tail = log_tail()
     if tail:
         body.append(f'<details><summary>{icon("terminal")}Loop log (data/loop.log)</summary><pre class="notes">'
@@ -1952,6 +1970,75 @@ async def home(request: Request) -> HTMLResponse:
     if lab:
         body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
+
+def new_mission() -> str:
+    """A long slim card right under the pipeline strip; clicking it opens a three-step wizard (topic, objective,
+    epic and short name) in a dialog that posts to /missions like the CLI's add. The page's own refresh holds off
+    while it is open."""
+    steps = [
+        ("What should the loop research?", """<label for="topic">Topic <span class="hint">what to research, in one line</span></label>
+  <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">"""),
+        ("What would answer it?", """<label for="objective">Objective <span class="hint">optional: the question to answer, what counts as evidence, any hypothesis to test</span></label>
+  <textarea id="objective" name="objective" rows="5"></textarea>"""),
+        ("Where does it belong?", """<label for="epic">Epic <span class="hint">optional: pick one, or type a new name of 1 to 4 words</span></label>
+  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="e.g. Fed Policy Capture">
+  <label for="slug">Short name <span class="hint">optional; made from the topic if left blank</span></label>
+  <input type="text" id="slug" name="slug" placeholder="transit-levy">
+  <p class="hint wiz-sum"></p>"""),
+    ]
+    panes = "".join(f'<fieldset class="wiz-step" data-step="{i}"{"" if i == 0 else " hidden"}>'
+                    f'<legend>Step {i + 1} of {len(steps)}: {title}</legend>{fields}</fieldset>'
+                    for i, (title, fields) in enumerate(steps))
+    return (epic_datalist()
+            + f'<button type="button" class="card add-mission" id="add-mission" aria-haspopup="dialog" '
+              f'aria-controls="wizard">{icon("plus")}{icon("pencil")}<span>Add a mission</span></button>'
+            + f'''<dialog id="wizard" class="wizard" aria-labelledby="wizard-title">
+<form method="post" action="/missions">
+  <header><strong id="wizard-title">{icon("pencil")}New mission</strong>
+    <button type="button" class="wiz-close" aria-label="Close">&times;</button></header>
+  <ol class="wiz-dots" aria-hidden="true">{"".join("<li></li>" for _ in steps)}</ol>
+  {panes}
+  <p class="wiz-nav"><button type="button" class="wiz-back" hidden>Back</button>
+    <button type="button" class="primary wiz-next">Next</button>
+    <button class="primary wiz-add" hidden>Add mission</button></p>
+</form></dialog>{WIZARD_JS}''')
+
+WIZARD_JS = """<script>
+(() => {
+  const dlg = document.getElementById("wizard");
+  if (!dlg || dlg.dataset.ready) return;
+  dlg.dataset.ready = "1";
+  const form = dlg.querySelector("form"), steps = [...dlg.querySelectorAll(".wiz-step")];
+  const dots = [...dlg.querySelectorAll(".wiz-dots li")], topic = dlg.querySelector("#topic");
+  const back = dlg.querySelector(".wiz-back"), next = dlg.querySelector(".wiz-next"), add = dlg.querySelector(".wiz-add");
+  let at = 0;
+  function show(i) {
+    at = i;
+    steps.forEach((s, n) => s.hidden = n !== i);
+    dots.forEach((d, n) => d.className = n < i ? "done" : n === i ? "on" : "");
+    back.hidden = i === 0; next.hidden = i === steps.length - 1; add.hidden = !next.hidden;
+    if (i === steps.length - 1) dlg.querySelector(".wiz-sum").textContent = "Adding: " + topic.value.trim();
+    const first = steps[i].querySelector("input, textarea");
+    if (first) first.focus();
+  }
+  function forward() {
+    if (at === 0 && !topic.reportValidity()) return;
+    if (at < steps.length - 1) show(at + 1);
+  }
+  next.addEventListener("click", forward);
+  back.addEventListener("click", () => show(at - 1));
+  dlg.querySelector(".wiz-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });   // a click on the backdrop
+  form.addEventListener("keydown", e => {                                        // Enter moves on, never submits early
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && at < steps.length - 1) { e.preventDefault(); forward(); }
+  });
+  // one listener on the document, so a card swapped in by the page's refresh still opens it
+  document.addEventListener("click", e => {
+    if (!e.target.closest("#add-mission")) return;
+    form.reset(); show(0); dlg.showModal(); topic.focus();
+  });
+})();
+</script>"""
 
 def actions_for(m: Mission) -> str:
     slug = quote(m.slug)
