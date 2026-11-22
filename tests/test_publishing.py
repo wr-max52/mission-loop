@@ -44,10 +44,16 @@ def test_missions_page_runs_the_flow_top_to_bottom_and_only_links_to_what_is_pub
     html = client.get("/").text
     order = re.findall(r'<a class="(?:card[^"]*|topic)" href="/m/([a-z-]+)"', html)   # decisions, then cards
     assert order == ["review-article", "review-brief", "parked",                       # needs you, at the top
-                     "ready", "writing", "approved", "brief", "search", "queued"]       # then the flow, new last
-    assert "Published (" not in html and 'href="/m/done"' not in html
+                     "writing", "approved", "brief", "search", "queued"]                # then the flow, new last
+    assert "Published (" not in html and 'href="/m/done"' not in html and 'href="/m/ready"' not in html
+    queue = html.split('<a class="card publish" href="/published#queue">')[1].split("</a>")[0]   # one card instead
+    assert "1 article queued" in queue and "Local site 1" in queue
+    assert html.index("#queue") < html.index('href="/m/writing"')                      # publishing first
     assert '<a class="card site-link" href="/published">' in html and "1 article</span>" in html
     assert html.index('href="/m/queued"') < html.index('class="card site-link"')
+    assert html.index('action="/missions"') < html.index('class="card site-link"')    # the very bottom
+    assert f'<a href="/published">{ui.ICON_SITE}Published</a>' in html.split("</nav>")[0]   # and a button at the top
+    assert f'{ui.ICON_SITE}Published</span>' in html
 
 def test_publishing_is_one_step_on_the_strip_whatever_the_channels(client, monkeypatch, sky):
     monkeypatch.setattr(ui, "loop_running", lambda: True)
@@ -80,20 +86,73 @@ def test_nav_goes_to_the_published_page_which_leads_back(client, sky):
 
 # ---------- publishing again ----------
 
-def test_publishing_again_skips_bluesky_gap_and_goes_ahead_of_the_queue(client, sky):
+def test_publishing_again_skips_bluesky_gap_and_goes_ahead_of_the_queue(client, sky, monkeypatch):
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    monkeypatch.setattr(ui, "wake", lambda: None)
     backlog("old", "newer")
     run_at(T0)                                         # newest first; the gap holds the other back
     assert on_bluesky("newer") and not on_bluesky("old") and len(sky.roots) == 1
     r = client.post("/m/old/republish", data={"to": ["bluesky"], "back": "/published"}, follow_redirects=False)
-    assert r.headers["location"] == "/published?done=republish_off"
+    assert r.headers["location"] == "/published?done=republish"
     m = store.get_mission("old")
     assert set(m.publish_requests) == {"bluesky"}
-    assert ui.label(m) == "Publishing again" and 'href="/m/old"' in client.get("/").text   # back on the Missions page
+    assert ui.label(m) == "Publishing again"
+    home = client.get("/").text                        # one queue card on the Missions page, not the article's
+    assert 'href="/m/old"' not in home and "1 article queued" in home and "Bluesky 1" in home
+    queue = client.get("/published").text.split('id="queue"')[1].split('<h2')[0]
+    assert '<a href="#a-old">' in queue and "<strong>requested</strong>" in queue
     run_at(T0 + timedelta(minutes=1))                  # inside the 10-minute gap, but a human asked
     assert on_bluesky("old") and len(sky.roots) == 2 and not store.get_mission("old").publish_requests
     client.post("/m/newer/republish", data={"to": "bluesky"})
     run_at(T0 + timedelta(minutes=2))                  # posted already, but asked again: it goes again
     assert len(sky.roots) == 3 and not store.get_mission("newer").publish_requests
+
+@pytest.fixture
+def publish_waits(monkeypatch):
+    """The UI publishes in the background while the loop is off; wait for it so the test sees the result."""
+    real = ui.publish_now
+    monkeypatch.setattr(ui, "publish_now", lambda: real().join())
+
+def test_the_queue_is_on_the_published_page_with_one_card_on_the_missions_page(client, sky):
+    backlog("old", "newer")
+    store.save_mission(Mission(slug="ready", topic="Ready to go", state=State.ARTICLE_READY, reviewed=True))
+    home = client.get("/").text
+    assert "3 articles queued" in home and "Local site 1 · Bluesky 2" in home
+    page = client.get("/published").text
+    queue = page.split('id="queue"')[1].split('<h2')[0]
+    assert re.findall(r'<a href="([^"]+)">', queue) == ["/m/ready", "#a-newer", "#a-old"]   # in posting order
+    assert page.index('id="queue"') < page.index("Articles</span>")
+    store.save_mission(store.get_mission("ready").model_copy(update={"state": State.DONE, "published_at": T0}))
+    run_at(T0)
+    run_at(T0 + timedelta(hours=1))
+    run_at(T0 + timedelta(hours=2))
+    assert "articles queued" not in client.get("/").text and "article queued" not in client.get("/").text
+    assert "Nothing waiting" in client.get("/published").text
+
+def test_publishing_again_needs_no_loop_and_leaves_the_backlog_to_it(client, sky, monkeypatch, publish_waits):
+    backlog("old", "middle", "newer")
+    run_at(T0)                                         # newest first; the gap holds the others back
+    assert len(sky.roots) == 1 and not on_bluesky("old")
+    orchestrator.STOP_FLAG.parent.mkdir(exist_ok=True)
+    orchestrator.STOP_FLAG.touch()                     # left behind by the last stop: no matter here
+    Path("site/old/index.html").write_text("stale")
+    monkeypatch.setattr(ui.clock, "now", lambda: T0 + timedelta(minutes=1))   # inside the gap, but a human asked
+    r = client.post("/m/old/republish", data={"to": ["site", "bluesky"], "back": "/published"},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/published?done=republish_off"
+    assert on_bluesky("old") and len(sky.roots) == 2 and not store.get_mission("old").publish_requests
+    assert Path("site/old/index.html").read_text() != "stale"
+    assert not on_bluesky("middle")                    # nobody asked for it: it waits for the loop
+    assert "<strong>Bluesky</strong>: waiting" in client.get("/published").text
+
+def test_a_failed_request_without_the_loop_stays_requested(client, sky, monkeypatch, publish_waits):
+    backlog("a")
+    sky.limited = True
+    client.post("/m/a/republish", data={"to": "bluesky", "back": "/published"})
+    assert "bluesky" in store.get_mission("a").publish_requests and not sky.roots
+    sky.limited = False
+    run_at(T0 + timedelta(minutes=60))                 # the loop picks it up
+    assert not store.get_mission("a").publish_requests and len(sky.roots) == 1
 
 def test_a_failed_request_waits_for_the_next_publishing_pass(client, sky):
     backlog("a")

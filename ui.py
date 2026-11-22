@@ -5,7 +5,7 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import hashlib, json, os, re, subprocess, sys, time
+import hashlib, json, os, re, subprocess, sys, threading, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -68,7 +68,7 @@ MESSAGES = {
     "custom_added": "Custom channel added. Published articles go there from the next publishing pass, newest first.",
     "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
     "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
-    "republish_off": "Publishing requested. It goes out, ahead of everything else waiting, once the loop is running.",
+    "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -113,6 +113,18 @@ def start_loop(every: float) -> None:
         if loop_running():
             break
         time.sleep(0.2)
+
+def publish_now() -> threading.Thread:
+    """The loop is off, so publish what a human just asked for from here, in the background: no model is needed,
+    and the page shows each place as it is reached. A request that fails stays for the next try or the loop."""
+    def go():
+        try:
+            orchestrator.publish_requested(clock.now())
+        except Exception as e:             # the request stays; the loop or the next press tries again
+            print(f"publishing failed: {type(e).__name__}: {e}", flush=True)
+    t = threading.Thread(target=go, name="publish", daemon=True)
+    t.start()
+    return t
 
 def wake() -> None:
     orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
@@ -560,7 +572,7 @@ async function refresh() {{
             f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/published">{ICON_SITE}Published site</a>'
+            f'<a href="/published">{ICON_SITE}Published</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
             f"{body}</main>{chat_widget()}{script}</body></html>")
     return HTMLResponse(html)
@@ -826,7 +838,7 @@ def places(m: Mission, queues: dict[str, list[str]] | None = None) -> list[dict]
             bits.append(f"{'written' if key == 'site' else 'posted'} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
         if key in m.publish_requests:
             bits.append(f'<strong>publishing requested {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>, ahead of '
-                        "everything else" + ("" if loop_running() else "; it goes out once the loop is running"))
+                        "everything else")
         elif not post and key in queues:
             slugs = queues[key]
             bits.append(f"waiting, #{slugs.index(m.slug) + 1} of {len(slugs)} in the queue" if m.slug in slugs
@@ -1487,11 +1499,55 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
             f'{" · " + escape(sub) if sub else ""}</span></div></a>')
 
+# ---------- the publishing queue ----------
+
+def publish_queue(missions: list[Mission]) -> list[tuple[str, str, list[tuple[str, str, bool]]]]:
+    """What waits to be published, per place in posting order: (key, name, [(slug, title, asked by a human)]).
+    The local site gets reviewed articles and pages asked to be rewritten; each channel that is set up, its
+    backlog as it will post it (orchestrator.queue). Places with nothing waiting are left out."""
+    by_slug = {m.slug: m for m in missions}
+    titles = {e["slug"]: e["title"] for e in publisher.entries()}
+    site = [(m.slug, m.topic, False) for m in missions if m.state == State.ARTICLE_READY and m.reviewed]
+    site += [(m.slug, titles.get(m.slug, m.topic), True) for m in missions
+             if m.state == State.DONE and "site" in m.publish_requests]
+    out = [("site", "Local site", site)] if site else []
+    for c in live_channels():
+        entries = [(e["slug"], e.get("title") or e["slug"], c.KEY in by_slug[e["slug"]].publish_requests)
+                   for e in orchestrator.queue(c) if e["slug"] in by_slug]
+        if entries:
+            out.append((c.KEY, c.NAME, entries))
+    return out
+
+def queue_card(queued: list, count: int) -> str:
+    """The Missions page's one card for everything waiting to be published; the queue is on /published."""
+    places = " · ".join(f"{escape(name)} {len(entries)}" for _, name, entries in queued)
+    return (f'<a class="card publish" href="/published#queue"><div class="row"><span class="topic">'
+            f'{count} article{"" if count == 1 else "s"} queued</span><span class="badge publish">Publishing</span></div>'
+            f'<div class="sub">{places} · see the queue</div></a>')
+
+def queue_section(queued: list) -> str:
+    """The Published page's queue: each place, then its articles in the order they go out."""
+    if not queued:
+        return (heading("clock", "Queue", 0, "queue")
+                + '<p class="muted">Nothing waiting. Every article has reached every place it is going.</p>')
+    parts = []
+    for key, name, entries in queued:
+        items = "".join(
+            f'<li><a href="{f"#a-{escape(slug)}" if key != "site" or asked else f"/m/{quote(slug)}"}">{escape(title)}</a>'
+            + (" · <strong>requested</strong>" if asked else "") + "</li>"
+            for slug, title, asked in entries)
+        parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span></h3>'
+                     f'<ol class="queue">{items}</ol>')
+    total = len({slug for _, _, entries in queued for slug, _, _ in entries})
+    return heading("clock", "Queue", total, "queue") + "".join(parts)
+
 # ---------- pages ----------
 
 async def home(request: Request) -> HTMLResponse:
     """The flow chart read from its end: what needs you, then what is in progress closest to published first,
-    grouped by stage; then the inputs (inspiration, epics, a new mission). Published articles live on /published."""
+    grouped by stage; then the inputs (inspiration, epics, a new mission). Published articles live on /published:
+    the top bar's Published button, and a card at the very bottom for anyone who scrolls looking for it. What waits
+    to be published is one card under In progress that leads there; the queue itself is on that page."""
     missions = store.all_missions()
     flow = lambda ms: sorted(ms, key=flow_rank)   # stable: within a step, oldest first
     now = running_now()
@@ -1507,21 +1563,24 @@ async def home(request: Request) -> HTMLResponse:
                 or '<p class="muted empty">Nothing is waiting on you.</p>')
 
     # In progress, by stage. assets/flow.js relights cards in place; researchers may only visit data-lab-ok groups.
-    going = flow(m for m in missions if in_progress(m))
-    body.append(heading("activity", "In progress", len(going)))
-    if not going:
+    going = flow(m for m in missions if in_progress(m) and stage_of(m) != "publishing")
+    queued = publish_queue(missions)
+    waiting = {slug for _, _, entries in queued for slug, _, _ in entries}
+    body.append(heading("activity", "In progress", len(going) + len(waiting)))
+    if not going and not waiting:
         body.append('<p class="muted empty">Nothing in progress. Add a mission below, or set an inspiration line '
                     'and start the loop.</p>')
     for key, name, title in STAGES:
+        if key == "publishing":
+            if waiting:
+                body.append(f'<h3 class="stage">{icon(name)}<span>{title}</span><span class="n">{len(waiting)}</span></h3>'
+                            f'<div class="cards">{queue_card(queued, len(waiting))}</div>')
+            continue
         ms = [m for m in going if stage_of(m) == key]
         if ms:
             body.append(f'<h3 class="stage">{icon(name)}<span>{title}</span><span class="n">{len(ms)}</span></h3>'
                         f'<div class="cards"{" data-lab-ok" if lab else ""}>'
                         + "".join(card(m, now, epics, lab) for m in ms) + "</div>")
-    done = sum(m.state == State.DONE for m in missions)
-    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published site</span>'
-                f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
-                f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
 
     body.append(finder_panel())
     body.append(epic_list(missions))
@@ -1540,6 +1599,10 @@ async def home(request: Request) -> HTMLResponse:
     if tail:
         body.append(f'<details><summary>{icon("terminal")}Loop log (data/loop.log)</summary><pre class="notes">'
                     + escape("\n".join(tail)) + "</pre></details>")
+    done = sum(m.state == State.DONE for m in missions)   # the very last thing, for anyone looking for it
+    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published</span>'
+                f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
+                f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
     if lab:
         body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
@@ -1593,7 +1656,9 @@ async def published_page(request: Request) -> HTMLResponse:
                       key=lambda m: str(m.published_at or ""), reverse=True)
     titles = {e["slug"]: e["title"] for e in publisher.entries()}
     live = live_channels()
-    queues = {c.KEY: [e["slug"] for e in orchestrator.queue(c)] for c in live}
+    queued = publish_queue(store.all_missions())
+    queues = {c.KEY: [] for c in live} | {key: [slug for slug, _, _ in entries] for key, _, entries in queued}
+    queues.pop("site", None)
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request), '<p><a class="back" href="/">&larr; Back to missions</a></p>', "<h1>Published</h1>",
             f'<p>{len(missions)} article{"" if len(missions) == 1 else "s"} on the local site. '
@@ -1605,8 +1670,7 @@ async def published_page(request: Request) -> HTMLResponse:
     if not live:
         rows.append('<li class="muted">No channels yet. Add one on the <a href="/settings#publishing">Settings</a> page.</li>')
     body.append(f'{heading("send", "Where articles go")}<ul class="places">{"".join(rows)}</ul>')
-    if not loop_running():
-        body.append('<p class="flash">The loop is off, so anything you publish here waits until it starts.</p>')
+    body.append(queue_section(queued))
     body.append(heading("newspaper", "Articles"))
     if not missions:
         body.append('<p class="muted">Nothing published yet. Articles show up here once you publish them from the Missions page.</p>')
@@ -1914,6 +1978,7 @@ async def act(request: Request) -> Response:
         except ValueError:
             return go(back, error="places" if m.state == State.DONE else "state")
         if not loop_running():
+            publish_now()
             return go(back, done="republish_off")
         wake()
         return go(back, done="republish")
