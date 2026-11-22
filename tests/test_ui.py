@@ -227,3 +227,22 @@ def test_system_dark_is_gated_behind_an_explicit_choice():
     from render import CSS
     assert ':root[data-theme="dark"]' in CSS and "--bg:#151517" in CSS
     assert "@media (prefers-color-scheme: dark) {" in CSS and ":root:not([data-theme])" in CSS
+
+def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client, monkeypatch):
+    store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
+    store.save_mission(Mission(slug="q", topic="Other topic", state=State.WRITING))
+    store.save_mission(Mission(slug="r", topic="Ready", state=State.BRIEF_READY))
+    html = client.get("/").text
+    assert '<script src="/assets/researchers.js" defer></script>' in html
+    assert '<a class="card" href="/m/b" data-lab="idle">' in html          # loop off: they nap
+    assert 'href="/m/r" data-lab' not in html                             # only in-progress cards get one
+    assert "data-lab>" not in html                                        # no agent working, no pill stage
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    activity.begin("b", "sources")
+    html = client.get("/").text
+    assert '<a class="card active" href="/m/b" data-lab="busy">' in html
+    assert '<a class="card" href="/m/q" data-lab="waiting">' in html
+    assert '<div class="agents" data-lab>' in html
+    js = client.get("/assets/researchers.js")
+    assert js.status_code == 200 and "class Researcher" in js.text
+    assert "researchers.js" not in client.get("/m/b").text                 # the mission page stays quiet
