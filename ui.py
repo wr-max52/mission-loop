@@ -291,8 +291,14 @@ input, textarea { font:inherit; padding:.5rem .6rem; border:1px solid var(--rule
 input[type=number] { width:4.5rem; }
 label { display:block; font-size:.85rem; font-weight:600; margin:.8rem 0 .3rem; }
 .hint { color:var(--muted); font-size:.85rem; font-weight:400; }
-.flash { padding:.7rem 1rem; border-radius:8px; background:var(--quote); margin-bottom:1rem; }
-.flash.err { border-left:3px solid var(--accent); }
+/* A toast over the page, so it shows wherever the page was scrolled to (KEEP_SCROLL_JS brings you back there).
+   Click to dismiss; a "done" fades on its own, an error stays. */
+.flash { position:fixed; top:1rem; left:50%; transform:translateX(-50%); z-index:60; box-sizing:border-box;
+         width:max-content; max-width:calc(100vw - 2rem); padding:.7rem 1rem; border-radius:8px;
+         background:var(--quote); border:1px solid var(--rule); box-shadow:0 6px 24px rgba(0,0,0,.18);
+         cursor:pointer; animation:flash-out .4s ease 6s forwards; }
+.flash.err { border-left:3px solid var(--accent); animation:none; }
+@keyframes flash-out { to { opacity:0; visibility:hidden; } }
 .code-big code { font-size:1.6rem; letter-spacing:.15em; padding:.3rem .6rem; }
 .inline-buttons button { margin-right:.4rem; }
 .actions { border:1px solid var(--rule); border-radius:10px; padding:1rem; margin:1rem 0 1.5rem; }
@@ -478,6 +484,34 @@ const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e =>
 setInterval(showElapsed, 1000);
 </script>"""
 
+# Every button posts a form and the server redirects back (POST, then 303), which the browser loads as a new page,
+# scrolled to the top. Remember where the page was when a form goes off, and scroll back there if it lands on the
+# same page. Then take done=/error= out of the address, so the page's own refreshes and a reload don't show the
+# flash again.
+KEEP_SCROLL_JS = """<script>
+(() => {
+  const KEY = "scroll-back";
+  document.addEventListener("submit", e => {
+    if (e.defaultPrevented) return;          // a form handled in the page (the chat) doesn't leave it
+    try { sessionStorage.setItem(KEY, JSON.stringify({path: location.pathname, y: scrollY, t: Date.now()})); }
+    catch (err) {}
+  });
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(KEY)); sessionStorage.removeItem(KEY); } catch (err) {}
+  if (saved && saved.path === location.pathname && Date.now() - saved.t < 60000) {
+    const back = () => scrollTo(0, saved.y);
+    back();
+    addEventListener("load", back, {once: true});   // again once the strip has sized itself
+  }
+  const url = new URL(location.href);
+  if (url.searchParams.has("done") || url.searchParams.has("error")) {
+    url.searchParams.delete("done"); url.searchParams.delete("error");
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  }
+  document.addEventListener("click", e => { const f = e.target.closest(".flash"); if (f) f.remove(); });
+})();
+</script>"""
+
 # Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
 RESEARCHERS_SRC = "/assets/researchers.js"
 RESEARCHERS = f'<script src="{RESEARCHERS_SRC}" defer></script>'
@@ -544,6 +578,7 @@ async function refresh() {{
   const keep = document.getElementById("flow"), slot = next.querySelector("#flow");
   if (keep && slot && keep.dataset.shape === slot.dataset.shape) slot.replaceWith(keep);
   next.querySelectorAll("details > summary").forEach(e => {{ if (open.has(e.textContent)) e.parentNode.open = true; }});
+  next.prepend(...main.querySelectorAll(".flash.err"));   // an error stays until clicked away
   main.replaceChildren(...next.childNodes);
   const status = doc.querySelector("nav.top .status"), shown = document.querySelector("nav.top .status");
   if (status && shown) shown.replaceWith(document.importNode(status, true));
@@ -561,7 +596,7 @@ async function refresh() {{
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a></span></nav>'
-            f"{body}</main>{chat_widget()}{script}</body></html>")
+            f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
     return HTMLResponse(html)
 
 def flash(request: Request) -> str:
@@ -859,10 +894,10 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
   <input type="hidden" name="worker" value="{worker}">
   <div class="head"><h3>{name}</h3>
-    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.submit()" aria-label="{name} on"></label></div>
+    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{name} on"></label></div>
   <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
   <label for="{worker}_model">Model</label>
-  <select id="{worker}_model" name="model" onchange="this.form.submit()">{model_options(model, conn)}</select>
+  <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn)}</select>
   <label>Uses this model for</label>
   <ul>{steps}</ul>
   {note}<div class="grow"></div>
@@ -1190,21 +1225,21 @@ def display_forms() -> str:
     theme = settings.theme()
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{v}"{" checked" if v == theme else ""} '
-        f'onchange="this.form.submit()">{icon(ico)}{label}</label>' for v, ico, label in THEME_CHOICES)
+        f'onchange="this.form.requestSubmit()">{icon(ico)}{label}</label>' for v, ico, label in THEME_CHOICES)
     current = settings.chat_color()
     known = set(settings.CHAT_COLORS.values())
     def swatch(value: str, name: str, color: str) -> str:
         on = " checked" if value == current else ""
         ink = settings.ink_on(color) if color.startswith("#") else "#ffffff"
         return (f'<label class="swatch" style="--c:{color};--ink:{ink}"><input type="radio" name="choice" value="{value}"'
-                f'{on} onchange="this.form.submit()"><span class="dab"></span>{escape(name)}</label>')
+                f'{on} onchange="this.form.requestSubmit()"><span class="dab"></span>{escape(name)}</label>')
     swatches = swatch("", "Library red", "var(--accent)")
     swatches += "".join(swatch(c, n, c) for n, c in settings.CHAT_COLORS.items())
     mine = current if current and current not in known else ""
     own_on = " checked" if mine else ""
     own_style = f' style="--c:{mine};--ink:{settings.ink_on(mine)}"' if mine else ""
     swatches += (f'<label class="swatch own{" set" if mine else ""}"{own_style}>'
-                 f'<input type="radio" name="choice" value="own"{own_on} onchange="this.form.submit()">'
+                 f'<input type="radio" name="choice" value="own"{own_on} onchange="this.form.requestSubmit()">'
                  f'<span class="dab"><input type="color" id="own-color" name="own" value="{mine or OWN_DEFAULT}" '
                  f'aria-label="Choose your own colour"></span>Your own</label>')
     return f"""<form method="post" action="/settings/theme" class="actions display">
@@ -1232,7 +1267,7 @@ def settings_body(request: Request, error: str = "") -> str:
 {heading("monitor", "Display")}
 {display_forms()}
 <form method="post" action="/settings/animations" class="actions">
-  <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
+  <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
