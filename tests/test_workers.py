@@ -273,7 +273,7 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     html = client.get("/").text
     assert '<div class="cards" data-lab-ok><a class="card" href="/m/w">' in html   # researchers may visit In progress
     assert html.index('href="/m/w"') < html.index('href="/m/r"')                   # writing above research: the flow
-    assert '<span class="doing" data-idle="Researching."> · Researching.</span>' in html
+    assert '<span class="doing" data-idle="Finding sources."> · Finding sources.</span>' in html
     activity.work_as("assistant"); activity.begin("r", "sources")
     activity.work_as("pi"); activity.begin("w", "writer")
     activity.work_as(activity.DESK)
@@ -281,7 +281,7 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     assert {(e["slug"], e["worker"], e["name"]) for e in working} == {("r", "assistant", "Source finder"),
                                                                        ("w", "pi", "Article writer")}
     html = client.get("/").text            # the idle line stays on the card, for when the work ends
-    assert '<span class="doing" data-idle="Researching."> · Source finder is working on this now.</span>' in html
+    assert '<span class="doing" data-idle="Finding sources."> · Source finder is working on this now.</span>' in html
     js = client.get("/assets/flow.js").text
     assert "relightCards(d.working)" in js and "is working on this now." in js
     js = client.get("/assets/researchers.js").text

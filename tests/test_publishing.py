@@ -42,7 +42,7 @@ def test_missions_page_runs_the_flow_top_to_bottom_and_only_links_to_what_is_pub
                                ("done", State.DONE, {"published_at": T0})):
         store.save_mission(Mission(slug=slug, topic=slug, state=state, **extra))
     html = client.get("/").text
-    order = re.findall(r'<a class="card[^"]*" href="/m/([a-z-]+)"', html)
+    order = re.findall(r'<a class="(?:card[^"]*|topic)" href="/m/([a-z-]+)"', html)   # decisions, then cards
     assert order == ["review-article", "review-brief", "parked",                       # needs you, at the top
                      "ready", "writing", "approved", "brief", "search", "queued"]       # then the flow, new last
     assert "Published (" not in html and 'href="/m/done"' not in html

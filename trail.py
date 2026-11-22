@@ -11,6 +11,7 @@ DIR = Path("data/trail")
 KEEP = 40                                  # steps kept per mission
 MAX_TEXT = 400                             # characters kept per step
 FINDER = "_finder"                         # the mission finder works for the whole desk, not one mission
+DESK_AGENTS = ("finder", "theorist")       # agents that work for the whole desk: one file each, "_<agent>"
 
 _here = threading.local()                  # each worker thread has its own current agent
 _write_lock = threading.Lock()             # two workers may write (and trim) at once
@@ -21,8 +22,10 @@ def _now() -> dict:
         _here.current = {}
     return _here.current
 
-def _file(slug: str) -> Path:
-    name = re.sub(r"[^a-z0-9-]", "", slug.lower())[:60] or FINDER
+def _file(slug: str, agent: str = "finder") -> Path:
+    name = re.sub(r"[^a-z0-9-]", "", slug.lower())[:60]
+    if not name:                           # desk work, not one mission's
+        name = f"_{agent}" if agent in DESK_AGENTS else FINDER
     return DIR / f"{name}.jsonl"
 
 def start(slug: str, agent: str) -> None:
@@ -41,7 +44,7 @@ def record(kind: str, text: str) -> None:
     text = " ".join(str(text).split())
     step = {"at": time.time(), "agent": current["agent"], "kind": kind,
             "text": text[:MAX_TEXT] + ("…" if len(text) > MAX_TEXT else "")}
-    path = _file(current["slug"])
+    path = _file(current["slug"], current["agent"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with _write_lock:
@@ -71,10 +74,11 @@ def model_reply(msg) -> None:
     if content:
         record("said", content)
 
-def recent(slug: str, n: int = 10) -> list[dict]:
-    """The last n steps for a mission ("" for the mission finder), oldest first."""
+def recent(slug: str, n: int = 10, agent: str = "finder") -> list[dict]:
+    """The last n steps for a mission, oldest first. slug "" is desk work: the mission finder's, or the
+    Theorist's with agent="theorist"."""
     try:
-        lines = _file(slug).read_text().splitlines()
+        lines = _file(slug, agent).read_text().splitlines()
     except OSError:
         return []
     steps = []

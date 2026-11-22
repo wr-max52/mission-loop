@@ -13,11 +13,38 @@ if (window.Flow) return;
 const EVERY = 2000;
 let root = null, timer = null, last = null, busy = false;
 
+// The strip never scrolls sideways: it shrinks (--s) to fit the panel, and when that would make its labels too
+// small to read it wraps between units instead (the .wrap class).
+const MIN_SCALE = 0.72, WRAP_SCALE = 0.9;
+function fit() {
+  const track = root && root.querySelector(".flow-track");
+  if (!track) return;
+  root.classList.remove("wrap");
+  track.style.setProperty("--s", "1");
+  let s = 1;
+  for (let i = 0; i < 4 && track.scrollWidth > track.clientWidth + 1; i++) {   // borders don't scale, so refine
+    s *= track.clientWidth / track.scrollWidth;
+    if (s < MIN_SCALE) break;
+    track.style.setProperty("--s", String(Math.floor(s * 1000) / 1000));
+  }
+  if (s < MIN_SCALE) {
+    root.classList.add("wrap");
+    track.style.setProperty("--s", String(WRAP_SCALE));
+  }
+}
+let observer = null;
+
 function attach() {
   const el = document.getElementById("flow");
   if (!el) return;
   if (el !== root) {
     root = el;
+    if ("ResizeObserver" in window) {
+      if (observer) observer.disconnect();
+      observer = new ResizeObserver(() => requestAnimationFrame(fit));
+      observer.observe(el);
+    }
+    fit();
     last = { working: byWorker(JSON.parse(el.dataset.working || "[]")), waiting: {} };
     el.querySelectorAll(".human[data-step]").forEach(h => {
       last.waiting[h.dataset.step] = Number(h.querySelector(".count").textContent) || 0;
@@ -121,6 +148,7 @@ function arrive(h) {
   setTimeout(() => h.classList.remove("arrived"), 3200);
 }
 
-window.Flow = { attach, poll };
+window.addEventListener("resize", () => requestAnimationFrame(fit));
+window.Flow = { attach, poll, fit };
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", attach); else attach();
 })();

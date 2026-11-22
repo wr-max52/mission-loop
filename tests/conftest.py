@@ -38,5 +38,5 @@ def fresh(tmp_path, monkeypatch):
 def stub_agents(monkeypatch):
     """Route every model-backed agent to stubs so loop tests never touch Ollama or the network.
     publish stays real: it only writes files into the test's own folder."""
-    for name in ("find_missions", "gather", "write_brief", "validate", "interview", "write", "check_article"):
+    for name in ("theorize", "find_missions", "gather", "write_brief", "validate", "interview", "write", "check_article"):
         monkeypatch.setattr(agents, name, getattr(stubs, name))

@@ -1,23 +1,57 @@
 import json, sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from contracts import Mission, Epic, epic_title, slugify
 
 DB = Path("data/loop.db")
-INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder
+INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder, which the Theorist evolves
+INSPIRATION_LOG = Path("data/inspiration_log.jsonl")   # every change to the line: when, who, the line, why
+THEORY = Path("data/theory.json")          # the Theorist's last turn: what it saw and what it changed
 
 def get_inspiration() -> str:
     return INSPIRATION.read_text().strip() if INSPIRATION.exists() else ""
 
-def set_inspiration(text: str) -> str:
-    """Save the line, collapsed to one line. Blank removes it, which turns the finder off."""
+def set_inspiration(text: str, by: str = "human", why: str = "") -> str:
+    """Save the line, collapsed to one line. Blank removes it, which turns the finder and the Theorist off.
+    by is "human" or "theorist"; each change is logged, so the Theorist can see how the line got here."""
     line = " ".join(text.split())
+    before = get_inspiration()
     INSPIRATION.parent.mkdir(parents=True, exist_ok=True)
     if line:
         INSPIRATION.write_text(line + "\n")
     else:
         INSPIRATION.unlink(missing_ok=True)
+    if line != before:
+        with INSPIRATION_LOG.open("a") as f:
+            f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(), "by": by, "line": line,
+                                "why": why}) + "\n")
     return line
+
+def inspiration_history(n: int = 10) -> list[dict]:
+    """The last n changes to the line, oldest first: {"at", "by", "line", "why"}."""
+    try:
+        lines = INSPIRATION_LOG.read_text().splitlines()
+    except OSError:
+        return []
+    found = []
+    for line in lines[-n:]:
+        try:
+            found.append(json.loads(line))
+        except ValueError:
+            continue
+    return found
+
+def last_theory() -> dict:
+    """The Theorist's last turn, or {} before its first."""
+    try:
+        data = json.loads(THEORY.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def save_theory(data: dict) -> None:
+    THEORY.parent.mkdir(parents=True, exist_ok=True)
+    THEORY.write_text(json.dumps(data))
 
 def conn():
     DB.parent.mkdir(parents=True, exist_ok=True)

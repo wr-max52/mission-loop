@@ -176,7 +176,7 @@ def test_cli_sets_and_clears(capsys):
     cli.inspire("Who runs the Fed?")
     assert store.get_inspiration() == "Who runs the Fed?"
     cli.inspire("")
-    assert "finder is off" in capsys.readouterr().out
+    assert "finder and the Theorist are off" in capsys.readouterr().out
 
 @pytest.fixture
 def client(monkeypatch):

@@ -17,8 +17,8 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 361 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
+- Tests: `pytest -q` (expects 385 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -34,6 +34,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 ## Pipeline (v1)
 
 ```
+(Theorist: evolves the inspiration line, may propose epics and 1 mission; then the mission finder)
 QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
           (validator,     (human:        (skipped while       (article     (human:
            3 attempts)     approve)       outreach is off)     check, 3     review)
@@ -49,10 +50,28 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
      (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
      mid-task is next in line. A failed attempt shows as before and the mission waits until the others with
      work for that worker have had a turn; then a new round starts from the farthest along.
-  When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
+  When the Theorist is due, it is the Principal Investigator's first task of the run, and the finder waits for
+  it. When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
   straight away); when no worker has anything left, the loop rests (`--every` minutes, or until the UI wakes
   it). A step that raises is logged on its mission and skipped until the loop starts again; the others go on.
   `run.py loop` sends its notifications after every model task.
+- Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. One structured call on the
+  Principal Investigator's model, no tools: it reads every epic with its latest missions, the missions in no epic,
+  the latest published articles with the possibilities they left open, and how the line got here
+  (`data/inspiration_log.jsonl`, every change with who made it and why). It looks for patterns inside an epic and
+  themes emerging across epics, and replies with those patterns, the line evolved, why, up to 2 new epics and at
+  most 1 new mission. Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
+  ending in "?", at most 500 characters) and must keep at least half of the current line's meaningful words, so
+  it evolves instead of being rewritten (one repair round, else the line stays); a new epic needs 2+ missions
+  (counting its new mission) and a name no epic has; the new mission must not repeat a topic. The orchestrator
+  applies it on the main thread between tasks (`orchestrator.apply_theory`), so no worker saves over it: a human
+  edit to the line while it was thinking wins, its epics are *proposed* like the finder's (each mission moved
+  keeps its old epic in `Mission.epic_fallback`; missions a worker is busy with stay put), and its mission is
+  queued like a found one (it still needs brief review). It runs when it has a line and missions, the desk changed
+  since its last turn (`desk_fingerprint`: missions, their epics, which are published, the epics) and 6 hours
+  have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Ask the Theorist button
+  or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
+  the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
 - Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
@@ -201,7 +220,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   conversation in that browser tab only, so the page's refreshes don't wipe it. It is not a worker: a short prompt that explains the app, at most 5 tool calls, tool results cut
   to 2,500 characters, only the last 4 messages the page sends back, no memory and nothing saved. Its tools come
   from the `loop` MCP server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`, `agent_steps`,
-  `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`), plus `search` when
+  `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`), plus `search` when
   `BRAVE_API_KEY` is set. Mission listings name each mission's epic. All but `add_mission` and `set_mission_epic`
   only read the database, `data/activity.json`, the channels' state files, the trails and
   `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the UI's Add
@@ -211,7 +230,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   the loop's options (`settings.chat_model`: `chat_model` in settings.json, then `MISSION_LOOP_CHAT_MODEL`, else
   the Research Assistant's model), so Ollama reuses the loaded copy instead of reloading it.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
-  results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder). Only the
+  results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
 
 ## Operating it
@@ -227,7 +246,7 @@ went and boxes to publish it again. Its Settings page (`/settings`) has the work
 Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always drawn,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing, Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
 unlit while the loop is off: agents on a track in runtime order (publishing is one step, whatever the channels), each code check a vertical block right after the
 agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
 check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
@@ -261,7 +280,8 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
 | Approve a proposed epic | the "New epic proposed" panel on the UI home page |
-| Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it off) |
+| Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
+| Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
 | Stop | `python run.py stop` (finishes the current task first) |

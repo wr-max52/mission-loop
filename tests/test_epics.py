@@ -182,7 +182,7 @@ def test_proposed_epic_is_not_on_the_site_until_approved():
 def test_ui_shows_pills_and_the_proposal(client):
     fed, swap = proposal()
     html = client.get("/").text
-    assert "New epic proposed" in html and "Approve epic" in html and "if rejected: Fed Capture" in html
+    assert '<div class="ask propose">' in html and "New epic" in html and "Approve epic" in html and "if rejected: Fed Capture" in html
     assert 'class="epic proposed"' in html
     r = client.post(f"/epics/{swap.slug}/approve", data={"title": "Dollar Swaps"}, follow_redirects=False)
     assert r.status_code == 303 and store.get_epic(swap.slug).title == "Dollar Swaps"
