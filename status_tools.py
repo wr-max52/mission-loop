@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 import activity, agents, orchestrator, settings, store, trail
-from agents import bluesky, f916
+from agents import bluesky, f916, github
 from contracts import Mission, State, epic_title, words
 
 LOG = Path("data/loop.log")
@@ -193,7 +193,7 @@ def search_missions(query: str) -> str:
 
 @server.tool()
 def publication_status() -> str:
-    """What has been published and where: each channel (local site, 1F916, Bluesky) with whether it is on,
+    """What has been published and where: each channel (local site, 1F916, GitHub Pages, Bluesky) with whether it is on,
     how many articles wait for it and when it may post next; articles approved to publish next pass; and the
     latest published articles with the channels each reached and any refusal."""
     missions = store.all_missions()
@@ -201,7 +201,7 @@ def publication_status() -> str:
     lines = [f"Published: {len(done)} article(s) on the local site (site/index.html, feeds site/feed.xml and site/feed.json)"]
     url = settings.site_url()
     lines.append(f"Site address: {url}" if url else "Site address: not set (Settings page), so links stay relative")
-    for c in (f916, bluesky):
+    for c in (f916, github, bluesky):
         if not c.enabled():
             lines.append(f"{c.NAME}: off (not set up on the Settings page)")
             continue

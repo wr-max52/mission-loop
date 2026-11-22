@@ -18,7 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
 from agents import llm
-from agents import bluesky, f916, publisher
+from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 
@@ -58,6 +58,11 @@ MESSAGES = {
     "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
     "worker_off": "Worker off. The other worker does its steps, one task at a time.",
     "joined": "Joined 1F916. Published articles post there from now on, one a day, newest first.",
+    "github_connected": "GitHub connected. Now pick the repo the site goes to.",
+    "github_linked": "Site linked. The site was pushed to GitHub; GitHub Pages takes a minute or two to put it online.",
+    "github_unlinked": "Site unlinked. The repo and the site stay on GitHub; nothing is pushed there any more.",
+    "github_off": "GitHub disconnected. Its token was deleted from this machine; the repo and the site stay on GitHub.",
+    "github_app_saved": "GitHub OAuth app saved. Connect GitHub to sign in with it.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -77,6 +82,7 @@ ERRORS = {
     "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
     "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
+    "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
 }
 
 # ---------- loop status ----------
@@ -234,6 +240,8 @@ label { display:block; font-size:.85rem; font-weight:600; margin:.8rem 0 .3rem; 
 .hint { color:var(--muted); font-size:.85rem; font-weight:400; }
 .flash { padding:.7rem 1rem; border-radius:8px; background:var(--quote); margin-bottom:1rem; }
 .flash.err { border-left:3px solid var(--accent); }
+.code-big code { font-size:1.6rem; letter-spacing:.15em; padding:.3rem .6rem; }
+.inline-buttons button { margin-right:.4rem; }
 .actions { border:1px solid var(--rule); border-radius:10px; padding:1rem; margin:1rem 0 1.5rem; }
 .actions .buttons { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-start; }
 .actions details { margin-top:.8rem; }
@@ -484,6 +492,7 @@ FLOW = [
     ("article_review", "human", "Review article"),
     ("publisher", "agent", "Publish"),
     ("1f916", "agent", "1F916"),
+    ("github", "agent", "GitHub Pages"),
     ("bluesky", "agent", "Bluesky"),
 ]
 HUMAN_STEPS = {"brief_review": ("Brief review: you approve the brief or send it back", "review"),
@@ -493,7 +502,8 @@ CHECK_TITLE = ("{name}: code, no model. A failure goes back for another try; "
 
 def flow_steps() -> list[tuple[str, str, str]]:
     """The strip's steps for this setup: channels and outreach that are off are left out."""
-    on = {"contacts": settings.OUTREACH, "1f916": agents.f916_enabled(), "bluesky": agents.bluesky_enabled()}
+    on = {"contacts": settings.OUTREACH, "1f916": agents.f916_enabled(), "github": agents.github_enabled(),
+          "bluesky": agents.bluesky_enabled()}
     return [s for s in FLOW if on.get(s[0], True)]
 
 def doing(e: dict) -> str:
@@ -603,6 +613,8 @@ def channel_names(m: Mission) -> str:
     if agents.f916_enabled() and "1f916" not in m.channels:
         slugs = [e["slug"] for e in orchestrator.queue(f916)]
         names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
+    if agents.github_enabled() and "github" not in m.channels:
+        names += " · GitHub Pages queued"
     if agents.bluesky_enabled() and "bluesky" not in m.channels:
         names += " · Bluesky queued"
     return names
@@ -636,6 +648,25 @@ def bluesky_status() -> str:
         line += ('<br><span class="hint">No site address, so posts link to the 1F916 copy when there '
                  "is one and otherwise carry no link.</span>")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
+def _link(url: str, text: str = "") -> str:
+    return f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener">{escape(text or url)}</a>'
+
+def github_status() -> str:
+    """One line on the GitHub Pages channel: which repo, where the site is, the last push or failure."""
+    if not agents.github_enabled():
+        return ('GitHub Pages is off. Connect GitHub on the <a href="/settings">Settings</a> page to put the site '
+                "online, so Bluesky posts link to each article.")
+    state, repo = github.load_state(), github.repo()
+    line = (f"GitHub Pages: {_link(github.site_address())} from "
+            f"{_link(settings.github_url() + '/' + repo, repo)} · {len(orchestrator.queue(github))} queued")
+    if state.get("at"):
+        line += f" · last push {escape(state['at'][:16].replace('T', ' '))}"
+    if state.get("pages_note"):
+        line += f'<br><span class="hint">To do: {escape(state["pages_note"])}</span>'
+    if state.get("note"):
+        line += f'<br><span class="hint">Last push failed: {escape(state["note"])}</span>'
+    return line
 
 
 # ---------- settings: the two workers and the LLM connection ----------
@@ -784,6 +815,81 @@ async def save_worker(request: Request) -> Response:
 # ---------- settings: the feed and channels ----------
 
 HANDLE = re.compile(r"[A-Za-z0-9_-]{2,32}")
+GITHUB_LOGIN: dict = {}                     # the GitHub sign-in in progress (start_login's answer); one at a time
+
+def github_row() -> str:
+    """The GitHub Pages channel on the Settings page: one step at a time, connect, then pick the repo."""
+    if os.environ.get("MISSION_LOOP_STUBS") == "1":
+        return "<p>GitHub Pages is off while MISSION_LOOP_STUBS=1, so a test run never publishes for real.</p>"
+    gh = escape(settings.github_url(), quote=True)
+    if github.enabled():
+        return f"""<p>{github_status()}</p>
+<p class="hint">Each time the loop publishes, whatever changed in <code>site/</code> is pushed to the repo as one commit.
+The repo holds the site and nothing else.</p>
+<form method="post" action="/settings/github" class="actions inline-buttons">
+  <button name="do" value="unlink">Use a different repo</button> <button name="do" value="forget">Disconnect GitHub</button>
+</form>"""
+    if github.connected():
+        name = escape(github.suggested_name(), quote=True)
+        return f"""<p>Connected as <strong>{escape(github.login_name())}</strong>. Last step: the repo the site goes to.
+Everything in it is replaced by the site, so use a new or empty public repo.</p>
+<form method="post" action="/settings/github" class="actions">
+  <input type="hidden" name="do" value="create">
+  <label for="gh_name" style="margin-top:0">Create my site <span class="hint">a new public repo; <code>{escape(github.suggested_name())}</code> is served at {escape(github.pages_address(github.login_name() + "/" + github.suggested_name()))}</span></label>
+  <input type="text" id="gh_name" name="name" maxlength="100" value="{name}">
+  <p><button>Create the repo and publish</button></p>
+</form>
+<form method="post" action="/settings/github" class="actions">
+  <input type="hidden" name="do" value="link">
+  <label for="gh_repo">Or use a repo you already made <span class="hint">paste its link, e.g. {gh}/{escape(github.login_name())}/my-site</span></label>
+  <input type="text" id="gh_repo" name="repo" maxlength="300" required placeholder="{gh}/{escape(github.login_name())}/my-site">
+  <p><button>Link this repo and publish</button></p>
+</form>
+<form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="forget">
+  <p><button>Disconnect GitHub</button></p></form>"""
+    if GITHUB_LOGIN:
+        code, where = escape(GITHUB_LOGIN["user_code"]), escape(GITHUB_LOGIN["verification_uri"], quote=True)
+        return f"""<div class="gh-code" data-interval="{GITHUB_LOGIN['interval']}">
+<p>Open <a href="{where}" target="_blank" rel="noopener">{where}</a>, sign in, enter this code and approve:</p>
+<p class="code-big"><code>{code}</code> <button type="button" class="copy" data-code="{code}">Copy</button></p>
+<p class="hint gh-wait">Waiting for GitHub… this page carries on by itself once you approve.</p>
+</div>
+<form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="cancel">
+  <p><button>Cancel</button></p></form>
+<script>
+(() => {{
+  const box = document.querySelector(".gh-code"), wait = box.querySelector(".gh-wait");
+  let every = +box.dataset.interval * 1000;
+  box.querySelector(".copy").onclick = e => navigator.clipboard?.writeText(e.target.dataset.code);
+  const poll = async () => {{
+    try {{
+      const r = await (await fetch("/settings/github/poll", {{method: "POST"}})).json();
+      if (r.state === "done") return location.assign("/settings?done=github_connected");
+      if (r.state === "error") {{ wait.textContent = r.message + " Cancel and connect again."; return; }}
+      if (r.state === "slow_down") every += 5000;
+    }} catch (e) {{}}
+    setTimeout(poll, every);
+  }};
+  setTimeout(poll, every);
+}})();
+</script>"""
+    if not settings.github_client_id():
+        return f"""<p>Off. This copy of mission-loop has no GitHub OAuth app to sign in with yet. Register one once
+(on GitHub: Settings &gt; Developer settings &gt; OAuth Apps &gt; New OAuth App, or <a href="{gh}/settings/applications/new" target="_blank" rel="noopener">here</a>):
+any name, homepage and callback URL (e.g. http://127.0.0.1:8770), then tick <strong>Enable Device Flow</strong>
+and paste its client ID below. A client ID isn't a secret; there is no client secret to make.</p>
+<form method="post" action="/settings/github" class="actions">
+  <input type="hidden" name="do" value="client_id">
+  <label for="gh_client" style="margin-top:0">OAuth app client ID</label>
+  <input type="text" id="gh_client" name="client_id" maxlength="64" required placeholder="Ov23li…">
+  <p><button>Save</button></p>
+</form>"""
+    return f"""<p>Off. Puts the site online for free with GitHub Pages, so Bluesky posts link to the full article,
+and keeps it up to date each time something is published. Connecting signs you in on GitHub itself; no password or
+token is typed here. The app can then reach your public repos only, and its token is saved to
+<code>data/github.json</code> on this machine.</p>
+<form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="connect">
+  <p><button>Connect GitHub</button></p></form>"""
 
 def settings_body(request: Request, error: str = "") -> str:
     url, env = settings.site_url(), settings.SITE_URL
@@ -856,6 +962,7 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
 <h2 class="group">Channels</h2>
 <h3>Local site and feeds</h3><p>Always on.</p>
 <h3>1F916</h3>{f916_row}
+<h3>GitHub Pages</h3>{github_row()}
 <h3>Bluesky</h3>{bluesky_row}
 {sprites}"""
 
@@ -926,6 +1033,76 @@ async def save_bluesky(request: Request) -> Response:
     if loop_running():
         wake()
     return go("/settings", done="bluesky_on")
+
+
+async def github_action(request: Request) -> Response:
+    """Each step of setting up GitHub Pages; only the sign-in itself happens on GitHub."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    do = str(form.get("do") or "")
+    if do == "client_id":
+        try:
+            settings.set_github_client_id(str(form.get("client_id") or "")[:64])
+        except ValueError:
+            return go("/settings", error="github_app")
+        return go("/settings", done="github_app_saved")
+    if do == "connect":
+        try:
+            GITHUB_LOGIN.clear()
+            GITHUB_LOGIN.update(await run_in_threadpool(github.start_login))
+        except Exception as e:             # no OAuth app, device flow off, network
+            return page("Settings", settings_body(request, f"GitHub did not start the sign-in: {e}"))
+        return go("/settings")
+    if do == "cancel":
+        GITHUB_LOGIN.clear()
+        return go("/settings")
+    if do == "forget":
+        GITHUB_LOGIN.clear()
+        github.forget()
+        orchestrator.refresh_feed()        # the feeds lose the GitHub Pages address
+        return go("/settings", done="github_off")
+    if do == "unlink":
+        github.unlink_site()
+        orchestrator.refresh_feed()
+        return go("/settings", done="github_unlinked")
+    if do in ("create", "link") and github.connected():
+        try:
+            if do == "create":
+                await run_in_threadpool(github.create_site, str(form.get("name") or "")[:100])
+            else:
+                await run_in_threadpool(github.link_site, str(form.get("repo") or "")[:300])
+        except Exception as e:             # private, no access, holds other files, network
+            return page("Settings", settings_body(request, f"The site wasn't linked: {e}"))
+        orchestrator.refresh_feed()        # the feeds use the site's address from now on
+        try:
+            await run_in_threadpool(github.sync, clock.now())   # files only; the loop records each article's link
+        except Exception as e:
+            return page("Settings", settings_body(request, f"The site is linked, but the first push failed: {e}. "
+                                                            "The loop tries again each time it posts."))
+        if loop_running():
+            wake()
+        return go("/settings", done="github_linked")
+    return go("/settings", error="state")
+
+async def github_poll(request: Request) -> JSONResponse:
+    """The Settings page asks every few seconds whether the sign-in was approved on GitHub."""
+    if not same_origin(request):
+        return JSONResponse({"state": "error", "message": "Cross-site request refused."}, status_code=403)
+    if github.connected() and not GITHUB_LOGIN:
+        return JSONResponse({"state": "done"})
+    if not GITHUB_LOGIN:
+        return JSONResponse({"state": "error", "message": "No sign-in is in progress."})
+    try:
+        state = await run_in_threadpool(github.poll_login, dict(GITHUB_LOGIN))
+    except github.LoginFailed as e:
+        GITHUB_LOGIN.clear()
+        return JSONResponse({"state": "error", "message": str(e).capitalize() + "."})
+    except Exception as e:                 # network: keep polling
+        return JSONResponse({"state": "pending", "message": str(e)})
+    if state == "done":
+        GITHUB_LOGIN.clear()
+    return JSONResponse({"state": state})
 
 
 # ---------- epics ----------
@@ -1014,7 +1191,8 @@ async def home(request: Request) -> HTMLResponse:
             anchor = ' id="needs-you"' if title == "Needs you" else ""
             body.append(f'<h2 class="group"{anchor}>{title} ({len(ms)})</h2>')
             if title == "Published":
-                body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
+                body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{github_status()}</p>'
+                            f'<p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
             body.append("".join(card(m, now, epics, lab) for m in ms))
     body.append(epic_list(missions))
@@ -1095,6 +1273,8 @@ def channels_html(m: Mission) -> str:
     if m.channel_errors.get("1f916"):
         rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
                     "It stays queued behind the others.</li>")
+    if agents.github_enabled() and "github" not in m.channels:
+        rows.append("<li>GitHub Pages: waiting for the next push</li>")
     if agents.bluesky_enabled() and "bluesky" not in m.channels:
         rows.append("<li>Bluesky: waiting (at most one post every 10 minutes, newest first)</li>")
     if m.channel_errors.get("bluesky"):
@@ -1465,6 +1645,8 @@ app = Starlette(routes=[
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
+    Route("/settings/github", github_action, methods=["POST"]),
+    Route("/settings/github/poll", github_poll, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),

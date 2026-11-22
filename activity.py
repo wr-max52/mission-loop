@@ -22,6 +22,7 @@ AGENTS = {                                 # in pipeline order
     "article_check": "Article checker",
     "publisher": "Publisher",
     "1f916": "1F916 poster",               # posts published articles, one a day, newest first
+    "github": "Site pusher",               # pushes site/ to the linked GitHub Pages repo
     "bluesky": "Bluesky poster",           # announces published articles, at most one every 10 minutes, newest first
 }
 

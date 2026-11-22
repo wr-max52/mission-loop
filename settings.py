@@ -7,7 +7,7 @@ Each setting is looked up in this order:
 3. for a service address only, the service's own public default (Ollama's standard local address, 1f916.ai,
    bsky.social), so a fresh clone can connect. Models have no default: until one is chosen on the Settings page
    (or set in .env), the loop does not start and says why."""
-import json, os
+import json, os, re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,7 +39,12 @@ def save(**values) -> None:
     SETTINGS_FILE.write_text(json.dumps(data, indent=2) + "\n")
 
 def site_url() -> str:
-    return saved().get("site_url") or SITE_URL
+    """The site address typed on the Settings page, then MISSION_LOOP_SITE_URL, then the GitHub Pages address of
+    the repo linked there (agents/github.py); "" while the site is only on this machine."""
+    if saved().get("site_url") or SITE_URL:
+        return saved().get("site_url") or SITE_URL
+    from agents import github             # late: agents import settings
+    return github.site_address()
 
 def _http_address(url: str) -> str:
     """The address without a trailing slash. Raises ValueError unless it is a plain http(s) address."""
@@ -54,6 +59,10 @@ def _http_address(url: str) -> str:
 OLLAMA_DEFAULT = "http://127.0.0.1:11434"  # where the Ollama app listens unless told otherwise
 F916_DEFAULT = "https://1f916.ai"
 BLUESKY_DEFAULT = "https://bsky.social"
+GITHUB_DEFAULT = "https://github.com"
+# mission-loop's own GitHub OAuth app (device flow on, no secret needed). A client ID is public: it names the app
+# asking, it grants nothing. One app serves every copy; a fork can register its own on the Settings page.
+GITHUB_CLIENT_ID = ""
 
 def ollama_host() -> str:
     """The LLM connection: settings.json, then OLLAMA_HOST, then Ollama's standard local address."""
@@ -78,6 +87,27 @@ def set_f916_url(url: str) -> str:
 def bluesky_service() -> str:
     """The Bluesky server for a login typed into .env (a login saved on the Settings page keeps its own)."""
     return _env("BLUESKY_SERVICE").rstrip("/") or BLUESKY_DEFAULT
+
+def github_url() -> str:
+    """The GitHub to sign in to and publish on: MISSION_LOOP_GITHUB_URL (a GitHub Enterprise server), else github.com."""
+    return _env("MISSION_LOOP_GITHUB_URL").rstrip("/") or GITHUB_DEFAULT
+
+def github_api(web: str = "") -> str:
+    """The REST API of a GitHub server: api.github.com for github.com, <server>/api/v3 for an Enterprise one."""
+    web = (web or github_url()).rstrip("/")
+    return "https://api.github.com" if web == GITHUB_DEFAULT else web + "/api/v3"
+
+def github_client_id() -> str:
+    """The OAuth app that asks for the GitHub sign-in: settings.json, then MISSION_LOOP_GITHUB_CLIENT_ID, then
+    mission-loop's own."""
+    return saved().get("github_client_id") or _env("MISSION_LOOP_GITHUB_CLIENT_ID") or GITHUB_CLIENT_ID
+
+def set_github_client_id(client_id: str) -> str:
+    client_id = client_id.strip()
+    if client_id and not re.fullmatch(r"[A-Za-z0-9._-]{6,64}", client_id):
+        raise ValueError("not an OAuth app client ID")
+    save(github_client_id="" if client_id == GITHUB_CLIENT_ID else client_id)
+    return github_client_id()
 
 def set_site_url(url: str) -> str:
     """Save the site address from the UI ("" clears it). Raises ValueError unless it is an http(s) address."""

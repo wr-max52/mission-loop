@@ -8,6 +8,9 @@ A channel is a module with:
   post(entry, now) -> str           posts one feed entry (slug, title, dek, published_at, text, epic) and
                                     returns where it can be read. Raises NoAllowance or Refused below;
                                     any other exception means "try again next pass".
+  sync(now)            optional, for a channel that mirrors the whole site (GitHub Pages): called before the
+                       queue on every turn, so a page redrawn after it was posted (an epic renamed) goes out too.
+                       Its exceptions count like post's.
 
 The orchestrator does the rest for every channel the same way: the queue is feed entries the channel has not
 posted yet, newest first, refused ones last; it records where each one went. Add the module to CHANNELS in

@@ -1695,6 +1695,7 @@ Object.assign(MOODS, {
   article_check: { citation: 3, read: 2.5, search: 2, confused: 1.5, notes: 1, stamp: 2.5, duck: 1.5, chart: 1 },
   publisher: { papers: 3, stack: 2, eureka: 1.5, typing: 1, dance: 2, gradcap: 1.5, rocket: 1.5, plane: 1.5 },
   "1f916": { typing: 3, idle: 1, eureka: 1, plane: 2, rocket: 1, dance: 1 },
+  github: { typing: 3, idle: 1, eureka: 1, papers: 1.5, rocket: 1, dance: 1 },
   bluesky: { typing: 3, idle: 1, eureka: 1, plane: 2, bird: 1.5, dance: 1 },
 });
 const STEP_LINES = {                             // said on reaching a step
@@ -1707,6 +1708,7 @@ const STEP_LINES = {                             // said on reaching a step
   article_check: ["Checking the draft.", "Possibility or fact?", "Red pen out."],
   publisher: ["Stop the presses!", "Going to print!"],
   "1f916": ["Posting to 1F916.", "One post a day!"],
+  github: ["Pushing the site.", "git push, basically."],
   bluesky: ["Posting to Bluesky.", "Telling the timeline."],
 };
 // The closing line when a step's work ends: where the mission went (its state now), or why nobody is
@@ -1729,7 +1731,7 @@ const CLOSERS = {
 function closer(c) {
   const key = !c.running ? "off" : c.handoff ? (c.worker === "assistant" ? "gathered" : "handoff")
     : c.from.step === "finder" ? "finder"
-    : (c.from.step === "1f916" || c.from.step === "bluesky") && c.outcome === "DONE" ? "posted"
+    : ["1f916", "github", "bluesky"].includes(c.from.step) && c.outcome === "DONE" ? "posted"
     : CLOSERS[c.outcome] ? c.outcome : "other";
   return pick(Math.random, CLOSERS[key]);
 }
