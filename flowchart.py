@@ -21,11 +21,12 @@ FLOW = [
     ("finder_check", "check", "check"),    # finder._keep and the 2+ missions rule for a new epic
     ("epic_review", "human", "Review epics"),   # the epics both the Theorist and the finder propose, and its combines
     ("sources", "agent", "Sources"),
-    ("contacts", "agent", "Contacts"),
-    ("contact_check", "check", "check"),   # researcher.find_contacts' check, before the main model
     ("brief", "agent", "Brief"),
     ("source_check", "check", "check"),
     ("brief_review", "human", "Review brief"),
+    ("outreach", "agent", "Outreach"),     # only while outreach is on (OUTREACH_STEPS)
+    ("outreach_check", "check", "check"),  # contacts.send's checks on each message
+    ("replies", "agent", "Replies"),       # the reply wait
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
     ("article_review", "human", "Review article"),
@@ -33,7 +34,8 @@ FLOW = [
 ]
 TILES = {   # key -> (icon, the line under its name on the strip)
     "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
-    "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
+    "sources": ("book", "searches and reads"), "outreach": ("send", "asks people"),
+    "replies": ("clock", "waits for answers"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
     "publisher": ("broadcast", "site and channels"),
 }
@@ -55,18 +57,24 @@ CHECKS = {   # every code check on the strip: what it holds the step before it t
     "finder_check": "Finder check: code, no model. It keeps at most 3 missions, each resting on a page the searches "
                     "found and unlike any topic the desk has, and a new epic only when 2+ of them share it. Whatever "
                     "fails is dropped; nothing is parked.",
-    "contact_check": "Contact check: code, no model. Each contact's name and email must be on the pages read. " + RETRY,
+    "outreach_check": "Outreach check: code, no model. Code writes every message from the agent's fields: a channel "
+                      "that is set up, a real address (an email seen on a page it read, a Bluesky handle that "
+                      "exists, a 1F916 commenter), a first name, a short topic and one question, nobody asked twice "
+                      "or more than once a week. A message that fails is not sent and the agent is told why; "
+                      "nothing is parked.",
     "source_check": "Source check: code, no model. Every claim cited, its quotes found on the page, 3 supporting "
                     "websites, at least one fact and a counterpoint. " + RETRY,
     "article_check": "Article check: code, no model. Every paragraph cited to a checked source in the approved brief, "
                      "quotes copied from those sources, no outside links, the opposing view cited. " + RETRY,
 }
 
+OUTREACH_STEPS = ("outreach", "outreach_check", "replies")
+
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: contacts and their check only while outreach is on, and with auto (the
-    UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
+    """The strip's steps for this setup: outreach, its check and the reply wait only while outreach is on, and with
+    auto (the UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
     return [(k, "auto", AUTO_STEPS[k][0]) if auto and k in AUTO_STEPS else (k, kind, text)
-            for k, kind, text in FLOW if k not in ("contacts", "contact_check") or settings.OUTREACH]
+            for k, kind, text in FLOW if k not in OUTREACH_STEPS or settings.outreach_on()]
 
 def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
     """Cut the steps into lanes at each human review: lane 0, review 0, lane 1, review 1, ... Each review is the end

@@ -114,6 +114,7 @@ def steps(html: str) -> list[tuple[str, str]]:
 def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypatch):
     """Each agent whose output code checks has a check right after it, and each human decision sits after the
     check that leads to it: the epics from the Theorist and the finder, the brief, the article."""
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
     proposed()
     assert steps(client.get("/").text) == [
         ("theorist", "agent"), ("theorist_check", "check"), ("finder", "agent"), ("finder_check", "check"),
@@ -124,13 +125,15 @@ def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypa
     assert '<a class="human propose waiting" href="/#needs-you" data-step="epic_review"' in html
     assert "Whatever fails is dropped; nothing is parked." in html               # the desk's checks park nothing
     assert client.get("/api/flow").json()["waiting"]["epic_review"] == 1
-    monkeypatch.setattr(settings, "OUTREACH", True)                              # contacts get their own check
+    monkeypatch.setattr(settings, "outreach_on", lambda: True)    # outreach, its check and the reply wait
     keys = [k for k, _ in steps(client.get("/").text)]
-    assert keys[keys.index("sources"):keys.index("source_check")] == ["sources", "contacts", "contact_check", "brief"]
+    assert keys[keys.index("brief_review"):keys.index("article_review")] == [
+        "brief_review", "outreach", "outreach_check", "replies", "writer", "article_check"]
 
-def test_the_flow_chart_snakes_with_a_review_at_every_turn(client):
+def test_the_flow_chart_snakes_with_a_review_at_every_turn(client, monkeypatch):
     """Lane 0 runs left to right from the top left to the first review, a square end on the right that spans the
     two lanes it joins; lane 1 comes back right to left one level lower to the next review on the left; and so on."""
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
     html = track(client.get("/").text)
     lanes = re.findall(r'<span class="lane( rtl)?" style="grid-row:(\d); grid-column:([\d /]+)">'
                        r'(.*?)(?=<span class="lane|<a class="human|<span class="human|</div>)', html)

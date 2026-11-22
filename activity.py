@@ -24,9 +24,11 @@ AGENTS = {                                 # in pipeline order
     "theorist": "Theorist",                # looks across the whole desk and evolves the inspiration line; slug ""
     "finder": "Mission finder",            # works for the whole desk, so its slug is ""
     "sources": "Source finder",
-    "contacts": "Contact finder",
     "brief": "Brief writer",
     "source_check": "Source checker",
+    "outreach": "Outreach agent",          # asks people a question about an approved brief (only while outreach is on)
+    "outreach_check": "Outreach checker",  # contacts.send's checks on each message, before it goes
+    "replies": "Reply checker",            # reads contacts' answers while a mission waits for them
     "writer": "Article writer",
     "article_check": "Article checker",
     "publisher": "Publisher",

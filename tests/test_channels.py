@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import httpx, pytest
-import orchestrator, run as cli, store, ui
+import orchestrator, run as cli, settings, store, ui
 from agents import f916, publisher, stubs
 from contracts import Mission, State, Article, Section
 from starlette.testclient import TestClient
@@ -39,7 +39,7 @@ class FakeSite:
 @pytest.fixture
 def no_outreach(monkeypatch):
     import agents
-    monkeypatch.setattr(agents, "interview", stubs.no_interview)   # as in real mode: no comment wait
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)   # as with outreach off: no reply wait
 
 @pytest.fixture
 def site(monkeypatch):

@@ -4,13 +4,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 import httpx, trafilatura
 from rapidfuzz import fuzz
-import settings, wayback
+import wayback
 from contracts import Mission, ResearchBrief, POSSIBILITY
 
 MIN_SUPPORT_DOMAINS = 3
 QUOTE_MATCH = 90                           # rapidfuzz partial_ratio threshold
 MIN_QUOTE_CHARS = 20
-MIN_POCS = 3
 MAX_TEXT_CHARS = 300_000
 BLOCKED_FILE = Path("blocked_domains.txt")  # one domain per line; subdomains are blocked too
 HEADERS = {"User-Agent": "Mozilla/5.0 (MissionLoop source validator)"}
@@ -78,19 +77,6 @@ def archived_copy_hint(url: str) -> str:
         return ""
     return (f". The Wayback Machine has a copy from {wayback.day(found[0])}: cite {found[1]} instead, "
             "with a quote from that copy") if found else ""
-
-def poc_problems(pocs) -> list[str]:
-    """Each contact's email and surname must appear on their contact page."""
-    problems = []
-    for p in pocs:
-        page = fetch(p.contact_source_url)
-        html = page[0].lower() if page else ""
-        surname = (p.name.split() or [""])[-1].lower()
-        if "@" not in p.email or p.email.lower() not in html:
-            problems.append(f"POC {p.name}: {p.email} not found on {p.contact_source_url}")
-        elif not surname or surname not in html:
-            problems.append(f"POC {p.name}: name not found on {p.contact_source_url}")
-    return problems
 
 EMPTY_COUNTERPOINT = ("Counterpoint is empty; give the strongest case against the thesis, from a source if you "
                       "found one, else as the objection a skeptic would raise")
@@ -186,12 +172,6 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     #    (above), and without one the counterpoint is shown as unsourced.
     if not brief.counterpoint.strip():
         problems.append(EMPTY_COUNTERPOINT)
-
-    # 6. Outreach only: 3+ POCs, and every POC's name and email appear on their contact page
-    if settings.OUTREACH and len(brief.pocs) < MIN_POCS:
-        problems.append(f"Only {len(brief.pocs)} point(s) of contact; need {MIN_POCS}")
-    if settings.OUTREACH:
-        problems += poc_problems(brief.pocs)
 
     problems = list(dict.fromkeys(problems))   # each problem once: 100 claims citing 's9' is one fix
     return (not problems, "\n".join(problems))

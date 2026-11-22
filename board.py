@@ -26,7 +26,7 @@ TALL = 1.45                                # notes are wider than tall: vertical
 SIZE_MIN, SIZE_MAX = 0.7, 1.6              # a note's size, 1.0 = normal; also the clamp for human and Theorist sizes
 EPIC_SIZE = 1.3
 STAGE_SIZE = {                             # further along is bigger
-    State.QUEUED: 0.8, State.RESEARCHING: 0.9, State.BRIEF_READY: 1.0, State.AWAITING_COMMENTS: 1.05,
+    State.QUEUED: 0.8, State.RESEARCHING: 0.9, State.BRIEF_READY: 1.0, State.OUTREACH: 1.05, State.AWAITING_COMMENTS: 1.05,
     State.WRITING: 1.05, State.ARTICLE_READY: 1.15, State.DONE: 1.25, State.PARKED: 0.85, State.COMBINED: 0.75}
 PER_STRING, MAX_STRING_BONUS = 0.04, 0.2   # a little bigger for every string, up to this much
 UNSORTED = "_unsorted"                     # the label missions in no epic gather round

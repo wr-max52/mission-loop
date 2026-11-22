@@ -7,16 +7,12 @@ from agents import llm
 from checks import validator
 import settings
 from agents.stubs import research as stub_brief
-from contracts import ClaimSet, Claim, Mission, RejectedBrief, POC, Source, SourcePick
+from contracts import ClaimSet, Claim, Mission, RejectedBrief, Source, SourcePick
 
 M = Mission(slug="r", topic="Heat pumps", tools=["search"])
 BRIEF_JSON = stub_brief(M).model_dump_json()
 PICK_JSON = SourcePick(thesis=stub_brief(M).thesis, sources=stub_brief(M).sources).model_dump_json()
 CLAIMS_JSON = ClaimSet(counterpoint=stub_brief(M).counterpoint, claims=stub_brief(M).claims).model_dump_json()
-POCS = [POC(name=f"Person {i}", role="Analyst", email=f"poc{i}@example.com",
-            contact_source_url="https://a.example.com/team", why_them="x") for i in range(1, 4)]
-CONTACTS_JSON = research_mod.Contacts(contacts=POCS).model_dump_json()
-TEAM_PAGE = ("<p>Person poc1@example.com poc2@example.com poc3@example.com</p>", "team")
 
 def tool_call(name, **args):
     return Message(role="assistant", content="", tool_calls=[
@@ -44,8 +40,6 @@ class FakeToolbox:
 def reset(monkeypatch):
     FakeToolbox.calls = []
     M.brief_pick = M.brief_sources = None  # the brief's first step is saved on the mission; each test starts clean
-    monkeypatch.setattr(settings, "OUTREACH", False)
-    monkeypatch.setattr(validator, "fetch", lambda url: TEAM_PAGE)   # contact check never hits the web
     monkeypatch.setattr(validator, "source_problem", lambda s, blocked=None, archive=False: (None, s.url))
 
 def script(monkeypatch, replies):
@@ -78,7 +72,7 @@ async def test_tool_budget_is_enforced(monkeypatch):
 async def test_bad_json_gets_one_repair(monkeypatch):
     script(monkeypatch, [text("DONE"), text("{not json"), *BRIEF])
     brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    assert len(brief.sources) == 4 and brief.pocs == []      # contacts only ever come from the checked contacts run
+    assert len(brief.sources) == 4
 
 async def test_bad_json_twice_raises(monkeypatch):
     script(monkeypatch, [text("DONE"), text("{nope"), text("{still nope")])
@@ -157,33 +151,11 @@ async def test_prompt_is_skeptical_but_keeps_its_limits(monkeypatch):
     assert "Doubt alone proves nothing" in captured["system"]          # suspicion is not evidence
     assert "a named person committed a crime" in captured["system"]    # provocation has a limit
 
-async def test_no_contacts_run_while_outreach_is_off(monkeypatch):
+async def test_research_never_looks_for_contacts(monkeypatch):
     seen = script(monkeypatch, [text("DONE"), *BRIEF])
     await research_mod.run_research(M, toolbox_factory=FakeToolbox)
     assert len(seen) == 3                          # one sources run, the brief's two steps; nothing else
-
-async def test_outreach_runs_contacts_separately_and_checks_them(monkeypatch):
-    monkeypatch.setattr(settings, "OUTREACH", True)
-    prompts = []
-    replies = iter([tool_call("search", query="heat pumps"), text("DONE"),
-                    tool_call("search", query="experts"), text("DONE"), text(CONTACTS_JSON), *BRIEF])
-    async def fake_chat(messages, tools=None, format=None, model=None):
-        prompts.append((messages[0]["content"], model))
-        return next(replies)
-    monkeypatch.setattr(llm, "chat", fake_chat)
-    brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    assert "separate run finds them" in prompts[0][0]                 # sources run doesn't hunt contacts
-    assert "finding people to interview" in prompts[2][0]             # contacts run has its own prompt
-    assert [model for _, model in prompts] == [llm.model_for("assistant")] * 5 + [None, None]
-    assert brief.pocs == POCS                                         # the checked contacts, set by code
-
-async def test_unverified_contacts_stop_before_the_main_model(monkeypatch):
-    monkeypatch.setattr(settings, "OUTREACH", True)
-    monkeypatch.setattr(validator, "fetch", lambda url: ("<p>Person poc1@example.com</p>", "team"))
-    seen = script(monkeypatch, [text("DONE"), text("DONE"), text(CONTACTS_JSON), *BRIEF])
-    with pytest.raises(research_mod.ResearchFailed, match="only 1 verified contact"):
-        await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    assert all(c["model"] == llm.model_for("assistant") for c in seen)          # the main model was never called
+    assert "Outreach agent does that" in research_mod.SYSTEM   # people to ask are found after the brief is approved
 
 def test_source_finder_limit_is_15_minutes():
     assert research_mod.SOURCE_TIME_LIMIT == 15 * 60

@@ -42,7 +42,7 @@ KINDS = {"mission": "topic and objective", "thesis": "brief thesis", "claim": "b
          "counterpoint": "brief counterpoint", "source": "brief source", "article": "article title and dek",
          "section": "article section"}
 STAGES = {State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_READY: "brief in review",
-          State.AWAITING_COMMENTS: "writing next", State.WRITING: "writing", State.ARTICLE_READY: "article in review",
+          State.OUTREACH: "outreach", State.AWAITING_COMMENTS: "waiting for replies", State.WRITING: "writing", State.ARTICLE_READY: "article in review",
           State.DONE: "published", State.PARKED: "parked", State.COMBINED: "combined"}
 STOP = set("""a an and are as at be been but by can could did do does for from had has have he her his how i if in
 into is it its may might more most no not of on or our she should so such than that the their them then there these

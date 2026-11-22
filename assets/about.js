@@ -6,11 +6,11 @@
 "use strict";
 const EVERY = 3500;                                      // ms per frame
 const WORKERS = { assistant: "Research Assistant", pi: "Principal Investigator", desk: "Code" };
-const AGENTS = { theorist: "Theorist", finder: "Mission finder", sources: "Source finder", contacts: "Contact finder",
+const AGENTS = { theorist: "Theorist", finder: "Mission finder", sources: "Source finder", outreach: "Outreach agent",
                  brief: "Brief writer", source_check: "Source checker", writer: "Article writer",
                  article_check: "Article checker", publisher: "Publisher" };
 const DOING = { theorist: "is looking across every mission for patterns", finder: "is searching for new missions",
-                sources: "is searching and reading sources for", contacts: "is looking for people to ask about",
+                sources: "is searching and reading sources for", outreach: "is asking people about",
                 brief: "is writing the brief for", source_check: "is checking every quote in the brief for",
                 writer: "is writing the article for", article_check: "is checking the article's citations for",
                 publisher: "is publishing" };

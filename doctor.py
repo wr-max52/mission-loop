@@ -21,7 +21,7 @@ BRAVE_KEYS = "https://brave.com/search/api/"
 
 @dataclass
 class Check:
-    key: str            # models, connection, search, npx, uvx, work
+    key: str            # models, connection, search, npx, uvx, work, outreach
     title: str          # what is being checked, in a few words
     ok: bool
     detail: str         # what was found
@@ -96,6 +96,18 @@ def _work() -> list[Check]:
     return [Check("work", "Something to work on", ok, detail,
                   "" if ok else "Add a mission, or give the mission finder a line of inspiration.")]
 
+def _outreach() -> list[Check]:
+    """Only while outreach is switched on: a channel it can use. Without one, missions just skip outreach."""
+    if not settings.outreach_on():
+        return []
+    import contacts                        # late: contacts reads the channels' key files
+    ready = contacts.ready_channels()
+    names = ", ".join(settings.OUTREACH_CHANNELS[c] for c in ready)
+    return [Check("outreach", "A channel for outreach", bool(ready),
+                  f"Outreach asks people on {names}." if ready else "Outreach is on, but no ticked channel is set up.",
+                  "" if ready else "Set up email under Settings → Outreach, or add Bluesky or 1F916 under Publishing.",
+                  "" if ready else "/settings#outreach")]
+
 def stubs() -> bool:
     return os.environ.get("MISSION_LOOP_STUBS") == "1"
 
@@ -105,7 +117,7 @@ def checks(deep: bool = False, conn: dict | None = None) -> list[Check]:
         return [Check("models", "A model for each worker", True, "Running on stubs (MISSION_LOOP_STUBS=1), no model needed")] \
             + _tools() + _work()
     conn = conn or llm.connection()
-    return _models(conn) + _connection(conn, deep) + _tools() + _work()
+    return _models(conn) + _connection(conn, deep) + _tools() + _work() + _outreach()
 
 def problems(found: list[Check] | None = None) -> list[Check]:
     return [c for c in (found if found is not None else checks()) if not c.ok]

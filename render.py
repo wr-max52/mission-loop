@@ -41,11 +41,6 @@ def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
         lines += ["", f"## {POSSIBILITIES_HEADING}"] + claim_lines("possibility")
     lines += ["", f"## Counterpoint", b.counterpoint + _unsourced(b), "", "## Sources"]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
-    if b.pocs:
-        lines += ["", "## Points of contact"]
-        lines += [f"- {p.name}, {p.role}: {p.email} ([where found]({p.contact_source_url})). {p.why_them}"
-                  for p in b.pocs]
-        lines += ["", f"## Question for POCs", b.question_for_pocs]
     lines += [""]
     return "\n".join(lines)
 
@@ -190,10 +185,6 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
             f'<a href="{escape(s.url)}" target="_blank" rel="noopener">{escape(s.title)}</a>{_archived(s.url)}'
             f'<blockquote>{escape(s.quote)}</blockquote></li>' for s in b.sources]
     out.append("</ol>")
-    if b.pocs:
-        out.append(f"<h2>{icon('person')}Points of contact</h2><ul>")
-        out += [f"<li>{escape(p.name)}, {escape(p.role)}: {escape(p.email)}</li>" for p in b.pocs]
-        out.append("</ul>")
     return "\n".join(out)
 
 def _page(title: str, body: str, home: str, head: str = "", nav: str | None = None) -> str:

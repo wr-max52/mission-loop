@@ -44,7 +44,7 @@ class FakeBluesky:
 
 @pytest.fixture
 def no_outreach(monkeypatch):
-    monkeypatch.setattr(agents, "interview", stubs.no_interview)
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
 
 @pytest.fixture
 def sky(monkeypatch):

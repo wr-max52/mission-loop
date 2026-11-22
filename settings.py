@@ -11,10 +11,6 @@ import json, os, re
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Outreach (milestone 4) emails points of contact and waits for their comments. Until it is built
-# this stays off: research doesn't look for contacts and the validator doesn't check their emails.
-OUTREACH = os.environ.get("MISSION_LOOP_OUTREACH") == "1"
-
 SETTINGS_FILE = Path("data/settings.json")
 
 # Where the published site lives on the web, e.g. https://example.com/news/. Optional: without it the feeds in
@@ -59,6 +55,7 @@ def _http_address(url: str) -> str:
 OLLAMA_DEFAULT = "http://127.0.0.1:11434"  # where the Ollama app listens unless told otherwise
 F916_DEFAULT = "https://1f916.ai"
 BLUESKY_DEFAULT = "https://bsky.social"
+BLUESKY_APPVIEW = "https://public.api.bsky.app"   # Bluesky's public read API: people search and reply threads, no login
 GITHUB_DEFAULT = "https://github.com"
 # mission-loop's own GitHub OAuth app (device flow on, no secret needed). A client ID is public: it names the app
 # asking, it grants nothing. One app serves every copy; a fork can register its own on the Settings page.
@@ -609,3 +606,99 @@ def set_publication(name: str, tagline_text: str, about: str) -> None:
         if len(value) > limit:
             raise ValueError(f"the {what} can be at most {limit} characters")
     save(publication_name="" if name == PUBLICATION_DEFAULT else name, tagline=tagline_text, about_statement=about)
+
+# ---------- outreach: asking real people a question about a mission ----------
+# Off until switched on (Settings → Outreach, or MISSION_LOOP_OUTREACH=1 in .env). While on, every approved brief
+# goes to the Outreach agent, which asks up to outreach_contacts() people on the channels ticked here that are set
+# up, then the mission waits outreach_wait_hours() for their replies (less if everyone answers) before writing.
+
+OUTREACH_CHANNELS = {"email": "Email", "bluesky": "Bluesky", "1f916": "1F916"}
+OUTREACH_WAIT = 48                         # hours a mission waits for replies after outreach
+OUTREACH_WAIT_MAX = 24 * 14
+OUTREACH_CONTACTS = 3                      # people one mission may ask
+OUTREACH_CONTACTS_MAX = 6
+
+def outreach_on() -> bool:
+    flag = saved().get("outreach")
+    return flag == "on" if flag else _env("MISSION_LOOP_OUTREACH") == "1"
+
+def outreach_wait_hours() -> float:
+    try:
+        hours = float(saved().get("outreach_wait_hours") or OUTREACH_WAIT)
+    except (TypeError, ValueError):
+        return OUTREACH_WAIT
+    return min(max(hours, 0), OUTREACH_WAIT_MAX)
+
+def outreach_contacts() -> int:
+    try:
+        n = int(saved().get("outreach_contacts") or OUTREACH_CONTACTS)
+    except (TypeError, ValueError):
+        return OUTREACH_CONTACTS
+    return min(max(n, 1), OUTREACH_CONTACTS_MAX)
+
+def outreach_channels() -> list[str]:
+    """The channels ticked for outreach (all of them until a human unticks one). contacts.ready_channels() says
+    which of these are also set up."""
+    found = saved().get("outreach_channels")
+    if not isinstance(found, list):
+        return list(OUTREACH_CHANNELS)
+    return [c for c in OUTREACH_CHANNELS if c in found]
+
+def set_outreach(on: bool, wait_hours: float, contacts: int, channels: list[str]) -> None:
+    """Raises ValueError for a wait or a count out of range. Nothing is stored at the defaults."""
+    if not 0 <= wait_hours <= OUTREACH_WAIT_MAX:
+        raise ValueError(f"the wait is 0 to {OUTREACH_WAIT_MAX} hours")
+    if not 1 <= contacts <= OUTREACH_CONTACTS_MAX:
+        raise ValueError(f"ask 1 to {OUTREACH_CONTACTS_MAX} people a mission")
+    picked = [c for c in OUTREACH_CHANNELS if c in channels]
+    save(outreach="on" if on else ("off" if _env("MISSION_LOOP_OUTREACH") == "1" else ""),
+         outreach_wait_hours="" if wait_hours == OUTREACH_WAIT else wait_hours,
+         outreach_contacts="" if contacts == OUTREACH_CONTACTS else contacts,
+         outreach_channels="" if picked == list(OUTREACH_CHANNELS) else (picked or ["none"]))
+
+# Email for outreach: an SMTP login to send and, for reading replies, an IMAP server on the same login. Saved on the
+# Settings page to data/email.json (mode 600, never committed). Use an app password, never the account password.
+EMAIL_FILE = Path("data/email.json")
+EMAIL_FIELDS = ("smtp_host", "smtp_port", "imap_host", "username", "password", "from_name", "from_address")
+
+def email_config() -> dict:
+    """{smtp_host, smtp_port, imap_host, username, password, from_name, from_address}, or {} until saved."""
+    try:
+        data = json.loads(EMAIL_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or not (data.get("smtp_host") and data.get("username") and data.get("password")):
+        return {}
+    return {k: data.get(k) or "" for k in EMAIL_FIELDS} | {"smtp_port": int(data.get("smtp_port") or 587)}
+
+def clean_email_config(smtp_host: str, smtp_port, imap_host: str, username: str, password: str,
+                       from_name: str, from_address: str) -> dict:
+    """The fields tidied. Raises ValueError for anything missing or malformed. A blank password keeps the saved one."""
+    host = smtp_host.strip().lower()
+    if not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", host):
+        raise ValueError("the SMTP server is a host name, e.g. smtp.gmail.com")
+    imap = imap_host.strip().lower()
+    if imap and not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", imap):
+        raise ValueError("the IMAP server is a host name, e.g. imap.gmail.com")
+    try:
+        port = int(str(smtp_port).strip() or 587)
+    except ValueError:
+        raise ValueError("the SMTP port is a number, usually 587 or 465")
+    if not 1 <= port <= 65535:
+        raise ValueError("the SMTP port is a number, usually 587 or 465")
+    username, password = username.strip(), password.strip() or email_config().get("password", "")
+    sender = (from_address.strip() or username).lower()
+    if not username or not password:
+        raise ValueError("a username and an app password are both needed")
+    if not EMAIL_ADDRESS.fullmatch(sender):
+        raise ValueError("the From address isn't an email address")
+    return {"smtp_host": host, "smtp_port": port, "imap_host": imap, "username": username, "password": password,
+            "from_name": " ".join(from_name.split())[:60], "from_address": sender}
+
+EMAIL_ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+def save_email_config(config: dict) -> None:
+    _write_private(EMAIL_FILE, config)
+
+def forget_email_config() -> None:
+    EMAIL_FILE.unlink(missing_ok=True)

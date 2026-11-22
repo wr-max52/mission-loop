@@ -15,8 +15,7 @@ pytestmark = pytest.mark.usefixtures("stub_agents", "no_outreach")
 
 @pytest.fixture
 def no_outreach(monkeypatch):
-    from agents import stubs
-    monkeypatch.setattr(agents, "interview", stubs.no_interview)
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
 
 @pytest.fixture
 def client():

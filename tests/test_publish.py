@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pytest
-import agents, notify, orchestrator, store
+import agents, notify, orchestrator, settings, store
 from agents import stubs
 from contracts import Mission, State
 
@@ -47,7 +47,7 @@ def test_theme_toggle_reaches_the_published_and_preview_pages():
         assert 'class="theme-toggle"' in html and "window.toggleTheme" in html
 
 def test_no_outreach_skips_the_wait(monkeypatch):
-    monkeypatch.setattr(agents, "interview", stubs.no_interview)
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
     store.save_mission(Mission(slug="n", topic="x"))
     run_at(T0)
     flag("n", approved=True)

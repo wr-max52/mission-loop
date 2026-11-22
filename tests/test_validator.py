@@ -3,7 +3,7 @@ import pytest
 from agents.researcher import _failed_source_ids
 import wayback
 from checks import validator
-from contracts import Mission, ResearchBrief, Source, POC, Claim
+from contracts import Mission, ResearchBrief, Source, Claim
 
 REAL_FETCH = validator.fetch               # the fake_web fixture replaces validator.fetch
 M = Mission(slug="v", topic="t")
@@ -29,9 +29,6 @@ def brief(**changes) -> ResearchBrief:
             Source(id="s4", url="https://d.io/4", title="D",
                    quote="Critics say efficiency collapses below minus 20C in older homes.", stance="contradicts"),
         ],
-        pocs=[POC(name=n, role="Engineer", email=e, contact_source_url="https://a.com/team", why_them="x")
-              for n, e in [("Ana", "ana@a.com"), ("Bo", "bo@b.org"), ("Cy", "cy@c.net")]],
-        question_for_pocs="Does this match what you see?",
     )
     data.update(changes)
     return ResearchBrief(**data)
@@ -105,13 +102,6 @@ def test_brief_of_only_possibilities_fails():
     ok, notes = validator.validate(M, brief(claims=[maybe]))
     assert not ok and "No claim of kind 'fact'" in notes
 
-def test_poc_email_not_on_page_fails(monkeypatch):
-    monkeypatch.setattr(validator.settings, "OUTREACH", True)
-    b = brief()
-    b.pocs[2].email = "nobody@nowhere.com"
-    ok, notes = validator.validate(M, b)
-    assert not ok and "nobody@nowhere.com not found" in notes
-
 def test_blocked_domain_fails(monkeypatch, tmp_path):
     blocked = tmp_path / "blocked.txt"
     blocked.write_text("# comment\nwww.b.org\n")
@@ -124,18 +114,6 @@ def test_failed_quote_note_shows_the_real_sentence():
     b.sources[3].quote = "Critics say heat pump efficiency collapses below minus 30C in all homes."
     ok, notes = validator.validate(M, b)
     assert not ok and 'Closest sentence actually on the page: "Critics say efficiency collapses' in notes
-
-def test_pocs_not_checked_while_outreach_is_off(monkeypatch):
-    monkeypatch.setattr(validator.settings, "OUTREACH", False)
-    b = brief()
-    b.pocs[2].email = "nobody@nowhere.com"
-    assert validator.validate(M, b)[0]
-    assert validator.validate(M, brief(pocs=[], question_for_pocs=""))[0]
-
-def test_outreach_needs_three_pocs(monkeypatch):
-    monkeypatch.setattr(validator.settings, "OUTREACH", True)
-    ok, notes = validator.validate(M, brief(pocs=[]))
-    assert not ok and "need 3" in notes
 
 def test_researcher_can_tell_which_sources_failed():
     b = brief()
@@ -171,13 +149,6 @@ def test_successful_fetch_is_cached(monkeypatch):
     calls = scripted_get(monkeypatch, [httpx.Response(200, text="<p>once</p>")])
     assert REAL_FETCH("https://a.com/1") == REAL_FETCH("https://a.com/1")
     assert len(calls) == 1
-
-def test_poc_name_not_on_page_fails(monkeypatch):
-    monkeypatch.setattr(validator.settings, "OUTREACH", True)
-    b = brief()
-    b.pocs[0].name = "Zed Quux"
-    ok, notes = validator.validate(M, b)
-    assert not ok and "POC Zed Quux: name not found" in notes
 
 def test_validator_page_cache_stays_small(monkeypatch):
     class R:

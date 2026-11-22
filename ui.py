@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, contacts, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -31,7 +31,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
 LABELS = {
     State.QUEUED: "Queued", State.RESEARCHING: "Researching", State.BRIEF_READY: "Brief ready",
-    State.AWAITING_COMMENTS: "Waiting for comments", State.WRITING: "Writing",
+    State.OUTREACH: "Outreach", State.AWAITING_COMMENTS: "Waiting for replies", State.WRITING: "Writing",
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
     State.COMBINED: "Combined",
 }
@@ -92,6 +92,9 @@ MESSAGES = {
     "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
     "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
     "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
+    "email_saved": "Email checked and saved for outreach.",
+    "outreach_saved": "Outreach settings saved. They apply from the next approved brief.",
+    "email_off": "Email for outreach removed.",
     "search_saved": "Web search key checked and saved. Research searches the web from its next task.",
     "search_unchecked": "Web search key saved, but Brave couldn't be asked about it just now. If research can't search, check the key.",
     "search_off": "Web search key removed from this machine.",
@@ -100,6 +103,7 @@ MESSAGES = {
     "publication_saved": "Publication saved. The site's pages, About page and feeds use it now.",
 }
 ERRORS = {
+    "outreach": "Outreach wasn't saved: the wait is 0 to 336 hours and each mission asks 1 to 6 people.",
     "combine": "That combine can't go ahead now: a worker is busy with one of its missions, or they moved on.",
     "link": "Those two can't be linked: pick another mission, at least one of them not published yet.",
     "topic": "A mission needs a topic.",
@@ -226,6 +230,15 @@ def next_step(m: Mission) -> str:
         same = m.gathered or m.interrupted_brief or m.search_paused   # the attempt already counted carries on
         try_ = m.attempts if same else m.attempts + 1
         return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
+    if m.state == State.OUTREACH:
+        asked = len(contacts.records(m.slug))
+        return "Finding people to ask about the brief" + (f"; {asked} asked so far." if asked else ".")
+    if m.state == State.AWAITING_COMMENTS:
+        found = contacts.records(m.slug)
+        if found and m.wait_until:
+            answered = sum(1 for r in found if r.replies)
+            return (f"Waiting for replies until {m.wait_until:%b %d, %H:%M} UTC: {answered} of {len(found)} "
+                    f"answered. Writing starts then, or once everyone has answered.")
     if m.state == State.WRITING:
         done = (f" {len(m.article_draft.sections)} of {len(m.article_draft.plan.sections)} sections written."
                 if m.article_draft else "")
@@ -241,7 +254,7 @@ def in_progress(m: Mission) -> bool:
 
 def flow_rank(m: Mission) -> int:
     """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
-    order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3,
+    order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3, State.OUTREACH: 3,
              State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9}
     return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
@@ -590,6 +603,12 @@ a.back { font-weight:600; text-decoration:none; }
 .card.pub .topic { color:var(--fg); }
 ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
 ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
+ul.outreach { margin:.5rem 0; padding-left:1.1rem; } ul.outreach li { margin:.6rem 0; overflow-wrap:anywhere; }
+ul.outreach .sent { margin:.25rem 0; font-size:.9rem; } ul.outreach blockquote.reply { margin:.3rem 0 .3rem .4rem; }
+fieldset.channels { border:1px solid var(--rule); border-radius:8px; margin:.8rem 0; padding:.4rem .8rem .6rem; }
+fieldset.channels legend { font-size:.85rem; font-weight:600; padding:0 .3rem; }
+label.tick.out-channel { display:flex; align-items:flex-start; margin:.45rem 0; font-weight:400; }
+label.tick.out-channel input { margin-top:.2rem; }
 li.link-row form.inline { display:inline-flex; margin:0 0 0 .4rem; vertical-align:middle; }
 p.objective { white-space:pre-line; }
 form.republish { display:flex; flex-wrap:wrap; gap:.3rem 1rem; align-items:center; margin:.6rem 0 0;
@@ -1199,10 +1218,10 @@ WORKER_BLURBS = {
 }
 ROLE_STEPS = {                             # where each worker's model is used; the rest of the pipeline is code
     "assistant": ["<strong>Source finder</strong>: searches the web and reads pages for each mission (up to 15 minutes)",
-                  "<strong>Mission finder</strong>: its searches around your inspiration line",
-                  "<strong>Contact finder</strong>: looks for people to interview (only while outreach is on)"],
+                  "<strong>Mission finder</strong>: its searches around your inspiration line"],
     "pi": ["<strong>Theorist</strong>: looks across every epic, post and mission and evolves your inspiration line",
            "<strong>Brief writer</strong>: turns the gathered sources into the research brief",
+           "<strong>Outreach agent</strong>: asks people a question about the approved brief (only while outreach is on)",
            "<strong>Article writer</strong>: writes the article from the approved brief",
            "<strong>Mission finder</strong>: picks the new missions from what the searches found"],
 }
@@ -1861,6 +1880,7 @@ SETTINGS_SECTIONS = [
     ("display", "monitor", "Display"),
     ("publication", "newspaper", "Publication"),
     ("publishing", "broadcast", "Publishing"),
+    ("outreach", "send", "Outreach"),
 ]
 
 # The nav down the Settings page's left: a click glides to its section, and scrolling lights the section in view.
@@ -1942,6 +1962,7 @@ def settings_body(request: Request, error: str = "") -> str:
         settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
         settings_section("publication", publication_section()),
         settings_section("publishing", publishing_section()),
+        settings_section("outreach", outreach_settings()),
     ])
     return f"""{err}<h1>Settings</h1>
 <div class="settings">
@@ -2314,7 +2335,8 @@ def epic_list(missions: list[Mission]) -> str:
     return heading("layers", "Epics", len(active)) + f'<div class="epics">{rows}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
-STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("research", "search", "Research"),
+STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("outreach", "people", "Outreach"),
+          ("research", "search", "Research"),
           ("queued", "clock", "Queued")]
 
 def stage_of(m: Mission) -> str:
@@ -2324,7 +2346,9 @@ def stage_of(m: Mission) -> str:
         return "research"
     if m.state in (State.ARTICLE_READY, State.DONE):  # a reviewed article, or one a human asked to publish again
         return "publishing"
-    return "writing"                       # an approved brief, the comment wait, writing
+    if m.state in (State.OUTREACH, State.AWAITING_COMMENTS):
+        return "outreach"
+    return "writing"                       # an approved brief, writing
 
 def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
@@ -2542,6 +2566,113 @@ def publication_section() -> str:
             f'a blank line starts a new paragraph. Empty: the built-in description.</span></label>'
             f'<textarea id="pub-about" name="about" rows="5" maxlength="{settings.ABOUT_MAX}">{escape(about_text)}</textarea>'
             f'<p><button>Save publication</button></p></form>')
+
+def outreach_settings() -> str:
+    """Settings → Outreach: the switch, the reply wait, how many people a mission asks, which channels, and email."""
+    on = " checked" if settings.outreach_on() else ""
+    ticked = settings.outreach_channels()
+    boxes = []
+    for key, name in settings.OUTREACH_CHANNELS.items():
+        ready = contacts.set_up(key)
+        how = {"email": "set it up below", "bluesky": "add Bluesky under Publishing",
+               "1f916": "join 1F916 under Publishing"}[key]
+        note = {"email": "an email to an address printed on a page the agent read",
+                "bluesky": "a new post that mentions them, from the publishing account",
+                "1f916": "a reply under their comment on one of our posts"}[key]
+        state = "" if ready else f' <span class="hint">(not set up: {how})</span>'
+        boxes.append(f'<label class="tick out-channel"><input type="checkbox" name="channels" value="{key}"'
+                     f'{" checked" if key in ticked else ""}><span><strong>{name}</strong>: {note}{state}</span></label>')
+    ready = contacts.ready_channels()
+    warn = ""
+    if settings.outreach_on() and not ready:
+        warn = ('<p class="hint"><strong>Outreach is on, but no ticked channel is set up, so nobody is asked and '
+                'missions go straight to writing.</strong></p>')
+    elif settings.outreach_on() and not settings.site_url():
+        warn = ('<p class="hint">No site address yet, so messages leave out "You can learn about my missions here". '
+                'Set one under Publishing, or link GitHub Pages.</p>')
+    sample = escape(contacts.message("Jane", "the 2024 Texas grid outage",
+                                     "Did ERCOT order the shutdown before the freeze warning?"))
+    form = f"""<form method="post" action="/settings/outreach" class="actions">
+  <p class="hint">After a brief is approved, the Outreach agent (on the Principal Investigator's model) finds people
+  who can answer a specific question about it and asks them. It only picks the person, the channel and the
+  question; code writes every message, e.g.:</p>
+  <blockquote>{sample}</blockquote>
+  <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{on}> Outreach</label>
+  <label for="out-wait">Wait for replies <span class="hint">hours before writing starts anyway; it starts sooner once
+  everyone has answered</span></label>
+  <input type="number" id="out-wait" name="wait" min="0" max="{settings.OUTREACH_WAIT_MAX}" step="1"
+    value="{settings.outreach_wait_hours():g}" style="width:6rem">
+  <label for="out-n">People per mission</label>
+  <input type="number" id="out-n" name="contacts" min="1" max="{settings.OUTREACH_CONTACTS_MAX}" step="1"
+    value="{settings.outreach_contacts()}" style="width:5rem">
+  <fieldset class="channels"><legend>Channels</legend>{"".join(boxes)}</fieldset>
+  <p class="hint">Nobody is asked twice about one mission, or about two missions in the same week.</p>
+  <p><button>Save outreach</button></p>
+</form>"""
+    return warn + form + email_settings()
+
+def email_settings() -> str:
+    cfg = settings.email_config()
+    if cfg:
+        state = (f'<p>Sending as <strong>{escape(cfg["from_name"] or settings.publication_name())} '
+                 f'&lt;{escape(cfg["from_address"])}&gt;</strong> through {escape(cfg["smtp_host"])}:{cfg["smtp_port"]}'
+                 + (f'; replies are read from {escape(cfg["imap_host"])}.' if cfg["imap_host"] else
+                    "; replies aren't read (no IMAP server).") + '</p>'
+                 '<form method="post" action="/settings/email" class="inline"><input type="hidden" name="forget" value="1">'
+                 '<button>Remove email</button></form>')
+    else:
+        state = "<p>Not set up.</p>"
+    val = lambda k, d="": escape(str(cfg.get(k) or d), quote=True)
+    return f"""{part("message", "Email", "email")}<div class="actions">{state}
+<details{"" if cfg else " open"}><summary>{"Change" if cfg else "Set up"} email</summary>
+<p class="hint">An app password from your mail provider (for Gmail: Google Account &gt; Security &gt; App passwords),
+never your account password. It is checked by logging in, then saved to <code>data/email.json</code> on this machine
+only. For Gmail: smtp.gmail.com, port 587, imap.gmail.com.</p>
+<form method="post" action="/settings/email">
+  <label for="em-smtp">SMTP server</label><input type="text" id="em-smtp" name="smtp_host" required maxlength="253" value="{val("smtp_host")}" placeholder="smtp.gmail.com">
+  <label for="em-port">SMTP port <span class="hint">587 (STARTTLS) or 465 (SSL)</span></label>
+  <input type="number" id="em-port" name="smtp_port" min="1" max="65535" value="{val("smtp_port", 587)}" style="width:6rem">
+  <label for="em-imap">IMAP server <span class="hint">optional: for reading replies</span></label>
+  <input type="text" id="em-imap" name="imap_host" maxlength="253" value="{val("imap_host")}" placeholder="imap.gmail.com">
+  <label for="em-user">Username</label><input type="text" id="em-user" name="username" required maxlength="253" autocomplete="username" value="{val("username")}">
+  <label for="em-pass">App password <span class="hint">{"leave blank to keep the saved one" if cfg else ""}</span></label>
+  <input type="password" id="em-pass" name="password" maxlength="200" autocomplete="off"{"" if cfg else " required"}>
+  <label for="em-name">From name <span class="hint">optional: else the publication's name</span></label>
+  <input type="text" id="em-name" name="from_name" maxlength="60" value="{val("from_name")}" placeholder="{escape(settings.publication_name(), quote=True)}">
+  <label for="em-from">From address <span class="hint">optional: else the username</span></label>
+  <input type="email" id="em-from" name="from_address" maxlength="253" value="{val("from_address")}">
+  <p><button>Check and save email</button></p>
+</form></details></div>"""
+
+async def save_outreach(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        settings.set_outreach(form.get("on") == "on", float(str(form.get("wait") or settings.OUTREACH_WAIT)),
+                              int(str(form.get("contacts") or settings.OUTREACH_CONTACTS)),
+                              [str(c) for c in form.getlist("channels")])
+    except ValueError:
+        return go("/settings#outreach", error="outreach")
+    return go("/settings#outreach", done="outreach_saved")
+
+async def save_email(request: Request) -> Response:
+    """Log in first; only a login the mail server accepts is saved."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("forget"):
+        settings.forget_email_config()
+        return go("/settings#outreach", done="email_off")
+    f = lambda k, n=253: str(form.get(k) or "")[:n]
+    try:
+        cfg = settings.clean_email_config(f("smtp_host"), f("smtp_port", 6), f("imap_host"), f("username"),
+                                          f("password", 200), f("from_name", 60), f("from_address"))
+        await run_in_threadpool(contacts.check_email, cfg)
+    except ValueError as e:
+        return page("Settings", settings_body(request, f"Email wasn't saved: {e}"))
+    settings.save_email_config(cfg)
+    return go("/settings#outreach", done="email_saved")
 
 async def save_search(request: Request) -> Response:
     if not same_origin(request):
@@ -2800,6 +2931,27 @@ async def published_page(request: Request) -> HTMLResponse:
             f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
     return page("Published", "\n".join(body), poll=True)
 
+def outreach_section(m: Mission) -> str:
+    """Who the Outreach agent asked, on which channel, the exact message, and what they answered (their words are
+    shown as text, escaped)."""
+    found = contacts.records(m.slug)
+    if not found:
+        return ""
+    items = []
+    for r in found:
+        where = (f' <a href="{escape(r.where, quote=True)}" target="_blank" rel="noopener">open</a>'
+                 if r.where.startswith("https://") else "")
+        replies = "".join(f'<blockquote class="reply">{escape(x.get("text", ""))}'
+                          f'<span class="hint"> {escape(str(x.get("at", ""))[:16].replace("T", " "))}</span></blockquote>'
+                          for x in r.replies) or '<p class="hint">No reply yet.</p>'
+        items.append(f'<li><strong>{escape(r.name)}</strong> <span class="muted">{escape(r.address)} on '
+                     f'{escape(settings.OUTREACH_CHANNELS.get(r.channel, r.channel))}, '
+                     f'{r.sent_at:%Y-%m-%d %H:%M}</span>{where}'
+                     f'<p class="sent">{escape(r.message)}</p>{replies}</li>')
+    answered = sum(1 for r in found if r.replies)
+    return (heading("people", f"Outreach: {answered} of {len(found)} answered", cls="sec")
+            + f'<ul class="outreach">{"".join(items)}</ul>')
+
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]
     m = store.get_mission(slug)
@@ -2826,6 +2978,7 @@ async def mission(request: Request) -> Response:
                 f'value="{escape(current.title if current else "", quote=True)}" placeholder="none">'
                 f'<button>Save epic</button></form>')
     body.append(connections(m))
+    body.append(outreach_section(m))
 
     if m.validator_notes:
         title = "Why it was parked" if m.state == State.PARKED else \
@@ -3219,6 +3372,7 @@ def board_link(slug: str, real: bool = False) -> str:
             f'title="Show it on the board">{ICON_BOARD}On the board</span>')
 
 PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
+         State.OUTREACH: "writing",
          State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
          State.COMBINED: "queued"}
 
@@ -4187,6 +4341,8 @@ app = Starlette(routes=[
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/outreach", save_outreach, methods=["POST"]),
+    Route("/settings/email", save_email, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),

@@ -118,6 +118,7 @@ def test_channels_post_before_any_model_work(monkeypatch):
     assert calls[:2] == [("post", "old"), ("gather", "new")]
 
 def test_a_decision_made_while_a_model_works_is_acted_on_next(monkeypatch):
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)    # an approved brief goes straight to writing
     one_worker()
     store.save_mission(Mission(slug="a", topic="Anything", state=State.RESEARCHING))
     store.save_mission(Mission(slug="b", topic="Anything", state=State.RESEARCHING))

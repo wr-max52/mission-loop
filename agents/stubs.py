@@ -1,4 +1,4 @@
-from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
+from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, Claim, OutreachRecord, Article, Section
 
 def theorize(now=None):
     """Sees a pattern, changes nothing: the line stays, no epics, no mission."""
@@ -27,10 +27,6 @@ def research(m: Mission, now=None) -> ResearchBrief:
             Source(id="s3", url="https://c.example.com", title="C", quote="stub", stance="supports"),
             Source(id="s4", url="https://d.example.com", title="D", quote="stub", stance="contradicts"),
         ],
-        pocs=[POC(name=f"Person {i}", role="Analyst", email=f"poc{i}@example.com",
-                  contact_source_url="https://a.example.com/team", why_them="stub")
-              for i in range(1, 4)],
-        question_for_pocs="What is your take on this thesis?",
     )
 
 def gather(m: Mission, now=None, resume=None) -> Evidence:
@@ -44,16 +40,14 @@ def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
         return False, "stub: forced failure"
     return True, ""
 
-def interview(m: Mission, brief: ResearchBrief, now) -> list[OutreachRecord]:
-    return [OutreachRecord(poc_email=p.email, gmail_thread_id=f"stub-{m.slug}-{i}", sent_at=now)
-            for i, p in enumerate(brief.pocs)]
+def outreach(m: Mission, brief: ResearchBrief, now) -> list[OutreachRecord]:
+    """Pretends to ask three people; nobody is contacted."""
+    return [OutreachRecord(channel="email", address=f"person{i}@example.com", name=f"Person{i}", topic=m.topic,
+                           question="Did this happen?", message="stub", sent_at=now, ref=f"<stub-{m.slug}-{i}>")
+            for i in range(1, 4)]
 
-def no_interview(m: Mission, brief: ResearchBrief, now) -> list[OutreachRecord]:
-    """Outreach is off: nobody is emailed, so the orchestrator skips the comment wait."""
-    return []
-
-def check_inbox(m: Mission, records: list[OutreachRecord], now) -> list[OutreachRecord]:
-    return records                         # milestone 4: poll Gmail threads here
+def check_replies(records: list[OutreachRecord], now) -> list[OutreachRecord]:
+    return records
 
 def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Article:
     comments = [r for rec in records for r in rec.replies if r.get("is_comment")]
