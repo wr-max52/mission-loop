@@ -71,6 +71,26 @@ def test_the_studio_page(client):
     assert 'id="studio" data-next="custom-sprite-1"' in html
     assert html.index("/assets/researchers.js") < html.index("/assets/avatars.js")
     assert client.get("/assets/avatars.js").status_code == 200
+    assert "didn't load" in client.get("/assets/avatars.js").text          # it says so instead of staying blank
+
+def test_the_sprite_studio_opens_in_the_app(client):
+    """tools/sprites.html, served by the app with the drawing script at its stamped address."""
+    page = client.get("/sprites")
+    assert page.status_code == 200 and "<h1>Sprite studio</h1>" in page.text
+    assert f'<script src="{ui.asset("researchers.js")}"></script>' in page.text and "../assets" not in page.text
+    assert 'href="/settings"' in page.text and page.headers["cache-control"] == "no-cache"
+    assert client.get("/sprites/example.json").json()["base"] == "mei"
+    assert 'href="/sprites"' in client.get("/settings").text
+
+def test_a_script_address_changes_when_the_script_does(tmp_path, monkeypatch):
+    """So a browser never goes on using a copy from before an update."""
+    monkeypatch.setattr(ui, "ASSETS", tmp_path)
+    (tmp_path / "x.js").write_text("one")
+    first = ui.asset("x.js")
+    assert first.startswith("/assets/x.js?v=") and ui.asset("x.js") == first
+    (tmp_path / "x.js").write_text("three")                              # a different length, whatever the clock says
+    assert ui.asset("x.js") != first
+    assert ui.asset("gone.js") == "/assets/gone.js"
 
 def test_save_toggle_and_delete_through_the_ui(client):
     r = client.post("/avatars/save", json={"key": "nova", "spec": EXAMPLE})

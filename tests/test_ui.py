@@ -249,7 +249,7 @@ def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeyp
     """Agents on the track, code checks as blocks right after what they check, human reviews as sidesteps."""
     html = client.get("/").text
     assert 'id="flow" class="flow off"' in html and "Loop is off, so every step is idle." in html
-    assert '<script src="/assets/flow.js" defer></script>' in html
+    assert f'<script src="{ui.asset("flow.js")}" defer></script>' in html
     track = html.split('class="flow-track"')[1].split("</section>")[0]
     order = re.findall(r'data-step="([a-z0-9_]+)"', track)
     assert order == ["theorist", "theorist_check", "finder", "finder_check", "epic_review", "sources", "brief",
@@ -342,7 +342,7 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     store.save_mission(Mission(slug="q", topic="Other topic", state=State.WRITING))
     store.save_mission(Mission(slug="r", topic="Ready", state=State.BRIEF_READY))
     html = client.get("/").text
-    assert '<script src="/assets/researchers.js" defer></script>' in html
+    assert f'<script src="{ui.asset("researchers.js")}" defer></script>' in html
     assert '<a class="card" href="/m/b">' in html                         # loop off: no model running, no visitors
     assert 'href="/m/r" data-lab' not in html
     assert '<div class="flow-track" data-lab>' in html                    # the strip is a stage even when unlit
@@ -359,6 +359,9 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     assert '<a class="card active" href="/m/q" data-lab="busy" data-worker="pi">' in client.get("/").text
     js = client.get("/assets/researchers.js")
     assert js.status_code == 200 and "class FlowStage" in js.text
+    assert js.headers["cache-control"] == "no-cache"                      # checked before every use: an update shows at once
+    again = client.get("/assets/researchers.js", headers={"If-None-Match": js.headers["etag"]})
+    assert again.status_code == 304                                       # and an unchanged file isn't sent twice
     quiet = client.get("/m/b").text                                       # the mission page stays quiet:
     assert '<script src="/assets/researchers.js"' not in quiet and ' data-lab' not in quiet   # only the chat's guide, once opened
 

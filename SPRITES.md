@@ -5,8 +5,8 @@ The pixel researchers in `assets/researchers.js` are drawn by code, part by part
 The renderer does everything else, including every animation. This file is the rulebook for writing a spec, for
 people and for a model asked to draw one.
 
-Try a spec in the playground: serve the repo (`python -m http.server 8765`) and open
-`http://127.0.0.1:8765/tools/sprites.html`. `tools/example-sprite.json` is a complete example (Dr. Nova: Mei with
+Try a spec in the sprite studio: in the app it is at `/sprites` (Settings → Avatars → Open the sprite studio). Without
+the app, serve the repo (`python -m http.server 8765`) and open `http://127.0.0.1:8765/tools/sprites.html`. `tools/example-sprite.json` is a complete example (Dr. Nova: Mei with
 cat ears, a tail that wags, a flask and her own quirk).
 
 ## How animation works (why a spec never animates anything)

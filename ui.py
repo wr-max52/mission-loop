@@ -663,10 +663,34 @@ KEEP_SCROLL_JS = """<script>
 </script>"""
 
 # Little pixel researchers who wander in-progress cards and the working agent's pill (assets/researchers.js).
-RESEARCHERS_SRC = "/assets/researchers.js"
-RESEARCHERS = f'<script src="{RESEARCHERS_SRC}" defer></script>'
 ASSETS = Path(__file__).parent / "assets"
-FLOW_JS = '<script src="/assets/flow.js" defer></script>'   # keeps the pipeline strip live
+TOOLS = Path(__file__).parent / "tools"
+_stamps: dict = {}
+
+def asset(name: str) -> str:
+    """A script's address with a stamp of its contents (`/assets/researchers.js?v=1a2b3c4d`), so the address changes
+    whenever the file does and no browser can go on using a copy from before an update."""
+    path = ASSETS / name
+    try:
+        stat = path.stat()
+        seen = _stamps.get(name)
+        if not seen or seen[0] != (stat.st_mtime_ns, stat.st_size):
+            seen = _stamps[name] = ((stat.st_mtime_ns, stat.st_size), hashlib.sha1(path.read_bytes()).hexdigest()[:8])
+        return f"/assets/{name}?v={seen[1]}"
+    except OSError:
+        return f"/assets/{name}"
+
+def script(name: str) -> str:
+    return f'<script src="{asset(name)}" defer></script>'
+
+class FreshFiles(StaticFiles):
+    """Static files the browser checks before every use. Without this a browser guesses how long a script stays
+    good from its age, so after an update it can keep drawing with the old researchers for hours. With it, an
+    unchanged file costs one short "not modified" answer and a changed one is fetched at once."""
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
              '<path d="M12 3c3 3 3.6 6 3.6 9s-.6 6-3.6 9c-3-3-3.6-6-3.6-9s.6-6 3.6-9z"/></svg>')
@@ -870,7 +894,7 @@ def loop_panel(back: str) -> str:
                       "top of the page"), ""
         controls = ""
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
-            f'{flow_strip(flow_state())}</div>{FLOW_JS}')
+            f'{flow_strip(flow_state())}</div>{script("flow.js")}')   # flow.js keeps the pipeline strip live
 
 def finder_panel() -> str:
     line = store.get_inspiration()
@@ -1727,7 +1751,7 @@ def settings_body(request: Request, error: str = "") -> str:
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
     models = llm.catalog(conn)
-    sprites = RESEARCHERS if settings.animations() else ""
+    sprites = script("researchers.js") if settings.animations() else ""
     return f"""{err}<h1>Settings</h1>
 {setup_section(conn)}
 {workers_section(conn, models)}
@@ -2446,7 +2470,7 @@ async def home(request: Request) -> HTMLResponse:
                 f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
                 f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
     if lab:
-        body.append(RESEARCHERS)
+        body.append(script("researchers.js"))
     return page("Mission Loop", "\n".join(body), poll=True)
 
 def new_mission() -> str:
@@ -2856,7 +2880,8 @@ CHAT_JS = """<script>
 
 def chat_widget() -> str:
     chips = "".join(f'<button type="button">{escape(q)}</button>' for q in SUGGESTIONS)
-    guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{RESEARCHERS_SRC}"></div>'
+    sprites_src = asset("researchers.js")
+    guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{sprites_src}"></div>'
              if settings.animations() else "")
     return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Researcher Chat" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
@@ -3153,7 +3178,7 @@ async def board_page(request: Request) -> Response:
             f'<button type="button" data-tool="style" title="Board style" aria-label="Board style" '
             f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
             f'</div><script type="application/json" id="board-data">{raw}</script>'
-            f'<script src="/assets/board.js" defer></script>{RESEARCHERS if data["animations"] else ""}')
+            f'{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
     return page("Board", body)
 
 BOARD_CSS = """
@@ -3486,7 +3511,10 @@ def avatar_link() -> str:
   <h3>{icon("person")}Avatars</h3>
   <p class="hint">Dress a researcher from pieces, or ask a model to draw one. They join their crew and drop by like
   everyone else; switch anyone off to keep them home. Right now: {escape(now)}.</p>
-  <p><a class="btn" href="/avatars">Open the avatar studio</a></p>
+  <p><a class="btn" href="/avatars">Open the avatar studio</a>
+  <a class="btn" href="/sprites">Open the sprite studio</a></p>
+  <p class="hint">The sprite studio is for writing a sprite's spec by hand (<code>SPRITES.md</code>) and seeing it
+  drawn in every pose.</p>
 </div>"""
 
 async def avatars_page(request: Request) -> HTMLResponse:
@@ -3495,8 +3523,26 @@ async def avatars_page(request: Request) -> HTMLResponse:
             f'Saved avatars join their crew and visit the missions with everyone else. They stay on this machine '
             f'(<code>data/sprites.json</code>).</p>'
             f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>The studio needs JavaScript.</noscript></div>'
-            f'<script src="{RESEARCHERS_SRC}" defer></script><script src="/assets/avatars.js" defer></script>')
+            f'{script("researchers.js")}{script("avatars.js")}')
     return page("Avatar studio", body)
+
+async def sprite_studio(request: Request) -> Response:
+    """The sprite studio (tools/sprites.html): a sprite's spec on the left, the real renderer on the right. The page
+    also opens on its own from a served copy of the repo; here its script gets the stamped address."""
+    try:
+        html = (TOOLS / "sprites.html").read_text()
+    except OSError:
+        return PlainTextResponse("The sprite studio's page (tools/sprites.html) is missing from this copy.", status_code=404)
+    html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"')
+    html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")')
+    html = html.replace("<!--back-->", '<p><a href="/settings">&larr; Back to Settings</a></p>')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+async def sprite_example(request: Request) -> Response:
+    try:
+        return Response((TOOLS / "example-sprite.json").read_bytes(), media_type="application/json", headers={"Cache-Control": "no-cache"})
+    except OSError:
+        return JSONResponse({"error": "no example"}, status_code=404)
 
 async def avatar_models(request: Request) -> JSONResponse:
     try:
@@ -3890,6 +3936,8 @@ app = Starlette(routes=[
     Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/theorist", ask_theorist, methods=["POST"]),
     Route("/settings", settings_page),
+    Route("/sprites", sprite_studio),
+    Route("/sprites/example.json", sprite_example),
     Route("/avatars", avatars_page),
     Route("/avatars/models", avatar_models),
     Route("/avatars/ask", avatar_ask, methods=["POST"]),
@@ -3933,6 +3981,6 @@ app = Starlette(routes=[
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),
     Route("/api/board", api_board),
-    Mount("/assets", StaticFiles(directory=ASSETS)),
-    Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),
+    Mount("/assets", FreshFiles(directory=ASSETS)),
+    Mount("/site", FreshFiles(directory="site", html=True, check_dir=False)),
 ])
