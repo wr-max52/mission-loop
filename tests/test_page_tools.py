@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import httpx
 import pytest
-import page_tools
+import page_tools, wayback
 from agents.researcher import _tool_servers
 from agents.toolbox import Toolbox
 from checks import validator
@@ -29,6 +29,7 @@ HTML = """<html><body><nav><a href="https://menu.example.org/">Menu link</a></na
 def clean(monkeypatch):
     monkeypatch.setattr(page_tools, "_pages", {})
     monkeypatch.setattr(validator, "blocked_domains", lambda path=None: {"bad.example"})
+    monkeypatch.setattr(wayback, "snapshot", lambda page, when="": None)   # no archived copies unless a test adds one
 
 @pytest.fixture
 def web(monkeypatch):
@@ -138,6 +139,6 @@ def test_search_is_limited_to_web_and_news():
 async def test_pages_server_runs_through_the_toolbox(monkeypatch):
     monkeypatch.chdir(ROOT)                # the app runs from the project folder
     async with Toolbox(["pages"]) as tb:
-        assert sorted(t["function"]["name"] for t in tb.tools) == ["find_in_page", "page_links"]
+        assert sorted(t["function"]["name"] for t in tb.tools) == ["find_in_page", "page_links", "wayback_versions"]
         out = await tb.call("find_in_page", {"url": "http://127.0.0.1:1/", "query": "vote"})
         assert out.startswith("CANNOT CITE")

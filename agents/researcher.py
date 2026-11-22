@@ -1,7 +1,7 @@
 """Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
 import asyncio
 from pydantic import BaseModel, ValidationError
-import activity, related, settings, stopping
+import activity, related, settings, stopping, trail
 from contracts import Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
@@ -62,6 +62,11 @@ Rules:
 - fetch shows only the start of a long page. Use find_in_page to search the whole page for what you need.
 - Use page_links on useful articles to find the bill, filing, vote record, report or rebuttal they
   point to, then read that page too.
+- Use wayback_versions when a site is gone or a page no longer loads, and to check whether a page has
+  changed what it says over time: run find_in_page with the same words on an old copy and on the live
+  page, and report a change as a fact with both dates. An archived copy is cited like any page, with its
+  web.archive.org address as the url. When find_in_page says it read the Wayback Machine's copy, cite
+  the address it gives.
 - Only cite pages you read with fetch or find_in_page. If find_in_page says CANNOT CITE, do not use
   that page. Prefer HTML pages; PDFs and paywalled pages usually cannot be verified.
 - For every source, copy one exact sentence from that page as its quote, character for character. The
@@ -173,11 +178,13 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                         break
                     calls += 1
                     result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
+                    trail.record("tool_result", f"{tc.function.name}: {result}")
                     messages.append({"role": "tool", "tool_name": tc.function.name, "content": result})
     except TimeoutError:
         if not limit.expired():            # some other timeout inside the call: a real failure
             raise
         print(f"search stopped at its {time_limit / 60:g}-minute limit; continuing with what it found", flush=True)
+        trail.record("note", f"search stopped at its {time_limit / 60:g}-minute limit")
     return messages
 
 async def find_contacts(m: Mission, tb) -> list[POC]:

@@ -2,6 +2,7 @@
 
 The orchestrator calls agents.find_missions / research / validate / interview / check_inbox / write /
 check_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
+The UI and CLI call agents.chat, the human's assistant, which only reads the loop through MCP.
 Set MISSION_LOOP_STUBS=1 to run the whole loop on stubs (no Ollama, no network).
 
 Outreach is OFF for now (milestone 4): the real path uses no_interview, which emails nobody,
@@ -19,7 +20,7 @@ from agents.publisher import publish       # local files only, so stubs and real
 from agents import bluesky, f916
 
 if os.environ.get("MISSION_LOOP_STUBS") == "1":
-    from agents.stubs import find_missions, research, validate, interview, write, check_article
+    from agents.stubs import find_missions, research, validate, interview, write, check_article, chat, chat_models
 
     def ready() -> tuple[bool, str]:
         return True, "stubs"
@@ -39,9 +40,10 @@ else:
     from agents.writer import write
     from checks.article_check import check_article
     from agents.llm import ready
+    from agents.assistant import chat, models as chat_models   # the human's assistant; reads the loop through MCP, never runs it
     from agents.f916 import enabled as f916_enabled
     from agents.bluesky import enabled as bluesky_enabled
     CHANNELS = [f916, bluesky]             # in this order, so Bluesky can link to a fresh 1F916 post
 
 __all__ = ["find_missions", "research", "validate", "interview", "check_inbox", "write", "check_article",
-           "publish", "CHANNELS", "f916_enabled", "bluesky_enabled", "ready"]
+           "publish", "CHANNELS", "f916_enabled", "bluesky_enabled", "ready", "chat", "chat_models"]

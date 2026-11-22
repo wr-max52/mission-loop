@@ -1,7 +1,7 @@
 """Thin wrapper over the Ollama client so tests can replace one function."""
 import asyncio, os, time
 import ollama
-import stopping
+import stopping, trail
 
 MODEL = os.environ.get("MISSION_LOOP_MODEL", "qwen3.8:27b")
 SEARCH_MODEL = os.environ.get("MISSION_LOOP_SEARCH_MODEL", "bonsai-2:4b")   # research tool loops only
@@ -62,12 +62,17 @@ def _get(m, key):
 def _as_dict(m) -> dict:
     return m if isinstance(m, dict) else m.model_dump(exclude_none=True)
 
-async def chat(messages, tools=None, format=None, model=None) -> ollama.Message:
+async def chat(messages, tools=None, format=None, model=None, stoppable=True) -> ollama.Message:
     """One model call. Structured outputs (format set) are streamed so that, if stop is pressed, what
     was written before the grace ran out isn't lost: it comes back on Cut. A tool turn in flight when
     stop is pressed gets the shorter turn grace, so the write-out still has time. A reply that hits
-    its token cap or REPLY_TIME_LIMIT raises Overrun with what it had written."""
+    its token cap or REPLY_TIME_LIMIT raises Overrun with what it had written.
+    stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP can
+    outlive a stopped loop."""
     client = ollama.AsyncClient()          # new client per call: safe across asyncio.run() loops
+    if not stoppable:
+        return (await client.chat(model=model or MODEL, messages=messages, tools=tools, format=format,
+                                  options=OPTIONS, keep_alive="24h")).message
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 
@@ -97,6 +102,7 @@ async def chat(messages, tools=None, format=None, model=None) -> ollama.Message:
                 raise Overrun(f"reply took over {REPLY_TIME_LIMIT // 60} minutes", "".join(parts))
             await asyncio.wait({task}, timeout=1 if left is None else min(1, left))
             if task.done():
+                trail.model_reply(task.result())   # only inside the loop; the chat assistant leaves no trail
                 return task.result()
     finally:
         if not task.done():                # cut off or cancelled from outside: closing the request

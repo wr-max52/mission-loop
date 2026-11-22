@@ -243,6 +243,12 @@ def status():
         print(f"Bluesky as {bluesky.handle()}: {len(orchestrator.queue(bluesky))} queued"
               + (f" (last try failed: {note})" if note else ""))
 
+@app.command()
+def ask(question: str, model: str = typer.Option("", help="Installed Ollama model; default: the small search model")):
+    """Ask the assistant what the loop is doing. It only reads, so it is safe while the loop runs, and works without it."""
+    store.init()
+    print(agents.chat(question, model=model or None))
+
 @app.command(name="check-bluesky")
 def check_bluesky():
     """Log in to Bluesky with BLUESKY_HANDLE and BLUESKY_APP_PASSWORD from .env, without posting anything."""
