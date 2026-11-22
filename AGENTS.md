@@ -15,6 +15,21 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 `data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
 copy): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
+## How a task becomes a merged PR (coding agents, this repo only)
+
+The written issue is what Will approves; nothing after it waits on him until the merge.
+
+1. **Issue first.** Given a task, write the issue (the write-issue skill's format) and show it. Once Will okays it,
+   create it.
+2. **Then roll.** Build it on its own branch off the latest `origin/main` without stopping to ask, and open a PR that
+   closes the issue. Opening that PR is the push the approved issue asked for.
+3. **Ready to merge, not a draft.** The PR is ready for review when opened: `pytest -q` passes, AGENTS.md (and its
+   test count) says what changed, the branch merges cleanly into `main`, and the description says what was checked
+   and what wasn't. This replaces the write-issue skill's "open it as a draft" here.
+4. **Watch it until it's merged.** For a few hours after opening it, watch the PR for review comments (in the Claude
+   desktop app, turn on the PR monitor's comment handling instead of polling) and answer or fix each one on the same
+   branch, keeping it ready to merge. Will merges; don't merge it yourself unless he asks.
+
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
@@ -23,7 +38,7 @@ copy): never commit, print or move any of them. The Pages repo is the one place 
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 708 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 709 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -483,7 +498,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   each server start (`find_all_mentions`: each mission read once, pairs checked once, one transaction; an artifact
   that won't load is skipped); and `background` (research was shown a related
   published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
-  transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
+  transform for pan and zoom, strings in SVG, kept cheap so a zoomed board never shows flat patches: one shadow or
+  glow on the whole strings layer, sized to the strings, never one per string; the laser pulse fades that layer, never
+  each string; strings are kept and only moved ones rewritten; the view's `--gx/--gy/--gz` don't inherit; a look that
+  didn't change draws nothing): wheel or pinch zooms round the pointer, every fit glides, a drag moves
   a note and its corner resizes it (`POST /board/move`, saved `by="human"`; only a resize fixes the size; the Theorist's board turn may move it later), a
   mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
   the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more
