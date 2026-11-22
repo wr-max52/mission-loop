@@ -297,7 +297,7 @@ def status():
               + (f" (last try failed: {note})" if note else ""))
 
 @app.command()
-def ask(question: str, model: str = typer.Option("", help="Installed Ollama model; default: the small search model")):
+def ask(question: str, model: str = typer.Option("", help="An Ollama model, or provider/model for a connected cloud provider; default: the small search model")):
     """Ask Researcher Chat what the loop is doing, or to look something up on the web. It only reads the loop, so it
     is safe while the loop runs, and works without it."""
     store.init()

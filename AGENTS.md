@@ -10,24 +10,44 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 `site/` to a separate public GitHub Pages repo only once GitHub is connected and a repo linked (`data/github.json`,
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
-identity (no recovery), `data/github.json` holds a GitHub token and `data/bluesky.json` an app password: never
-commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
+`data/providers.json` the cloud model providers' API keys: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 421 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
-  custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
-  cleared so a real `.env` never switches a channel on)
-- Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
-  Bluesky servers, the GitHub server and OAuth app, and the site address are looked up in `data/settings.json` (the
+- Tests: `pytest -q` (expects 437 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+  custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
+  `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
+- Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
+  providers' keys, the 1F916 and Bluesky servers, the GitHub server and OAuth app, and the site address are looked
+  up in `data/settings.json` (the
   Settings page writes it), then `.env` (see `.env.example`), and only a service address falls back to that
   service's public default (Ollama's local `http://127.0.0.1:11434`, `https://1f916.ai`, `https://bsky.social`,
   `https://github.com`; the site address falls back to the linked GitHub Pages address). Models have no default: with none
   chosen the loop won't start and says so. All lookups live in `settings.py`; don't add a model name or server
-  address anywhere else. Tests set their own fake models in `tests/conftest.py`.
+  address anywhere else (`settings.PROVIDERS` holds each provider's public API address). Tests set their own fake
+  models in `tests/conftest.py`.
+- Model providers: a worker's model is a bare name for Ollama (`qwen3:30b`, as it always was) or
+  `<provider>/<model>` for a cloud provider (`anthropic/...`, `openai/...`, `xai/...`, `deepseek/...`, `gemini/...`,
+  `mistral/...`, `groq/...`, `openrouter/<lab>/<model>`, `together/...`, or `custom/...` for any OpenAI-compatible
+  server such as LM Studio or vLLM); `settings.split_model` tells them apart. A provider is on once it has a key:
+  pasted on the Settings page's Model providers section (checked by listing its models, then saved to
+  `data/providers.json`, mode 600, which wins over `.env`) or its variable in `.env` (`.env.example` lists them).
+  Each worker can use a different provider. `agents/providers.py` (only `llm.py` calls it) speaks the two wire
+  shapes that cover them all, Anthropic's Messages API and OpenAI's chat completions, over httpx (`TRANSPORT` for
+  tests), and turns the loop's Ollama-shaped messages into theirs and the reply back into an `ollama.Message`, so no
+  agent knows which provider answered: tool calls get ids, every call gets a result, thinking is never sent back,
+  structured replies use the provider's JSON schema mode (one retry in plain JSON mode with the schema in words if
+  it refuses the schema; DeepSeek always) and are streamed, so a stop keeps what was written. Cloud calls get
+  `llm.CLOUD_CONTEXT` (64k) of prompt room and `CLOUD_REPLY_TOKENS` (16k, since reasoning models think inside it)
+  instead of Ollama's 32k and 8k/2k; the time limit, Overrun and Cut work the same. `llm.ready` asks Ollama only
+  when a working model is on it, and checks a cloud provider by listing its models, so a cloud-only machine needs
+  no Ollama. "Connect Ollama" on the Settings page is the one-click start for a fresh clone: it checks Ollama
+  answers and gives each worker without a model one of the installed ones (biggest to the PI, smallest to the
+  Research Assistant; never overwrites a choice). Researcher Chat's picker lists cloud models too.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -98,8 +118,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   once, each on its own mission and all on its one model (`settings.seats()`: `assistant`, `assistant-2`, ...,
   `pi`; `seat_worker` and `seat_name` map back). The loop reads the seats every sweep, so a new count applies at its
   next look for work; every copy shares its worker's rounds in `_pick`, and the Theorist and finder still run once.
-  Ollama runs as many requests at once as its `OLLAMA_NUM_PARALLEL` allows and queues the rest. Model choices come from the LLM connection (`llm.connection`: the Ollama at
-  `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per seat; the UI
+  Ollama runs as many requests at once as its `OLLAMA_NUM_PARALLEL` allows and queues the rest. Model choices come from the model providers (`llm.catalog`: the Ollama at
+  `settings.ollama_host()`, which every Ollama call uses, set on the Settings page or with `OLLAMA_HOST`, then each
+  connected cloud provider's models). A cloud provider runs as many requests at once as your account's rate limit allows. `data/activity.json` holds one entry per seat; the UI
   names an extra seat "Research Assistant 2" and gives it its worker's crew of researchers.
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`, in two
   steps that can be done at different times. `gather` (Research Assistant) runs the search/fetch tool loop
@@ -120,7 +141,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
-- Every model call goes through `agents/llm.py`, which keeps it bounded. Before the call, tool results
+- Every model call goes through `agents/llm.py`, which keeps it bounded (cloud models go on from there to
+  `agents/providers.py`; the numbers below are Ollama's, see Model providers for theirs). Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
   request stay whole), because Ollama otherwise drops the start of the prompt or, on the MLX runner,
   lets the model run on forever. The search loop cuts deeper (`llm.compact`, to 70% of the room) and keeps
@@ -288,7 +310,7 @@ there is one card (`ui.queue_card`): how many articles are queued and for which 
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection, the loop's rest between
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the model providers, the loop's rest between
 looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
@@ -366,7 +388,9 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
 | Pick each worker's model, how many of it run at once, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
-| Point at another Ollama | the LLM connection address on the Settings page, or `OLLAMA_HOST` in `.env` |
+| Point at another Ollama | the Ollama address under Model providers on the Settings page, or `OLLAMA_HOST` in `.env` |
+| Start on a fresh clone with Ollama | Settings → Model providers → Connect Ollama (fills in each worker's model), then play |
+| Use Claude, GPT, Grok, DeepSeek, Gemini, ... | Settings → Model providers → Add a provider → paste its API key, then pick its models under Workers (or `ANTHROPIC_API_KEY` etc. in `.env` and `MISSION_LOOP_MODEL=anthropic/<model>`) |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

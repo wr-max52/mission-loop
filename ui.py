@@ -17,7 +17,7 @@ from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
-from agents import llm
+from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
@@ -62,7 +62,11 @@ MESSAGES = {
     "animations_off": "Animations off. The Missions page stays still.",
     "theme_saved": "Appearance saved.",
     "chat_color_saved": "Chat colour saved.",
-    "ollama_saved": "LLM connection saved. Workers use the Ollama at that address from their next task.",
+    "ollama_saved": "Ollama address saved. Workers use the Ollama at that address from their next task.",
+    "ollama_connected": "Ollama connected, and each worker without a model got one of its models. Change them any time under Workers.",
+    "ollama_ready": "Ollama is connected and every worker has a model. Press play to run the loop.",
+    "provider_on": "Provider connected. Its models are now in each worker's model list.",
+    "provider_off": "Provider disconnected. Its saved key was deleted from this machine.",
     "worker_saved": "Worker saved. It takes its next task with that model.",
     "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
     "worker_off": "Worker off. The other worker does its steps, one task at a time.",
@@ -93,7 +97,9 @@ ERRORS = {
     "epic_target": "Pick a different, approved epic to move them to.",
     "site_url": "The site address must be a full http:// or https:// address, or empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
-    "worker_model": "Pick a model the LLM connection has.",
+    "worker_model": "Pick a model one of the connected providers offers.",
+    "provider": "There is no such model provider.",
+    "ollama_empty": "Ollama is running but has no models yet. Pull one first, e.g. ollama pull <model>, then connect again.",
     "ollama_host": "The Ollama address must be a full http:// or https:// address, or empty for the default.",
     "server": "A server address must be a full http:// or https:// address, or empty for the default.",
     "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
@@ -906,7 +912,7 @@ def publish_form(m: Mission, rows: list[dict], back: str) -> str:
 def places_html(m: Mission, rows: list[dict]) -> str:
     return "".join(f'<li><strong>{escape(r["name"])}</strong>: {r["status"]}</li>' for r in rows)
 
-# ---------- settings: the two workers and the LLM connection ----------
+# ---------- settings: the two workers and the model providers ----------
 
 WORKER_BLURBS = {
     "assistant": "Young, quick and tireless. Does the legwork: searching and reading pages, with the small model.",
@@ -925,15 +931,30 @@ ROLE_STEPS = {                             # where each worker's model is used; 
 def gb(size: int) -> str:
     return f"{size / 1e9:.1f} GB" if size >= 1e8 else f"{size / 1e6:.0f} MB"
 
-def model_options(current: str, conn: dict) -> str:
-    names = [m["name"] for m in conn["models"]]
-    opts = [f'<option value="{escape(m["name"], quote=True)}"{" selected" if m["name"] == current else ""}>'
-            f'{escape(m["name"])} · {gb(m["size"])}{" · loaded" if m["name"] in conn["loaded"] else ""}</option>'
-            for m in conn["models"]]
+def model_options(current: str, conn: dict, models: list[dict] | None = None) -> str:
+    """The worker's model list: Ollama's installed models, then each connected cloud provider's, grouped."""
+    models = models if models is not None else llm.catalog(conn)
+    groups: dict[str, list[str]] = {}
+    for m in models:
+        bits = [escape(m["name"])]
+        if m["size"]:
+            bits.append(gb(m["size"]))
+        if m["loaded"]:
+            bits.append("loaded")
+        groups.setdefault(m["provider"], []).append(
+            f'<option value="{escape(m["ref"], quote=True)}"{" selected" if m["ref"] == current else ""}>'
+            f'{" · ".join(bits)}</option>')
+    opts = [f'<optgroup label="{escape(settings.PROVIDERS[pid]["name"], quote=True)}">{"".join(o)}</optgroup>'
+            for pid, o in groups.items()]
     if not current:                        # nothing chosen on this machine yet: the code has no default
         opts.insert(0, '<option value="" selected disabled>Choose a model</option>')
-    elif current not in names:             # saved before, or Ollama is closed: still show what it is set to
-        missing = "not pulled" if conn["ok"] else "Ollama not reachable"
+    elif current not in {m["ref"] for m in models}:   # saved before, or its provider is closed: still show it
+        pid, name = settings.split_model(current)
+        if pid == settings.LOCAL:
+            missing = "not pulled" if conn["ok"] else "Ollama not reachable"
+        else:
+            missing = (f"{settings.PROVIDERS[pid]['name']} not connected" if not settings.provider_on(pid)
+                       else f"not offered by {settings.PROVIDERS[pid]['name']}")
         opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
     return "".join(opts)
 
@@ -953,7 +974,7 @@ def count_stepper(worker: str) -> str:
     <span class="hint">{hint}</span>
   </div>"""
 
-def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
+def worker_card(worker: str, conn: dict, now: list[dict], models: list[dict] | None = None) -> str:
     on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
     name, other_name = settings.WORKERS[worker], settings.WORKERS[other]
     steps = "".join(f"<li>{s}</li>" for s in ROLE_STEPS[worker])
@@ -978,7 +999,7 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{name} on"></label></div>
   <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
   <label for="{worker}_model">Model</label>
-  <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn)}</select>
+  <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn, models)}</select>
   {count_stepper(worker)}
   <label>Uses this model for</label>
   <ul>{steps}</ul>
@@ -987,7 +1008,7 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
   {crew}
 </form>"""
 
-def workers_section(conn: dict) -> str:
+def workers_section(conn: dict, models: list[dict] | None = None) -> str:
     now = running_now()
     a, p = (f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>" for w in settings.WORKERS)
     if settings.parallel():
@@ -1006,7 +1027,8 @@ def workers_section(conn: dict) -> str:
                 "Both on: they work at the same time whenever each has a task.")
     else:
         lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
-    cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
+    models = models if models is not None else llm.catalog(conn)
+    cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
     return (f'{heading("people", "Workers")}<p>{lead} The source checker, article checker and publisher are '
             f'code and use no model.</p><div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
@@ -1039,26 +1061,103 @@ def ollama_form() -> str:
   <button>Save address</button><span class="hint">now {source}; empty goes back to .env or {settings.OLLAMA_DEFAULT}</span>
 </form>"""
 
-def connection_section(conn: dict) -> str:
-    host = escape(conn["host"])
-    if not conn["ok"]:
-        return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> is not reachable '
-                f'({escape(conn["error"])}). Start the Ollama app, or point this at the machine running it; its '
-                "models show here and in the workers' model lists once it answers.</p>" + ollama_form())
+def model_users() -> dict[str, list[str]]:
+    """Model ref -> the workers that are on and use it."""
     users: dict[str, list[str]] = {}
     for w in settings.WORKERS:
         if settings.worker_on(w):
             users.setdefault(settings.worker_model(w), []).append(settings.WORKERS[w])
+    return users
+
+def ollama_card(conn: dict) -> str:
+    host = escape(conn["host"])
+    connect = """<form method="post" action="/settings/ollama-connect" class="actions"><button class="primary">Connect Ollama</button>
+  <span class="hint">checks that Ollama answers and gives each worker without a model one of its models: the biggest to the
+  Principal Investigator, the smallest to the Research Assistant</span></form>"""
+    if not conn["ok"]:
+        return (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">On this machine</span>'
+                f'</div><p>Not reachable at <code>{host}</code> ({escape(conn["error"])}). Install it from '
+                f'<a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>, open the app and '
+                f'pull a model or two (<code>ollama pull &lt;model&gt;</code>), then connect. Running on another machine? '
+                f'Put its address below.</p>{connect}{ollama_form()}</div>')
+    users = model_users()
     rows = "".join(
         f'<tr><td><code>{escape(m["name"])}</code></td><td class="size">{gb(m["size"])}</td>'
         f'<td class="size">{"in memory, " + gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
         f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
     count = len(conn["models"])
-    return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> · connected · '
-            f'{count} model{"" if count == 1 else "s"}. The workers can use any of them; '
-            f'<code>ollama pull &lt;model&gt;</code> adds more.</p>{ollama_form()}'
-            f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
-            f'<td class="when">Loaded</td><td class="when">Used by</td></tr>{rows}</table>')
+    table = (f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
+             f'<td class="when">Loaded</td><td class="when">Used by</td></tr>{rows}</table>' if rows else "")
+    lead = (f"Connected at <code>{host}</code> · {count} model{'' if count == 1 else 's'}. "
+            "<code>ollama pull &lt;model&gt;</code> adds more.")
+    return (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">On this machine</span>'
+            f'</div><p>{lead}</p>{connect if settings.missing_models() else ""}{ollama_form()}{table}</div>')
+
+def cloud_card(pid: str) -> str:
+    spec = settings.PROVIDERS[pid]
+    names, error = providers.models(pid)
+    users = model_users()
+    used = sorted({w for ref, ws in users.items() if settings.split_model(ref)[0] == pid for w in ws})
+    if error:
+        status = f"Connected, but not answering just now: {escape(error)}"
+    else:
+        status = f"Connected · {len(names)} model{'' if len(names) == 1 else 's'}"
+    if pid == "custom":
+        status += f" at <code>{escape(settings.provider_url(pid))}</code>"
+    if used:
+        status += f" · used by the {' and the '.join(used)}"
+    if settings.provider_saved(pid):
+        remove = (f'<form method="post" action="/settings/provider"><input type="hidden" name="do" value="forget">'
+                  f'<input type="hidden" name="provider" value="{pid}"><button>Disconnect {escape(spec["name"])}</button></form>')
+    else:
+        remove = f'<p class="hint">Set in .env; remove {escape(spec["key_env"])} there to turn it off.</p>'
+    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(spec["name"])}</h3><span class="badge">Cloud</span>'
+            f'</div><p>{status}. Its models are in each worker\'s list.</p>{remove}</div>')
+
+def add_provider_forms() -> str:
+    out = []
+    for pid in settings.PROVIDERS:
+        if pid == settings.LOCAL or settings.provider_on(pid):
+            continue
+        spec = settings.PROVIDERS[pid]
+        get_key = (f' Get a key at <a href="{escape(spec["keys"], quote=True)}" target="_blank" rel="noopener">'
+                   f'{escape(spec["keys"].split("//")[-1].split("/")[0])}</a>.' if spec["keys"] else "")
+        env = f' Or put it in <code>.env</code> as <code>{escape(spec["key_env"])}</code>.' if spec["key_env"] else ""
+        url = ""
+        if pid == "custom":
+            url = f"""<label for="url_{pid}">Address <span class="hint">the API's base, ending before /chat/completions, e.g. http://127.0.0.1:1234/v1</span></label>
+  <input type="text" id="url_{pid}" name="url" required maxlength="300" placeholder="http://127.0.0.1:1234/v1">"""
+        key_label = "API key" + (' <span class="hint">optional: only if the server asks for one</span>'
+                                  if spec.get("optional_key") else "")
+        required = "" if spec.get("optional_key") else " required"
+        out.append(f"""<details class="pubbox add"><summary><strong>{escape(spec["name"])}</strong> · {escape(spec["blurb"])}</summary>
+<p>Pay as you go on your own account: each brief, article and search turn is billed by {escape(spec["name"])}.{get_key}
+The key is checked with {escape(spec["name"])}, then saved to <code>data/providers.json</code> on this machine only.{env}</p>
+<form method="post" action="/settings/provider">
+  <input type="hidden" name="do" value="connect"><input type="hidden" name="provider" value="{pid}">
+  {url}
+  <label for="key_{pid}">{key_label}</label>
+  <input type="password" id="key_{pid}" name="key"{required} maxlength="500" autocomplete="off">
+  <p><button>Check and connect</button></p>
+</form></details>""")
+    return "".join(out)
+
+def connection_section(conn: dict) -> str:
+    cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
+    return (f'{heading("plug", "Model providers", anchor="providers")}<p>The workers can use any model from the '
+            "providers connected here, and each worker can use a different one. Ollama runs free on this machine; a "
+            "cloud provider needs only its API key. Keys stay on this machine, in <code>data/providers.json</code> "
+            "or <code>.env</code>, and are never committed.</p>"
+            f'{cards}<h3 class="sub">Add a provider</h3>{add_provider_forms()}')
+
+def ollama_picks(conn: dict) -> dict[str, str]:
+    """Which installed model each worker without one gets: the biggest to the Principal Investigator (writing), the
+    smallest to the Research Assistant (legwork). Chosen from what this machine has; the code names none."""
+    by_size = sorted(conn["models"], key=lambda m: (m["size"], m["name"]))
+    if not by_size:
+        return {}
+    pick = {"pi": by_size[-1]["name"], "assistant": by_size[0]["name"]}
+    return {w: pick[w] for w in settings.WORKERS if not settings.worker_model(w)}
 
 async def save_ollama(request: Request) -> Response:
     if not same_origin(request):
@@ -1068,6 +1167,50 @@ async def save_ollama(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="ollama_host")
     return go("/settings", done="ollama_saved")
+
+async def connect_ollama(request: Request) -> Response:
+    """One click: is Ollama there, and does every worker have a model? Fills in the workers that have none."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    conn = await run_in_threadpool(llm.connection, 5)
+    if not conn["ok"]:
+        return go("/settings", error="ollama")
+    if not conn["models"]:
+        return go("/settings", error="ollama_empty")
+    picks = ollama_picks(conn)
+    for worker, model in picks.items():
+        settings.set_worker(worker, model, settings.worker_on(worker))
+    return go("/settings", done="ollama_connected" if picks else "ollama_ready")
+
+async def save_provider(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    pid, do = str(form.get("provider") or ""), str(form.get("do") or "")
+    if pid not in settings.PROVIDERS or pid == settings.LOCAL:
+        return go("/settings", error="provider")
+    name = settings.PROVIDERS[pid]["name"]
+    if do == "forget":
+        settings.forget_provider(pid)
+        providers.forget_models(pid)
+        return go("/settings", done="provider_off")
+    key, url = str(form.get("key") or "").strip()[:500], str(form.get("url") or "").strip()[:300]
+    try:
+        url = settings._http_address(url) if url else ""
+        if not key and not settings.PROVIDERS[pid].get("optional_key"):
+            raise ValueError("paste the API key")
+        if any(c.isspace() for c in key):
+            raise ValueError("that doesn't look like an API key")
+        if not url and not settings.PROVIDERS[pid]["url"]:
+            raise ValueError("say where the server is")
+        found = await run_in_threadpool(providers.list_models, pid, key, url or settings.PROVIDERS[pid]["url"])
+        settings.save_provider(pid, key, url)
+    except (ValueError, providers.ProviderError) as e:
+        return page("Settings", settings_body(request, f"{name} was not connected: {e}"))
+    providers.forget_models(pid)
+    if not found:
+        return page("Settings", settings_body(request, f"{name} is connected, but offered no chat models to this key."))
+    return go("/settings", done="provider_on")
 
 async def save_worker(request: Request) -> Response:
     if not same_origin(request):
@@ -1086,10 +1229,17 @@ async def save_worker(request: Request) -> Response:
     if model == was_model and on == was_on:  # only the count changed: no model to check yet is fine
         return go("/settings", done="worker_count" if settings.worker_count(worker) != was_count else "worker_saved")
     if model != was_model:
-        conn = await run_in_threadpool(llm.connection)
-        if not conn["ok"]:
-            return go("/settings", error="ollama")
-        if model not in {m["name"] for m in conn["models"]}:
+        pid = settings.split_model(model)[0]
+        if pid == settings.LOCAL:
+            conn = await run_in_threadpool(llm.connection)
+            if not conn["ok"]:
+                return go("/settings", error="ollama")
+            offered = {m["name"] for m in conn["models"]}
+        else:
+            if not settings.provider_on(pid):
+                return go("/settings", error="worker_model")
+            offered = {settings.model_ref(pid, n) for n in (await run_in_threadpool(providers.models, pid))[0]}
+        if model not in offered:
             return go("/settings", error="worker_model")
     try:
         settings.set_worker(worker, model, on)
@@ -1372,9 +1522,10 @@ def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
+    models = llm.catalog(conn)
     sprites = RESEARCHERS if settings.animations() else ""
     return f"""{err}<h1>Settings</h1>
-{workers_section(conn)}
+{workers_section(conn, models)}
 {connection_section(conn)}
 {heading("clock", "Loop")}
 <form method="post" action="/settings/loop-every" class="inline">
@@ -2410,6 +2561,8 @@ app = Starlette(routes=[
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
+    Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),
+    Route("/settings/provider", save_provider, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/settings/github", github_action, methods=["POST"]),

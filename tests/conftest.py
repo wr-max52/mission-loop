@@ -1,6 +1,6 @@
 import httpx, pytest
 import agents, orchestrator, settings, store, wayback
-from agents import bluesky, custom, f916, github, llm, stubs
+from agents import bluesky, custom, f916, github, llm, providers, stubs
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
                    "models": [{"name": "small-test:1b", "size": 1_600_000_000},
@@ -22,6 +22,12 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(custom, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(wayback, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(github, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(providers, "TRANSPORT", httpx.MockTransport(_no_network))
+    providers.forget_models()                                     # no model list carries over between tests
+    for spec in settings.PROVIDERS.values():                      # a real .env must never connect a cloud provider
+        for var in (spec.get("key_env"), spec.get("url_env")):
+            if var:
+                monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(settings, "SITE_URL", "")                 # read from .env when settings is imported
     monkeypatch.setattr(settings, "GITHUB_CLIENT_ID", "")         # tests sign in with their own fake app
     for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):

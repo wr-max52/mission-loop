@@ -168,7 +168,7 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
     try:
         async with asyncio.timeout(time_limit) as limit:
             while calls < budget and not stopping.requested():
-                messages = llm.compact(messages, llm.TURN_TOKENS)   # kept cut, so the next turns reuse Ollama's cache
+                messages = llm.compact(messages, llm.TURN_TOKENS, llm.model_for("assistant"))   # kept cut: the next turns reuse the prompt cache
                 try:
                     msg = await llm.chat(messages, tools=tb.tools, model=llm.model_for("assistant"))
                 except llm.Cut:
