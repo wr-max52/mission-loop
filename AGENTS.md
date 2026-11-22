@@ -133,12 +133,15 @@ lit, read from `data/activity.json` (written by `activity.py`). `assets/flow.js`
 and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
 never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on in-progress cards
 and on the strip, never more than two on the page at once. A card's visitor keeps a timer: a random first wait,
-15-30 s on stage, walks off, then 10-20 s before the next; the longest-waiting card goes next. The strip's
+15-30 s on stage, walks off, then 10-20 s before the next; the longest-waiting card goes next. Arrivals come one at
+a time, a random 4-15 s apart (the strip's newcomer never waits, but pushes the next card arrival back). The strip's
 researcher follows the work instead: it stays on the lit step doing that step's kind of work, runs after its
 mission when the mission moves on (sources, brief, check), and when the work ends or moves to another mission it
 says a closing line about where the work went (your review, parked, published, another try) and walks off, and
 a new one walks in for whatever started. Visitors come from a shuffled cast and their lines from a shuffled
-deck of ~200 academic quips, so nothing repeats soon.
+deck of 500+ academic quips and memes, so nothing repeats soon. They work through about 40 bits weighted by mood (the
+lit step on the strip): reading, digging and typing, plus lab life like a chemistry poof, a model rocket, a rubber
+duck, a reviewer's stamp, a bird landing on a head or the office cat; naps are rare and mostly while the loop is off.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |
