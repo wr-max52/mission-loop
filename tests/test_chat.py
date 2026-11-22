@@ -170,7 +170,8 @@ async def test_loop_server_runs_over_mcp_from_any_folder():
         assert {t["function"]["name"] for t in tb.tools} == {
             "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions",
             "publication_status", "add_mission", "list_epics", "set_mission_epic", "theorist_notes",
-            "desk_overview", "set_inspiration", "ask_theorist", "propose_epic", "propose_combine", "link_missions", "setup_status"}
+            "desk_overview", "set_inspiration", "ask_theorist", "propose_epic", "propose_combine", "link_missions", "setup_status",
+            "board_overview", "arrange_board"}
         assert "Why the grid failed" in await tb.call("mission_status", {"slug": "grid"})
 
 # ---------- the assistant ----------
