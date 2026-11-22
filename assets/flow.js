@@ -1,7 +1,8 @@
 /* The pipeline strip, kept live. Every two seconds it asks /api/flow what is happening and relights the
  * strip in place: the steps working right now (one per busy worker), the counts waiting at each human review
- * and parked at each check, and the lines underneath. It never reloads the page, so the pixel researchers on
- * the strip keep walking. When a worker's step changes it fires a "flowchange" event on #flow saying which
+ * and parked at each check, and the lines underneath. It relights the mission cards below the same way, one
+ * per busy worker, so they never wait on the page's own refresh (which holds off while you type or chat).
+ * It never reloads the page, so the pixel researchers on the strip keep walking. When a worker's step changes it fires a "flowchange" event on #flow saying which
  * worker and where its work went, which assets/researchers.js turns into that worker's researcher chasing
  * the work or handing it off.
  */
@@ -66,6 +67,7 @@ function apply(d) {
     const n = d.parked[c.dataset.step] || 0, b = c.querySelector(".parked-count");
     if (b) { b.textContent = n; b.hidden = !n; b.title = `${n} parked here`; }
   });
+  relightCards(d.working);
   const now = root.querySelector(".now");
   if (now && now.dataset.html !== d.now) { now.innerHTML = d.now; now.dataset.html = d.now; }
 
@@ -84,6 +86,32 @@ function apply(d) {
   }
   last.working = atWork; last.running = d.running;
   if ((moved || flipped) && window.checkPage) setTimeout(window.checkPage, 300);   // bring the rest of the page up to date too
+}
+
+// Each mission card a worker is on gets the green outline, the "working on this now" line (ui.working_on
+// writes the same words) and, in the In progress group, researcher visitors from that worker's crew. A card
+// nobody works on goes back to its idle line and its visitor walks off.
+function relightCards(working) {
+  const on = {};
+  for (const e of working) if (e.slug) on[e.slug] = e;
+  let changed = false;
+  document.querySelectorAll('a.card[href^="/m/"]').forEach(card => {
+    const e = on[decodeURIComponent(card.getAttribute("href").slice(3))];
+    card.classList.toggle("active", !!e);
+    const doing = card.querySelector(".doing");
+    if (doing) {
+      const text = e ? `${e.name} is working on this now.` : doing.dataset.idle || "";
+      const shown = text ? ` · ${text}` : "";
+      if (doing.textContent !== shown) doing.textContent = shown;
+    }
+    if (!card.closest("[data-lab-ok]")) return;
+    const lab = e ? "busy" : null, worker = e && e.worker !== "desk" ? e.worker : null;
+    if ((card.dataset.lab || null) === lab && (card.dataset.worker || null) === worker) return;
+    if (lab) card.dataset.lab = lab; else delete card.dataset.lab;
+    if (worker) card.dataset.worker = worker; else delete card.dataset.worker;
+    changed = true;
+  });
+  if (changed && window.Researchers) window.Researchers.rescan();
 }
 
 function arrive(h) {
