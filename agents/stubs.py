@@ -60,6 +60,7 @@ def write(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Ar
     return Article(
         title=brief.thesis,
         dek=f"Stub article about {m.topic}",
+        claim=f"**{brief.claims[0].text}** [s1].",
         sections=[
             Section(heading="Finding", paragraphs=[f"{brief.claims[0].text} [s1, s2]."]),
             Section(heading="The other side", paragraphs=[f"{brief.counterpoint} [s4]. "

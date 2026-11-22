@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 662 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 673 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -244,7 +244,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py`, checked by `checks/article_check.py`, in steps: a plan (`ArticlePlan`: title,
-  dek, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section on its own,
+  dek, the claim box, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section
+  on its own,
   seeing the plan and the sections before it. Code checks each piece as soon as it is written
   (`article_check.plan_problems`, `section_problems`: citations, unknown ids, links, quotes not in a source
   quote, with the closest real one shown, possibilities it must carry, the counterpoint's citation) and sends back
@@ -253,7 +254,18 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   every finished section are saved on the mission (`Mission.article_draft`): a stop or crash resumes after the
   last saved section, and after a failed article check only the sections its notes name are rewritten (all of
   them for a problem not tied to one section), each shown its last version and its problems. A passed article,
-  a human's send-back and a push-through clear the draft. Articles cite sources by short id (`[s1]`).
+  a human's send-back and a push-through clear the draft.
+  The brief stays as it is; the article is for readers, so the prompts ask for plain language (short sentences,
+  active voice, no filler, each possibility said once with "It is possible that" and no extra hedging, since the
+  page labels it) in a fixed order: the claim box (`Article.claim`, 1 or 2 cited sentences: who did what and why
+  it matters, shown above the body as "The claim"), an opening section that starts with a short scene built only
+  from cited facts and then states the claim (`writer.OPENING`), the evidence (`EVIDENCE`), the counterpoint, and
+  the fine print last (`FINE_PRINT`: what the sources don't establish). The words that carry a claim (who did what)
+  are in `**bold**` (`contracts.BOLD`; rendered `<strong>`, kept as Markdown in the plain text copy). Code drops
+  bold from the title, dek and headings and stray asterisks (`contracts.tidy_bold`), and a quotation matches its
+  source with bold ignored. The claim box is checked like a paragraph (`article_check.claim_problems`); one still
+  failing after the plan's fix round is left out (`_settle_plan`), so it never fails the article. Articles written
+  before it have `claim` empty and no box. Articles cite sources by short id (`[s1]`).
   A source whose id isn't one (a model sometimes uses the URL) gets the next free `s<n>` whenever a brief
   or source pick is read (`ResearchBrief._short_ids`, `SourcePick._short_ids`, so saved briefs are fixed
   too), and each written section has a bracketed citation of a brief source's URL turned into its id

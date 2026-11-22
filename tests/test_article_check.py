@@ -144,3 +144,25 @@ def test_article_citing_by_url_passes_once_rewritten():
         sec.paragraphs = [cite_by_id(p, BRIEF) for p in sec.paragraphs]
     ok, notes = check_article(M, BRIEF, a)
     assert ok, notes
+
+# --- the claim box and bold key words ------------------------------------------------------------------------
+
+def test_a_cited_claim_box_and_bold_words_pass():
+    a = article().model_copy(update={"claim": "**The committee advanced** the bill, **14 to 9** [gov]."})
+    a.sections[0].paragraphs[0] = f'The committee said "{Q1}" [gov]. **It voted** on March 3 [news]. {FILL} [news]'
+    assert check_article(M, BRIEF, a) == (True, "")
+
+def test_bold_inside_a_quotation_still_matches_the_source():
+    a = article()
+    a.sections[0].paragraphs[0] = 'The committee said "The committee **advanced the bill** by a vote of 14" [gov]. ' + FILL
+    assert check_article(M, BRIEF, a)[0]
+
+def test_a_claim_box_is_checked_like_a_paragraph():
+    for claim, problem in [("The committee advanced it.", "The claim at the top has no citation"),
+                           ("It advanced [nope].", "unknown source id 'nope'"),
+                           ("It is possible that it advanced [gov].", "brief has no possibilities")]:
+        ok, notes = check_article(M, BRIEF, article().model_copy(update={"claim": claim}))
+        assert not ok and problem in notes
+
+def test_an_article_from_before_the_claim_box_still_passes():
+    assert article().claim == "" and check_article(M, BRIEF, article())[0]
