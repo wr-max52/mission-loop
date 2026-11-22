@@ -3,8 +3,9 @@ import json
 from datetime import datetime
 from email.utils import format_datetime
 from html import escape
+from urllib.parse import quote
 from xml.etree import ElementTree as ET
-import wayback
+import flowchart, wayback
 from icons import icon
 from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
 
@@ -85,8 +86,27 @@ body { margin:0; background:var(--bg); color:var(--fg);
 main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
 a { color: var(--accent); }
 header.site { font: 600 0.85rem/1 -apple-system, system-ui, sans-serif; letter-spacing: .08em;
-              text-transform: uppercase; margin-bottom: 2rem; }
+              text-transform: uppercase; margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem;
+              flex-wrap: wrap; }
 header.site a { color: var(--muted); text-decoration: none; }
+header.site a:hover, header.site a[aria-current] { color: var(--fg); }
+header.site .brand { margin-right: auto; }
+.back { display: inline-block; font: 600 0.85rem/1 -apple-system, system-ui, sans-serif; color: var(--muted);
+        text-decoration: none; margin-bottom: 1.2rem; }
+.back:hover { color: var(--fg); }
+nav.pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem;
+            font: 0.9rem/1.4 -apple-system, system-ui, sans-serif; }
+nav.pager a { text-decoration: none; max-width: 48%; }
+nav.pager .older { margin-left: auto; text-align: right; }
+nav.pager small { display: block; color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
+nav.tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .5rem; }
+nav.tags a { font: 600 0.8rem/1.3 -apple-system, system-ui, sans-serif; padding: .25rem .7rem; border-radius: 999px;
+             border: 1px solid var(--rule); color: var(--muted); text-decoration: none; }
+nav.tags a:hover { border-color: var(--muted); color: var(--fg); }
+nav.tags a.on { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+nav.tags span { opacity: .65; font-weight: 400; margin-left: .2rem; }
+a.epic { text-decoration: none; }
+a.epic:hover { border-color: var(--muted); color: var(--fg); }
 h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 .5rem; }
 h2 { font-size: 1.3rem; margin: 2.2rem 0 .6rem; }
 .dek { font-size: 1.2rem; color: var(--muted); margin: 0 0 .75rem; }
@@ -166,23 +186,40 @@ def brief_html(b: ResearchBrief, checked: bool = True) -> str:
         out.append("</ul>")
     return "\n".join(out)
 
-def _page(title: str, body: str, home: str, head: str = "") -> str:
+def _page(title: str, body: str, home: str, head: str = "", nav: str | None = None) -> str:
+    """nav: which site page this is ("articles", "about", or "" for an article); None leaves the links out,
+    for an article preview that isn't on the site yet."""
+    links = ""
+    if nav is not None:
+        cur = lambda name: ' aria-current="page"' if nav == name else ""
+        links = (f'<a href="{home}"{cur("articles")}>Articles</a>'
+                 f'<a href="{home}about/"{cur("about")}>About</a>')
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>{escape(title)}</title>{head}{THEME_INIT}<style>{CSS}</style></head>\n"
-            f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a>{THEME_TOGGLE}</header>\n"
-            f"{body}\n</main></body></html>\n")
+            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">Mission Loop</a>{links}"
+            f"{THEME_TOGGLE}</header>\n{body}\n</main></body></html>\n")
 
-def epic_pill(title: str, proposed: bool = False) -> str:
+def epic_pill(title: str, proposed: bool = False, href: str = "") -> str:
+    """href makes it a link: on the site, to the article list filtered by that tag."""
     if not title:
         return ""
-    return f'<span class="epic proposed" title="Proposed epic">{escape(title)}?</span>' if proposed \
-        else f'<span class="epic">{escape(title)}</span>'
+    if proposed:
+        return f'<span class="epic proposed" title="Proposed epic">{escape(title)}?</span>'
+    if href:
+        return f'<a class="epic" href="{escape(href)}" title="Every article tagged {escape(title)}">{escape(title)}</a>'
+    return f'<span class="epic">{escape(title)}</span>'
+
+def tag_href(home: str, tag: str) -> str:
+    """The article list showing only one tag (an epic is called a tag on the site)."""
+    return f"{home}?tag={quote(tag)}"
 
 def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../",
-                 brief_checked: bool = True, article_checked: bool = True, epic: str = "") -> str:
+                 brief_checked: bool = True, article_checked: bool = True, epic: str = "", slug: str = "") -> str:
     """brief_checked / article_checked are False when a human pushed that work past a failed check;
-    the page must then not claim the check passed."""
+    the page must then not claim the check passed. With a slug the page is on the site: it gets the site's
+    links, a way back to every article and the newer and older articles (read from the feed, so they stay
+    current as more are published); without one it is a preview."""
     nums = _source_numbers(b, a)
 
     def cite(match) -> str:
@@ -197,8 +234,10 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
 
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
     failed = "" if brief_checked and article_checked else " · Failed automated checks"
-    body = [f"<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
-            f'<p class="meta">{epic_pill(epic) + " " if epic else ""}{when} · {len(b.sources)} sources{failed}</p>']
+    pill = epic_pill(epic, href=tag_href(home, epic) if slug else "")
+    back = f'<a class="back" href="{home}">&larr; All articles</a>' if slug else ""
+    body = [f"{back}<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
+            f'<p class="meta">{pill + " " if epic else ""}{when} · {len(b.sources)} sources{failed}</p>']
     for sec in a.sections:
         body.append(f"<h2>{escape(sec.heading)}</h2>")
         body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
@@ -209,7 +248,32 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
     body.append(f'<p class="note">{check_note(a, brief_checked, article_checked)}</p></article>')
-    return _page(a.title, "\n".join(body), home)
+    if slug:
+        body.append(f'<nav class="pager" data-slug="{escape(slug)}" data-feed="{home}feed.json" aria-label="More articles">'
+                    f'</nav>{PAGER_JS}')
+    return _page(a.title, "\n".join(body), home, nav="" if slug else None)
+
+# The newer and older article, from the feed (newest first), so a page written once still links to
+# whatever was published after it. Without the feed (a page opened straight from disk) it shows nothing.
+PAGER_JS = """<script>
+(function () {
+  var nav = document.querySelector("nav.pager");
+  if (!nav || !window.fetch) return;
+  fetch(nav.dataset.feed).then(function (r) { return r.json(); }).then(function (feed) {
+    var items = feed.items || [], at = items.findIndex(function (e) { return e.id === nav.dataset.slug; });
+    if (at < 0) return;
+    function link(e, cls, label) {
+      if (!e) return;
+      var a = document.createElement("a"), small = document.createElement("small");
+      a.className = cls; a.href = "../" + encodeURIComponent(e.id) + "/";
+      small.textContent = label; a.appendChild(small); a.appendChild(document.createTextNode(e.title));
+      nav.appendChild(a);
+    }
+    link(items[at - 1], "newer", "\u2190 Newer");
+    link(items[at + 1], "older", "Older \u2192");
+  }).catch(function () {});
+})();
+</script>"""
 
 def check_note(a: Article, brief_checked: bool = True, article_checked: bool = True) -> str:
     """What was and wasn't checked, for the foot of every published copy of an article."""
@@ -254,17 +318,130 @@ def article_text(b: ResearchBrief, a: Article, brief_checked: bool = True, artic
     return "\n".join(lines)
 
 def index_html(entries: list[dict]) -> str:
-    """entries: dicts with slug, title, dek, published_at (ISO string) and maybe epic, newest first."""
-    items = [f'<li><a class="title" href="{escape(e["slug"])}/">{escape(e["title"])}</a>'
+    """entries: dicts with slug, title, dek, published_at (ISO string) and maybe epic, newest first.
+    Each epic is a tag: the row of tags above the list filters it (?tag=, so an article's tag links here)."""
+    items = [f'<li data-tag="{escape(e.get("epic", ""))}"><a class="title" href="{escape(e["slug"])}/">{escape(e["title"])}</a>'
              f'<p>{escape(e["dek"])}</p><p class="meta" style="border:0;padding:0;margin:.3rem 0 0">'
-             f'{epic_pill(e.get("epic", "")) + " " if e.get("epic") else ""}'
+             f'{epic_pill(e["epic"], href=tag_href("./", e["epic"])) + " " if e.get("epic") else ""}'
              f'{datetime.fromisoformat(e["published_at"]):%B %-d, %Y}</p></li>' for e in entries]
-    body = "<h1>Published</h1>" + (f'<ul class="index">{"".join(items)}</ul>' if items
-                                   else "<p>Nothing published yet.</p>")
+    counts: dict[str, int] = {}
+    for e in entries:
+        if e.get("epic"):
+            counts[e["epic"]] = counts.get(e["epic"], 0) + 1
+    tags = ""
+    if counts:
+        chips = [f'<a href="./" data-tag="" class="on">All<span>{len(entries)}</span></a>']
+        chips += [f'<a href="{escape(tag_href("./", t))}" data-tag="{escape(t)}">{escape(t)}<span>{n}</span></a>'
+                  for t, n in sorted(counts.items(), key=lambda kv: kv[0].lower())]
+        tags = f'<nav class="tags" aria-label="Filter by tag">{"".join(chips)}</nav>{TAGS_JS}'
+    body = "<h1>Published</h1>" + tags + (f'<ul class="index">{"".join(items)}</ul>' if items
+                                          else "<p>Nothing published yet.</p>")
     body += '<p class="meta">Subscribe: <a href="feed.xml">RSS</a> · <a href="feed.json">JSON Feed</a></p>'
     head = ('<link rel="alternate" type="application/rss+xml" title="Mission Loop" href="feed.xml">'
             '<link rel="alternate" type="application/feed+json" title="Mission Loop" href="feed.json">')
-    return _page("Mission Loop", body, "./", head)
+    return _page("Mission Loop", body, "./", head, nav="articles")
+
+# Shows only the articles with the chosen tag, and keeps it in the address (?tag=) so it can be linked to.
+TAGS_JS = """<script>
+(function () {
+  var nav = document.querySelector("nav.tags");
+  function show(tag) {
+    nav.querySelectorAll("a").forEach(function (a) { a.classList.toggle("on", a.dataset.tag === tag); });
+    document.querySelectorAll("ul.index li").forEach(function (li) { li.hidden = !!tag && li.dataset.tag !== tag; });
+  }
+  function pick(tag) {
+    try { history.replaceState(null, "", tag ? "?tag=" + encodeURIComponent(tag) : location.pathname); } catch (e) {}
+    show(tag);
+  }
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest && ev.target.closest("nav.tags a, ul.index a.epic");
+    if (!a) return;
+    ev.preventDefault();
+    var tag = a.dataset.tag !== undefined ? a.dataset.tag : a.textContent;
+    pick(nav.querySelector("a.on") && nav.querySelector("a.on").dataset.tag === tag && tag ? "" : tag);
+  });
+  var tag = new URLSearchParams(location.search).get("tag") || "";
+  if (![].some.call(nav.querySelectorAll("a"), function (a) { return a.dataset.tag === tag; })) tag = "";
+  show(tag);
+})();
+</script>"""
+
+# ---------- the About page: the pipeline, playing, and who does what ----------
+
+ABOUT_CSS = """
+.flow, .legend, .lab-floor { font-family: -apple-system, system-ui, sans-serif; }
+.flow { margin: 1.5rem 0 .5rem; width: min(56rem, 100vw - 2rem); margin-left: calc(50% - min(28rem, 50vw - 1rem)); }
+.flow .now { font-size: .85rem; line-height: 1.5; color: var(--muted); min-height: 4.6em; }
+.flow .now strong { color: var(--fg); }
+.who { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.legend { font-size: .8rem; color: var(--muted); margin: 0 0 2rem; }
+dl.agents dt { font-weight: 700; margin-top: 1.1rem; }
+dl.agents dt small { font: 600 .72rem -apple-system, system-ui, sans-serif; text-transform: uppercase;
+                     letter-spacing: .05em; color: var(--muted); margin-left: .35rem; }
+dl.agents dd { margin: .2rem 0 0; }
+.lab-floor { display: flex; gap: 1rem; margin-top: 1.5rem; }
+.lab-floor .card { flex: 1; min-width: 0; position: relative; height: 150px;
+                   background: linear-gradient(var(--rule), var(--rule)) no-repeat 0 calc(100% - 8px) / 100% 2px; }
+.lab-floor canvas.lab-stage { bottom: 0; height: 150px; }
+"""
+ABOUT_FLOW = flowchart.CSS + ABOUT_CSS
+
+# (name, who runs it, what it does), in the order the strip shows them
+AGENT_NOTES = [
+    ("Theorist", "Principal Investigator",
+     "Looks across every mission and published article for patterns inside each tag and themes emerging between "
+     "them, then sharpens the desk's guiding questions. Now and then it proposes a new tag or one new mission."),
+    ("Mission finder", "both models",
+     "Searches around those guiding questions from a couple of unexpected angles and proposes up to three new "
+     "missions, each resting on a page it actually found."),
+    ("Source finder", "Research Assistant",
+     "A small, fast model that does the digging: it searches, reads pages, checks the Wayback Machine for pages "
+     "that changed or vanished, and gathers evidence for and against the mission's thesis."),
+    ("Brief writer", "Principal Investigator",
+     "A larger model turns that evidence into a brief: a checkable thesis, facts that quote their sources, "
+     "possibilities clearly marked as unverified, and the strongest case against."),
+    ("Checks", "code, no model",
+     "The source check fetches every cited page and confirms each quote is really on it; the article check "
+     "confirms the article's quotes and citations match the brief. A failure goes back for another try, and "
+     "after three the mission is set aside for a human."),
+    ("Reviews", "a human",
+     "A person approves every brief or sends it back with notes, and reads every article before it is published."),
+    ("Article writer", "Principal Investigator",
+     "Writes the article from the approved brief, labeling each possibility \u201cPossibility, not verified\u201d."),
+    ("Publisher", "code, no model",
+     "Writes the article to this site, updates the feeds and passes it on to the other places it appears."),
+]
+
+# Researchers on the About page drop by for a short visit and always say hello (assets/researchers.js).
+ABOUT_PACE = '<script>window.RESEARCHERS_PACE = {life: [7, 13], gap: [4, 9], first: [1, 4], entry: [3, 7], greet: 1};</script>'
+
+def about_html() -> str:
+    """site/about/index.html: the pipeline strip playing a made-up run (assets/about.js drives it through
+    assets/flow.js), what each agent does, and a floor where a researcher or two drops by."""
+    strip = (f'<section id="flow" class="flow" data-demo data-working="[]" aria-label="The pipeline, playing an example run">'
+             f'<div class="flow-scroll"><div class="flow-track">{flowchart.track({}, {}, {})}</div></div>'
+             f'<div class="now"></div></section>')
+    agents = "".join(f"<dt>{escape(name)}<small>{escape(who)}</small></dt><dd>{escape(text)}</dd>"
+                     for name, who, text in AGENT_NOTES)
+    body = ("<h1>About</h1>"
+            "<p>Mission Loop is a small research desk run by AI agents, with a human editor. Every article starts "
+            "as a mission, a question worth answering, and moves left to right along the line below. Code checks "
+            "the agents' work at each step, and nothing is published until a person has approved the research "
+            "and read the article.</p>"
+            f"{strip}"
+            '<p class="legend">Green: working now. Striped blocks: checks done by code. Dashed: a human review.</p>'
+            "<h2>Who does what</h2>"
+            "<p>Two models share the work. The Research Assistant, a small model, searches and reads; the "
+            "Principal Investigator, a larger one, writes and decides. They run side by side, so one mission's "
+            "search goes on while another's article is written.</p>"
+            f'<dl class="agents">{agents}</dl>'
+            '<div class="lab-floor" aria-hidden="true">'
+            '<div class="card" id="lab-left" data-lab="busy"></div><div class="card" id="lab-right" data-lab="busy"></div></div>')
+    head = (f"<style>{ABOUT_FLOW}</style>{ABOUT_PACE}"
+            '<script src="../assets/researchers.js" defer></script>'
+            '<script src="../assets/flow.js" defer></script>'
+            '<script src="../assets/about.js" defer></script>')
+    return _page("About · Mission Loop", body, "../", head, nav="about")
 
 # ---------- feeds: the same entries as the index, with full text ----------
 

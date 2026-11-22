@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 import agents, orchestrator, related, store, ui
-from agents import finder
+from agents import finder, publisher
 from contracts import Mission, MissionIdea, State
 
 pytestmark = pytest.mark.usefixtures("stub_agents")
@@ -165,7 +165,7 @@ def test_reference_block_reaches_the_research_prompt(monkeypatch):
 def test_published_pages_show_the_pill_and_follow_a_rename():
     fed = store.create_epic("Fed Capture")
     published("p", "Fed topic", epic=fed.slug)
-    assert '<span class="epic">Fed Capture</span>' in Path("site/p/index.html").read_text()
+    assert '<a class="epic" href="../?tag=Fed%20Capture"' in Path("site/p/index.html").read_text()
     assert "Fed Capture" in Path("site/index.html").read_text()
     orchestrator.rename_epic(fed.slug, "Central Bank Capture", T0)
     assert "Central Bank Capture" in Path("site/p/index.html").read_text()
@@ -195,3 +195,34 @@ def test_ui_add_and_change_epic(client):
     assert "error=epic" in r.headers["location"]
     client.post("/m/g/epic", data={"epic": ""})
     assert store.get_mission("g").epic == ""
+
+# ---------- the site: tags, a way back, the About page ----------
+
+def test_site_filters_by_tag_and_every_article_leads_back():
+    fed = store.create_epic("Fed Capture")
+    published("p", "Fed topic", epic=fed.slug)
+    published("q", "Loose topic")
+    index = Path("site/index.html").read_text()
+    assert '<nav class="tags"' in index and 'data-tag="Fed Capture"' in index   # one chip per tag, plus All
+    assert '<li data-tag="Fed Capture">' in index and '<li data-tag="">' in index
+    page = Path("site/p/index.html").read_text()
+    assert '<a class="back" href="../">' in page and 'href="../about/"' in page   # back to the list, and the About page
+    assert '<nav class="pager" data-slug="p" data-feed="../feed.json"' in page   # newer / older, read from the feed
+    assert '"id": "p"' in Path("site/feed.json").read_text()
+    preview = Path("missions/p/preview.html").read_text()
+    assert 'class="back"' not in preview and 'href="../about/"' not in preview and '<nav class="pager"' not in preview   # not on the site yet
+
+def test_about_page_plays_the_pipeline_and_explains_the_agents():
+    published("p", "Fed topic")
+    about = Path("site/about/index.html").read_text()
+    assert 'id="flow" class="flow" data-demo' in about and 'data-step="brief_review"' in about
+    assert 'data-step="publisher"' in about and "Source finder" in about and "Theorist" in about
+    assert about.count('class="card"') == 2 and "RESEARCHERS_PACE" in about       # a researcher or two drops by
+    for name in ("researchers.js", "flow.js", "about.js"):                         # it plays wherever the site is hosted
+        assert Path("site/assets", name).read_bytes() == (publisher.ASSETS / name).read_bytes()
+        assert f'src="../assets/{name}"' in about
+    assert 'aria-current="page">About' in about
+
+def test_no_mission_takes_a_site_folder_as_its_slug():
+    assert orchestrator._new_slug("About", set()) == "about-2"
+    assert orchestrator._new_slug("Assets", set()) == "assets-2"

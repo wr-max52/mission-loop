@@ -8,7 +8,7 @@ import settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       ChannelPost, epic_title, slugify)
+                       ChannelPost, SITE_FOLDERS, epic_title, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -412,7 +412,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
 def _new_slug(topic: str, taken: set[str]) -> str:
     base = slugify(topic)[:54].strip("-") or "mission"
     slug, n = base, 2
-    while slug in taken:
+    while slug in taken or slug in SITE_FOLDERS:
         slug, n = f"{base}-{n}", n + 1
     return slug
 

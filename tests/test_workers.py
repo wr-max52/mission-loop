@@ -285,7 +285,7 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     js = client.get("/assets/flow.js").text
     assert "relightCards(d.working)" in js and "is working on this now." in js
     js = client.get("/assets/researchers.js").text
-    assert "const MAX_ON_STAGE = 4;" in js and "const ENTRY_MIN = 12" in js   # two lit steps and two cards, staggered
+    assert "const MAX_ON_STAGE = 4;" in js and "PACE.entry || [12, 20]" in js   # two lit steps and two cards, staggered
 
 def test_each_workers_trail_stays_with_its_own_mission():
     """The chat assistant reads what each agent did; two workers at once must not mix up their steps."""

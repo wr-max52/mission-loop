@@ -4,7 +4,8 @@
  * per busy worker, so they never wait on the page's own refresh (which holds off while you type or chat).
  * It never reloads the page, so the pixel researchers on the strip keep walking. When a worker's step changes it fires a "flowchange" event on #flow saying which
  * worker and where its work went, which assets/researchers.js turns into that worker's researcher chasing
- * the work or handing it off.
+ * the work or handing it off. On the published About page (data-demo) nothing is polled: assets/about.js plays
+ * a made-up run through Flow.apply instead.
  */
 (() => {
 "use strict";
@@ -50,7 +51,7 @@ function attach() {
       last.waiting[h.dataset.step] = Number(h.querySelector(".count").textContent) || 0;
     });
   }
-  if (!timer) {
+  if (!timer && !root.hasAttribute("data-demo")) {   // the About page's demo strip has no server to ask
     timer = setInterval(poll, EVERY);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
   }
@@ -149,6 +150,6 @@ function arrive(h) {
 }
 
 window.addEventListener("resize", () => requestAnimationFrame(fit));
-window.Flow = { attach, poll, fit };
+window.Flow = { attach, poll, fit, apply };
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", attach); else attach();
 })();

@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
 import activity, agents, clock, notify, orchestrator, store
-from contracts import Mission
+from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
 LOCK = orchestrator.LOCK_FILE
@@ -55,6 +55,8 @@ def _epic(name: str) -> str:
 def add(slug: str, topic: str, objective: str = "",
         epic: str = typer.Option("", help="Epic title (1 to 4 words); a new name makes a new epic"),
         wait_hours: float = typer.Option(48, help="Comment wait after outreach (skipped when no one is emailed)")):
+    if slug in SITE_FOLDERS:
+        raise typer.BadParameter(f"{slug!r} is one of the published site's own folders; pick another slug")
     store.init()
     store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=_epic(epic), wait_hours=wait_hours))
 

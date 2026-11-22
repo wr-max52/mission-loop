@@ -19,9 +19,11 @@ from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
 from agents import llm
 from agents import bluesky, f916, github, publisher
-from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
+from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 from icons import icon, CSS as ICON_CSS
+import flowchart
+from flowchart import flow_steps
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -243,7 +245,6 @@ nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; st
 .loop .grow { flex:1; }
 .now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
 .now strong, .now a { color:var(--fg); }
-@keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
 @keyframes blink { 50% { opacity:.2; } }
 h1 { font-family: Georgia, serif; }
 h2.group { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
@@ -326,76 +327,12 @@ select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); borde
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
 form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
 
-/* the pipeline strip: agents on the track, checks as vertical blocks, human reviews as sidesteps below.
-   It never scrolls: assets/flow.js sets --s to shrink it to the panel's width, and below a readable size it
-   wraps between units (an agent with its check and review), each line starting with the arrow it continues. */
-.flow { flex-basis:100%; min-width:0; margin-top:.3rem; --line:color-mix(in srgb, var(--muted) 60%, transparent); }
-.flow-scroll { overflow:hidden; padding-bottom:.25rem; }
-.flow-track { --s:1; --u:calc(1rem * var(--s)); --row:calc(var(--u) * 1.6); --drop:var(--u); --hh:calc(var(--u) * 1.45);
-              --ch:calc(var(--row) + var(--u) * 1.1);
-              display:flex; align-items:flex-start; width:100%; position:relative; }
-.flow-track[data-lab] { padding-top:5rem; }          /* headroom for the researchers and their speech bubbles */
-.flow .unit { display:contents; }
-.flow.wrap .flow-track { flex-wrap:wrap; row-gap:calc(var(--u) * .7); }
-.flow.wrap .unit { display:flex; align-items:flex-start; flex:none; }
-.flow.wrap .join:not(.short) { flex:none; width:calc(var(--u) * 1.5); }
-.flow .step { flex:none; height:var(--row); line-height:calc(var(--row) - 2px); padding:0 calc(var(--u) * .65);
-              border-radius:999px; border:1px solid var(--rule); background:var(--quote); color:var(--muted);
-              font-size:calc(var(--u) * .78); font-weight:600; white-space:nowrap; }
-.flow .step.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
-.flow .join { flex:1 0 var(--u); max-width:calc(var(--u) * 3.5); height:var(--row); position:relative; }   /* stretch to fill */
-.flow .join::before { content:""; position:absolute; left:2px; right:4px; top:calc(50% - 1px); border-top:2px solid var(--line); }
-.flow .join::after { content:""; position:absolute; right:1px; top:calc(50% - 4px);
-                     border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .join.short { flex:none; width:calc(var(--u) * .5); } .flow .join.short::after { display:none; }
-.flow .join.short::before { right:1px; }
-.flow .check { flex:none; position:relative; width:var(--u); height:var(--ch); border-radius:4px; overflow:visible;
-               border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
-               background:repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
-.flow .check .label { writing-mode:vertical-rl; transform:rotate(180deg); font-size:calc(var(--u) * .56); font-weight:700;
-                      letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
-.flow .check.on { background:#237a35; border-color:#237a35; animation:working 2s ease-out infinite; }
-.flow .check.on .label { color:#fff; }
-.flow .check.on::after { content:""; position:absolute; left:1px; right:1px; height:3px; border-radius:2px;
-                         background:#b2f2bb; animation:scan 1.1s ease-in-out infinite alternate; }
-.flow .parked-count { position:absolute; right:calc(100% + 3px); bottom:-1px; min-width:var(--u); height:var(--u);
-                      border-radius:999px; background:#c92a2a; color:#fff; font-size:calc(var(--u) * .62);
-                      line-height:var(--u); text-align:center; padding:0 calc(var(--u) * .2); }
-.flow .detour { flex:none; position:relative; padding:calc(var(--row) + var(--drop)) calc(var(--u) * .9) 0; }
-.flow .detour::before { content:""; position:absolute; left:calc(var(--u) * -.5); width:calc(var(--u) * 1.4 - 3px); top:var(--ch);
-                        height:calc(var(--row) + var(--drop) + var(--hh) / 2 - var(--ch));
-                        border-left:2px solid var(--line); border-bottom:2px solid var(--line);
-                        border-bottom-left-radius:7px; }
-.flow .detour::after { content:""; position:absolute; right:0; width:calc(var(--u) * .9); top:calc(var(--row) / 2 - 1px);
-                       height:calc(var(--row) / 2 + var(--drop) + var(--hh) / 2);
-                       border-right:2px solid var(--line); border-bottom:2px solid var(--line);
-                       border-bottom-right-radius:7px; }
-.flow .human { position:relative; display:inline-flex; align-items:center; gap:calc(var(--u) * .3); height:var(--hh);
-               padding:0 calc(var(--u) * .55); border-radius:999px; border:1px dashed var(--line); background:var(--bg);
-               color:var(--muted); font-size:calc(var(--u) * .74); font-weight:600; white-space:nowrap; text-decoration:none; }
-.flow .human::before { content:""; position:absolute; left:-6px; top:calc(50% - 4px);
-                       border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .human svg { width:calc(var(--u) * .85); height:calc(var(--u) * .85); fill:none; stroke:currentColor; stroke-width:2.2;
-                   stroke-linecap:round; stroke-linejoin:round; }
-.flow .human.waiting { border-style:solid; border-color:var(--tone); background:var(--tint); color:var(--fg); }
-.flow .human .count { background:var(--tone); color:#fff; border-radius:999px; font-size:calc(var(--u) * .68);
-                      line-height:calc(var(--u) * 1.05); padding:0 calc(var(--u) * .38); }
-.flow .human.arrived { animation:arrived 1s ease-out 3; }
-.flow [hidden] { display:none; }
-.flow.off .step, .flow.off .check { opacity:.7; }
-.flow .now { margin-top:.45rem; }
-@keyframes scan { from { top:2px; } to { top:calc(100% - 5px); } }
-@keyframes arrived { from { box-shadow:0 0 0 0 var(--tone); } to { box-shadow:0 0 0 .5rem transparent; } }
-@media (prefers-reduced-motion: reduce) {
-  .flow .step.on, .flow .check.on, .flow .check.on::after, .flow .human.arrived, .status .dot.on { animation:none; }
-}
+@media (prefers-reduced-motion: reduce) { .status .dot.on { animation:none; } }
 .card[data-lab], .card.lab-host { position:relative; padding-bottom:4rem;
                   background-image:linear-gradient(var(--rule), var(--rule));
                   background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
                   background-repeat:no-repeat; }
-canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-rendering:pixelated; width:100%; }
 .card canvas.lab-stage { bottom:0; height:160px; }   /* tall enough for a bubble above the tallest researcher */
-.flow-track canvas.lab-stage { top:0; height:100%; }
 .switch { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; margin:0; font-size:1rem; cursor:pointer; }
 .switch input { appearance:none; -webkit-appearance:none; flex:none; width:2.6rem; height:1.5rem; padding:0; margin:0;
                 border-radius:999px; border:1px solid var(--muted); background:var(--rule); position:relative;
@@ -502,9 +439,6 @@ setInterval(showElapsed, 1000);
 RESEARCHERS = '<script src="/assets/researchers.js" defer></script>'
 ASSETS = Path(__file__).parent / "assets"
 FLOW_JS = '<script src="/assets/flow.js" defer></script>'   # keeps the pipeline strip live
-ICON_PERSON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/>'
-               '<path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>')
-
 ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4c4-2.5 7 2.5 14 0v10c-7 2.5-10-2.5-14 0"/></svg>'
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
              '<path d="M12 3c3 3 3.6 6 3.6 9s-.6 6-3.6 9c-3-3-3.6-6-3.6-9s.6-6 3.6-9z"/></svg>')
@@ -569,7 +503,7 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
@@ -584,31 +518,6 @@ def flash(request: Request) -> str:
     if done in MESSAGES:
         return f'<div class="flash">{escape(MESSAGES[done])}</div>'
     return ""
-
-# The pipeline as the strip draws it, in runtime order: agents on the main track, each code check a
-# vertical block right after the agent it checks, and each human review a sidestep below, between the
-# check that leads to it and the agent that follows it. (key, kind, label on the strip)
-FLOW = [
-    ("theorist", "agent", "Theorist"),
-    ("finder", "agent", "Finder"),
-    ("sources", "agent", "Sources"),
-    ("contacts", "agent", "Contacts"),
-    ("brief", "agent", "Brief"),
-    ("source_check", "check", "check"),
-    ("brief_review", "human", "Review brief"),
-    ("writer", "agent", "Article"),
-    ("article_check", "check", "check"),
-    ("article_review", "human", "Review article"),
-    ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
-]
-HUMAN_STEPS = {"brief_review": ("Brief review: you approve the brief or send it back", "review"),
-               "article_review": ("Article review: you publish the article or send it back", "publish")}
-CHECK_TITLE = ("{name}: code, no model. A failure goes back for another try; "
-               "after {n} tries the mission is parked for you")
-
-def flow_steps() -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: contacts only while outreach is on."""
-    return [s for s in FLOW if s[0] != "contacts" or settings.OUTREACH]
 
 def strip_step(agent: str) -> str:
     """Where an agent sits on the strip: posting to a channel is part of the one Publish step."""
@@ -657,28 +566,7 @@ def flow_strip(state: dict) -> str:
     """The pipeline strip. It is always drawn; with the loop off nothing on it is lit. assets/flow.js
     keeps it current without reloading the page, and the pixel researchers live on its track."""
     steps, lit = flow_steps(), {e["step"]: e["worker"] for e in state["working"]}
-    units: list[list[str]] = []
-    for key, kind, text in steps:
-        on = " on" if key in lit else ""
-        cur = f' aria-current="step" data-worker="{lit[key]}"' if on else ""
-        if kind == "agent":
-            units.append(['<span class="join" aria-hidden="true"></span>'] if units else [])
-            parts = units[-1]
-            parts.append(f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
-        elif kind == "check":
-            parts.append('<span class="join short" aria-hidden="true"></span>')
-            n = state["parked"].get(key, 0)
-            title = CHECK_TITLE.format(name=activity.AGENTS[key], n=Mission.model_fields["max_attempts"].default)
-            parts.append(f'<span class="check{on}" data-step="{key}" title="{escape(title)}"{cur}>'
-                         f'<span class="label">{text}</span>'
-                         f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
-        else:
-            title, tone_ = HUMAN_STEPS[key]
-            n = state["waiting"].get(key, 0)
-            parts.append(f'<span class="detour"><a class="human {tone_}{" waiting" if n else ""}" href="/#needs-you" '
-                         f'data-step="{key}" title="{escape(title)}">{ICON_PERSON}{text}'
-                         f'<b class="count"{"" if n else " hidden"}>{n}</b></a></span>')
-    track = "".join(f'<span class="unit">{"".join(u)}</span>' for u in units)
+    track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you")
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
     attrs = f'data-shape="{",".join(k for k, _, _ in steps)}" data-working="{escape(working, quote=True)}"'
@@ -2005,7 +1893,7 @@ async def add_mission(request: Request) -> Response:
         return go("/", error="topic")
     if not SLUG.match(slug):
         return go("/", error="slug")
-    if store.get_mission(slug):
+    if store.get_mission(slug) or slug in SITE_FOLDERS:
         return go("/", error="exists")
     name = str(form.get("epic") or "")
     if name.strip() and not epic_title(name):

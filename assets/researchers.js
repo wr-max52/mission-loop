@@ -24,10 +24,15 @@
 if (window.__researchers) return;
 window.__researchers = true;
 
-const LIFE_MIN = 15, LIFE_MAX = 30;          // seconds on stage
-const GAP_MIN = 10, GAP_MAX = 20;            // seconds between visitors on one stage
-const FIRST_MIN = 2, FIRST_MAX = 15;         // the first visitor's random wait, so stages never start in step
-const ENTRY_MIN = 12, ENTRY_MAX = 20;        // seconds between any two arrivals on the page, so they stagger
+// A page can set its own pace before loading this script (the published About page does: short visits, and
+// every visitor says hello): window.RESEARCHERS_PACE = {life: [lo, hi], gap: [lo, hi], first: [lo, hi],
+// entry: [lo, hi], greet: chance}.
+const PACE = window.RESEARCHERS_PACE || {};
+const [LIFE_MIN, LIFE_MAX] = PACE.life || [15, 30];      // seconds on stage
+const [GAP_MIN, GAP_MAX] = PACE.gap || [10, 20];         // seconds between visitors on one stage
+const [FIRST_MIN, FIRST_MAX] = PACE.first || [2, 15];    // the first visitor's random wait, so stages never start in step
+const [ENTRY_MIN, ENTRY_MAX] = PACE.entry || [12, 20];   // seconds between any two arrivals on the page, so they stagger
+const GREET = PACE.greet ?? 0.22;                        // chance a card visitor says something on arrival
 const MAX_ON_STAGE = 4;                      // researchers on the whole page at once: two lit steps, two busy cards
 const FAVOR = 0.8;                           // share of a working stage's visitors from its own worker's crew
 const EDGE = 40;                             // how far off-stage they start and finish their walk
@@ -963,7 +968,7 @@ const ACTIONS = {
       if (stepToward(r, s, s.tx, dt, r.a.speed * (r.stage.kind === "flow" ? 1.5 : 1))) {
         r.alpha = 1; r.y = 0; s.done = true;
         if (r.stage.kind === "flow") r.arrive();
-        else if (r.rand() < 0.22) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
+        else if (r.rand() < GREET) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
         return stand({ carry: true });
       }
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
@@ -1857,7 +1862,7 @@ const stages = [];
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href"));
+    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href") || "#" + host.id);
     this.mood = kind === "crew" ? "crew" : host.dataset.lab || "busy";
     this.worker = host.dataset.worker || null;   // whose crew visits a card
     this.canvas = document.createElement("canvas");
