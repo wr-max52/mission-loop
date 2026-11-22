@@ -169,7 +169,8 @@ async def test_loop_server_runs_over_mcp_from_any_folder():
     async with Toolbox(["loop"], config_path=assistant.CONFIG) as tb:
         assert {t["function"]["name"] for t in tb.tools} == {
             "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions",
-            "publication_status", "add_mission", "list_epics", "set_mission_epic", "theorist_notes"}
+            "publication_status", "add_mission", "list_epics", "set_mission_epic", "theorist_notes",
+            "desk_overview", "set_inspiration", "ask_theorist", "propose_epic", "propose_combine", "link_missions"}
         assert "Why the grid failed" in await tb.call("mission_status", {"slug": "grid"})
 
 # ---------- the assistant ----------
@@ -199,7 +200,7 @@ async def test_assistant_looks_then_answers(monkeypatch):
     boxes = []
     answer = await assistant.run_chat("what's going on?", toolbox_factory=lambda n: boxes.append(FakeToolbox(n)) or boxes[-1])
     assert answer == "The loop is running."
-    assert boxes[0].names == ["loop", "fetch", "pages"] and boxes[0].calls == [("loop_status", {})]
+    assert boxes[0].names == ["loop", "library", "fetch", "pages"] and boxes[0].calls == [("loop_status", {})]
     assert seen[0][2] == assistant.default_model() == llm.model_for("assistant")   # the copy the loop already loaded
     tool_msg = seen[1][0][-1]
     assert tool_msg["role"] == "tool" and len(tool_msg["content"]) == assistant.MAX_TOOL_CHARS
@@ -226,9 +227,9 @@ async def test_empty_question_needs_no_model(monkeypatch):
 
 async def test_web_tools_and_search_only_with_a_key(monkeypatch):
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
-    assert assistant.servers() == ["loop", "fetch", "pages"] and not assistant.web_search()
+    assert assistant.servers() == ["loop", "library", "fetch", "pages"] and not assistant.web_search()
     monkeypatch.setenv("BRAVE_API_KEY", "k")
-    assert assistant.servers() == ["loop", "fetch", "pages", "search"] and assistant.web_search()
+    assert assistant.servers() == ["loop", "library", "fetch", "pages", "search"] and assistant.web_search()
     cfg = json.loads(assistant.CONFIG.read_text())
     assert all(name in cfg for name in assistant.servers())          # every one is an MCP server in mcp.json
 

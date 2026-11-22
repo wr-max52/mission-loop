@@ -82,12 +82,13 @@ def set_ollama_host(url: str) -> str:
 #   api: "ollama", "anthropic" (Messages API) or "openai" (the OpenAI chat completions shape, which most speak)
 #   schema: False where the provider can't hold a reply to a JSON schema (it gets JSON mode and the schema in words)
 #   tokens: the request field for the reply cap; temperature: False where reasoning models refuse to be set
+#   embed: False where the provider has no embeddings API, so the library can't use it (library.py)
 PROVIDERS = {
     "ollama": {"name": "Ollama", "api": "ollama", "url": OLLAMA_DEFAULT, "key_env": "",
                "keys": "https://ollama.com/download", "blurb": "Free, on this machine. Pull models with ollama pull."},
     "anthropic": {"name": "Anthropic", "api": "anthropic", "url": "https://api.anthropic.com",
                   "key_env": "ANTHROPIC_API_KEY", "keys": "https://console.anthropic.com/settings/keys",
-                  "blurb": "Claude models."},
+                  "blurb": "Claude models.", "embed": False},
     "openai": {"name": "OpenAI", "api": "openai", "url": "https://api.openai.com/v1", "key_env": "OPENAI_API_KEY",
                "keys": "https://platform.openai.com/api-keys", "blurb": "GPT models.",
                "tokens": "max_completion_tokens", "temperature": False},
@@ -95,13 +96,13 @@ PROVIDERS = {
             "keys": "https://console.x.ai", "blurb": "Grok models."},
     "deepseek": {"name": "DeepSeek", "api": "openai", "url": "https://api.deepseek.com", "key_env": "DEEPSEEK_API_KEY",
                  "keys": "https://platform.deepseek.com/api_keys", "blurb": "DeepSeek chat and reasoner.",
-                 "schema": False},
+                 "schema": False, "embed": False},
     "gemini": {"name": "Google Gemini", "api": "openai", "url": "https://generativelanguage.googleapis.com/v1beta/openai",
                "key_env": "GEMINI_API_KEY", "keys": "https://aistudio.google.com/apikey", "blurb": "Gemini models."},
     "mistral": {"name": "Mistral", "api": "openai", "url": "https://api.mistral.ai/v1", "key_env": "MISTRAL_API_KEY",
                 "keys": "https://console.mistral.ai/api-keys", "blurb": "Mistral models."},
     "groq": {"name": "Groq", "api": "openai", "url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY",
-             "keys": "https://console.groq.com/keys", "blurb": "Open models, served very fast."},
+             "keys": "https://console.groq.com/keys", "blurb": "Open models, served very fast.", "embed": False},
     "openrouter": {"name": "OpenRouter", "api": "openai", "url": "https://openrouter.ai/api/v1",
                    "key_env": "OPENROUTER_API_KEY", "keys": "https://openrouter.ai/keys",
                    "blurb": "Hundreds of models from every lab behind one key."},
@@ -193,6 +194,61 @@ def _write_private(path: Path, data: dict) -> None:
     tmp.chmod(0o600)
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     tmp.replace(path)
+
+# ---------- the library: retrieval over the desk's own work, for the Theorist and the chat (library.py) ----------
+# It always ranks by words; an embedding model adds ranking by meaning. Like every model, which one is this
+# machine's choice: "" (words only), an Ollama model ("nomic-embed-text") or "<provider>/<model>" for a connected
+# provider with an embeddings API. How many passages a search returns is a pick from TOP_N_CHOICES.
+
+EMBED_ENV = "MISSION_LOOP_EMBED_MODEL"
+TOP_N_CHOICES = (3, 5, 8, 10, 15, 20)
+TOP_N = 5
+
+def can_embed(pid: str) -> bool:
+    return pid in PROVIDERS and PROVIDERS[pid].get("embed", True)
+
+def embed_providers() -> list[str]:
+    """Providers whose embedding models the library can use now: Ollama, then each connected one with an embeddings API."""
+    return [LOCAL] + [p for p in cloud_providers() if can_embed(p)]
+
+WORDS_ONLY = "-"   # saved as embed_model: words only, even while .env names a model
+
+def embed_model() -> str:
+    """The library's embedding model: settings.json, then MISSION_LOOP_EMBED_MODEL; "" ranks by words only."""
+    got = saved().get("embed_model")
+    if got == WORDS_ONLY:
+        return ""
+    return got or _env(EMBED_ENV)
+
+def set_embed_model(ref: str) -> str:
+    """Save the embedding model: a model name, "" to go back to .env, or WORDS_ONLY to rank by words only (stored
+    only while .env names a model; otherwise nothing is stored). A name equal to .env's is not stored either, so a
+    later .env edit still applies. Raises ValueError for a bad name or a provider without embeddings."""
+    ref = ref.strip()
+    if len(ref) > 200 or any(c.isspace() for c in ref):
+        raise ValueError("that isn't a model name")
+    env = _env(EMBED_ENV)
+    if ref == WORDS_ONLY:
+        ref = WORDS_ONLY if env else ""
+    elif ref and not can_embed(split_model(ref)[0]):
+        raise ValueError(f"{PROVIDERS[split_model(ref)[0]]['name']} offers no embedding models")
+    elif ref == env:
+        ref = ""
+    save(embed_model=ref)
+    return embed_model()
+
+def library_top_n() -> int:
+    """How many passages a library search returns (Settings page)."""
+    try:
+        n = int(saved().get("library_top_n") or TOP_N)
+    except (TypeError, ValueError):
+        return TOP_N
+    return n if n in TOP_N_CHOICES else TOP_N
+
+def set_library_top_n(n: int) -> None:
+    if n not in TOP_N_CHOICES:
+        raise ValueError(f"pick one of {', '.join(map(str, TOP_N_CHOICES))}")
+    save(library_top_n="" if n == TOP_N else n)   # nothing stored at the default
 
 def f916_url() -> str:
     """The 1F916 server to join: settings.json, then MISSION_LOOP_1F916_URL, then the public site. Once joined,
