@@ -77,10 +77,11 @@ CSS = """
                            --accent:#e08a8a; --quote:#1f1f23; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --rule:#2c2c30;
-                            --accent:#e08a8a; --quote:#1f1f23; }
+                            --accent:#e08a8a; --quote:#1f1f23; color-scheme: dark; }
 }
 * { box-sizing: border-box; }
 html[data-theme="dark"] { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font: 18px/1.65 Georgia, "Iowan Old Style", "Times New Roman", serif; }
 main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }

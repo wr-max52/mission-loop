@@ -255,12 +255,50 @@ def test_unknown_mission(client):
     assert client.post("/m/nope/approve").status_code == 404
     assert client.get("/m/nope/preview").status_code == 404
 
-def test_theme_toggle_is_on_every_ui_page(client):
+def test_appearance_is_a_setting_that_follows_the_system_by_default(client):
+    import settings
     brief_ready()
-    for route in ("/", "/m/b"):
+    for route in ("/", "/m/b", "/settings"):
         html = client.get(route).text
-        assert 'class="theme-toggle"' in html           # the button, in the nav
-        assert "window.toggleTheme" in html              # the no-flash init script
+        assert 'class="theme-toggle"' not in html and "<html lang=\"en\">" in html   # no switch, no data-theme
+    assert 'name="theme" value="system" checked' in client.get("/settings").text
+    r = client.post("/settings/theme", data={"theme": "dark"}, follow_redirects=False)
+    assert r.status_code == 303 and "theme_saved" in r.headers["location"] and settings.theme() == "dark"
+    assert '<html lang="en" data-theme="dark">' in client.get("/").text
+    assert 'name="theme" value="dark" checked' in client.get("/settings").text
+    assert "error=theme" in client.post("/settings/theme", data={"theme": "purple"}, follow_redirects=False).headers["location"]
+    client.post("/settings/theme", data={"theme": "system"})
+    assert settings.theme() == "system" and "theme" not in settings.saved()
+    evil = {"origin": "https://evil.example"}
+    assert client.post("/settings/theme", data={"theme": "dark"}, headers=evil).status_code == 403
+
+def test_article_preview_takes_the_uis_appearance(client):
+    import settings
+    article_ready()
+    html = client.get("/m/a/preview").text
+    head = html.split("</head>")[0]
+    assert head.index("toggleTheme") < head.index('removeAttribute("data-theme")')   # overrides the page's own pick
+    assert ".theme-toggle { display:none; }" in head
+    settings.set_theme("light")
+    assert 'dataset.theme = "light"' in client.get("/m/a/preview").text
+
+def test_chat_colour_picks_a_pastel_or_your_own(client):
+    import settings
+    html = client.get("/settings").text
+    assert 'name="choice" value="" checked' in html and "--chat:" not in html     # the app's red by default
+    sage = settings.CHAT_COLORS["Sage"]
+    client.post("/settings/chat-color", data={"choice": sage, "own": "#123456"})
+    assert settings.chat_color() == sage
+    html = client.get("/").text
+    assert f'style="--chat:{sage};--chat-ink:#1d1d1f"' in html                   # dark ink on a pastel
+    client.post("/settings/chat-color", data={"choice": "own", "own": "#1A2B3C"})
+    assert settings.chat_color() == "#1a2b3c"
+    html = client.get("/settings").text
+    assert "--chat-ink:#ffffff" in html and 'name="choice" value="own" checked' in html and 'value="#1a2b3c"' in html
+    r = client.post("/settings/chat-color", data={"choice": "own", "own": "red"}, follow_redirects=False)
+    assert "chat_color" in r.headers["location"] and settings.chat_color() == "#1a2b3c"
+    client.post("/settings/chat-color", data={"choice": ""})
+    assert settings.chat_color() == "" and "chat_color" not in settings.saved()
 # The dark theme wins over the system fallback: an explicit choice sets data-theme, and the
 # system palette is gated behind :not([data-theme]) so a saved "dark" beats an OS light.
 def test_system_dark_is_gated_behind_an_explicit_choice():
