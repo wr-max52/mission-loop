@@ -16,10 +16,11 @@ import store, wayback
 from contracts import Article, BoardNote, Mention, Mission, ResearchBrief, State
 
 # ---------- tunable numbers ----------
-SLOT = 215                                 # px between a mission and the next ring of its cluster
+SLOT = 270                                 # px between a mission and the next ring of its cluster
 EPIC_RING = 640                            # px between rings of epics around the board's centre
 WIDE = 1.5                                 # epic rings are this much wider than tall, like a screen
-MIN_GAP = 200                              # a new note keeps at least this far from every other note
+MIN_GAP = 265                              # a new note keeps at least this far from every other note (two
+                                           # notes at SIZE_MAX, 160 px * 1.6 wide, don't overlap)
 EPIC_GAP = 560                             # a new epic keeps at least this far from every other epic
 TALL = 1.45                                # notes are wider than tall: vertical gaps count this much more
 SIZE_MIN, SIZE_MAX = 0.7, 1.6              # a note's size, 1.0 = normal; also the clamp for human and Theorist sizes
@@ -29,7 +30,8 @@ STAGE_SIZE = {                             # further along is bigger
     State.WRITING: 1.05, State.ARTICLE_READY: 1.15, State.DONE: 1.25, State.PARKED: 0.85, State.COMBINED: 0.75}
 PER_STRING, MAX_STRING_BONUS = 0.04, 0.2   # a little bigger for every string, up to this much
 UNSORTED = "_unsorted"                     # the label missions in no epic gather round
-MIN_NAME = 3                               # words a title or slug needs before a mention of it counts
+MIN_NAME = 4                               # words a topic or title needs before naming it counts as a mention
+MAX_POS = 100_000                          # px a note may sit from the centre
 POLL_SECONDS = 4                           # how often an open board asks for changes
 PREVIEW_CHARS = 420                        # the preview's thesis is cut to this
 
@@ -85,9 +87,14 @@ def place(missions: list[Mission] | None = None) -> dict[tuple[str, str], BoardN
     if any(m.epic not in epic_slugs for m in loose):
         epic_note(UNSORTED)                # the label shows whenever a mission is in no epic, placed or not
     for m in loose + [m for m in missions if m.state == State.COMBINED]:
-        if ("mission", m.slug) in notes:
-            continue
         took = notes.get(("mission", m.combined_into)) if m.combined_into else None
+        had = notes.get(("mission", m.slug))
+        if had and took and had.by == "code" and math.hypot(had.x - took.x, (had.y - took.y) * TALL) > 2.5 * SLOT:
+            taken.remove((had.x, had.y))       # combined after code placed it: move it beside the mission that took it
+            put("mission", m.slug, _spot(took.x, took.y, SLOT, taken, MIN_GAP))
+            continue
+        if had:
+            continue
         anchor = took or epic_note(m.epic if m.epic in epic_slugs else UNSORTED)
         put("mission", m.slug, _spot(anchor.x, anchor.y, SLOT, taken, MIN_GAP))
     return notes
@@ -102,6 +109,7 @@ def move(kind: str, id_: str, x: float, y: float, size: float | None = None, by:
         raise ValueError(f"no epic {id_!r}")
     if not all(map(math.isfinite, (x, y))):
         raise ValueError("a position must be a number")
+    x, y = min(MAX_POS, max(-MAX_POS, x)), min(MAX_POS, max(-MAX_POS, y))
     old = store.board_notes().get((kind, id_))
     size = old.size if size is None and old else size
     if size is not None:
@@ -202,11 +210,12 @@ def own_text(m: Mission) -> str:
     return " ".join(" ".join(parts).lower().split())
 
 def names(m: Mission) -> list[str]:
-    """The phrases that count as naming a mission: its topic, its article's title and its slug, each MIN_NAME+ words."""
+    """The phrases that count as naming a mission: its full topic and its article's title (each MIN_NAME+ words),
+    and its slug as written, hyphens and all (a slug's words alone are just the topic's first words)."""
     a = _article(m.slug)
-    found = [m.topic, a.title if a else "", m.slug.replace("-", " ")]
-    phrases = [" ".join(p.lower().split()).strip(" .?!") for p in found]
-    return [p for p in dict.fromkeys(phrases) if len(p.split()) >= MIN_NAME]
+    phrases = [" ".join(p.lower().split()).strip(" .?!") for p in (m.topic, a.title if a else "")]
+    slug = [m.slug.lower()] if m.slug.count("-") >= 2 else []
+    return [p for p in dict.fromkeys(phrases) if len(p.split()) >= MIN_NAME] + slug
 
 def _names_in(phrases: list[str], text: str) -> str:
     for p in phrases:
@@ -214,31 +223,48 @@ def _names_in(phrases: list[str], text: str) -> str:
             return p
     return ""
 
+def _profile(m: Mission) -> tuple[dict[str, str], str, list[str]]:
+    """A mission's cited pages, own text and names, read once; one whose artifacts don't load counts as empty."""
+    try:
+        return cited_pages(m), own_text(m), names(m)
+    except Exception as e:                 # an artifact saved by an older schema never breaks the board
+        print(f"board: skipped {m.slug}'s mentions ({type(e).__name__}: {e})", flush=True)
+        return {}, "", []
+
+def _pair_mentions(a: str, pa: tuple, b: str, pb: tuple) -> list[Mention]:
+    out = []
+    shared = sorted(set(pa[0]) & set(pb[0]))
+    if shared:
+        more = f" and {len(shared) - 1} more" if len(shared) > 1 else ""
+        out.append(Mention(a=a, b=b, kind="source", detail=pa[0][shared[0]] + more))
+    said = _names_in(pb[2], pa[1]) or _names_in(pa[2], pb[1])
+    if said:
+        out.append(Mention(a=a, b=b, kind="name", detail=f'"{said}"'))
+    return out
+
 def find_mentions(slug: str) -> int:
     """Find this mission's same-source and name mentions again (after its brief or article was saved)."""
     m = store.get_mission(slug)
     store.delete_mentions(slug, ("source", "name"))
     if m is None:
         return 0
-    mine_pages, mine_text, mine_names = cited_pages(m), own_text(m), names(m)
+    mine = _profile(m)
     made = 0
     for other in store.all_missions():
-        if other.slug == slug:
-            continue
-        shared = sorted(set(mine_pages) & set(cited_pages(other)))
-        if shared:
-            more = f" and {len(shared) - 1} more" if len(shared) > 1 else ""
-            store.save_mention(Mention(a=slug, b=other.slug, kind="source", detail=mine_pages[shared[0]] + more))
-            made += 1
-        said = _names_in(names(other), mine_text) or _names_in(mine_names, own_text(other))
-        if said:
-            store.save_mention(Mention(a=slug, b=other.slug, kind="name", detail=f'"{said}"'))
-            made += 1
+        if other.slug != slug:
+            for k in _pair_mentions(slug, mine, other.slug, _profile(other)):
+                store.save_mention(k)
+                made += 1
     return made
 
 def find_all_mentions() -> int:
-    """Every mission's same-source and name mentions, found again (an older desk the first time a board opens)."""
-    return sum(find_mentions(m.slug) for m in store.all_missions())
+    """Every mission's same-source and name mentions, found again (an older desk the first time a board opens):
+    each mission read once, each pair checked once, all saved in one transaction."""
+    missions = store.all_missions()
+    profiles = [(m.slug, _profile(m)) for m in missions]
+    found = [k for i, (a, pa) in enumerate(profiles) for b, pb in profiles[i + 1:] for k in _pair_mentions(a, pa, b, pb)]
+    store.replace_mentions(("source", "name"), found)
+    return len(found)
 
 def record_background(slug: str, shown: list[str]) -> None:
     """Research on this mission was shown these published missions as background (related.similar_published)."""

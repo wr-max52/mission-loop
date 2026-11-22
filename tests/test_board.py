@@ -333,3 +333,54 @@ def test_the_notes_say_what_a_board_turn_moved(client):
     import status_tools
     text = status_tools.theorist_notes()
     assert "tidied the cork board, moving 1 note(s)" in text and "Old pattern" in text
+
+# ---------- review fixes (#71) ----------
+
+def test_a_slugs_words_in_prose_are_not_a_mention():
+    store.save_mission(Mission(slug="the-state-of-open-source", topic="The state of open source AI funding in 2026"))
+    store.save_mission(Mission(slug="lic", topic="Licences"))
+    store.save_artifact("lic", "brief", brief("The state of open source licensing is shifting.", ["https://a.org"]))
+    assert board.find_mentions("lic") == 0
+    store.save_artifact("lic", "brief", brief("See the-state-of-open-source for the money.", ["https://a.org"]))
+    assert board.find_mentions("lic") == 1                                  # the slug as written still counts
+
+def test_one_broken_artifact_never_stops_the_backfill(client):
+    store.save_mission(Mission(slug="a", topic="Alpha"))
+    store.save_mission(Mission(slug="b", topic="Beta"))
+    store.save_mission(Mission(slug="bad", topic="Bad"))
+    store.save_artifact("a", "brief", brief("A.", ["https://ex.com/p"]))
+    store.save_artifact("b", "brief", brief("B.", ["https://ex.com/p"]))
+    with store.conn() as c:                                                 # a brief from an older schema
+        c.execute("INSERT OR REPLACE INTO artifacts VALUES (?, ?, ?)", ("bad", "brief", '{"thesis": "only"}'))
+    assert board.find_all_mentions() == 1                                   # a and b still found
+    ui._MENTIONS_FOUND = False
+    assert client.get("/board").status_code == 200
+
+def test_a_drag_keeps_the_note_growing_and_odd_numbers_are_refused(client):
+    store.save_mission(Mission(slug="q", topic="Queued"))
+    assert client.post("/board/move", json={"id": "m:q", "x": 1e308, "y": 0}).json()["x"] == board.MAX_POS
+    assert client.post("/board/move", json={"id": "m:q", "x": True, "y": 0}).status_code == 400
+    m = store.get_mission("q")
+    m.state = State.DONE
+    store.save_mission(m)
+    assert note(board.layout(), "m:q")["size"] >= board.STAGE_SIZE[State.DONE]   # no size was fixed by the drag
+
+def test_a_mission_combined_later_moves_beside_its_new_home():
+    far = store.create_epic("Far Away")
+    store.save_mission(Mission(slug="big", topic="The big question"))
+    for i in range(8):
+        store.create_epic(f"Filler {i}")
+    store.save_mission(Mission(slug="small", topic="A small question", epic=far.slug))
+    before = board.layout()
+    assert gap(note(before, "m:small"), note(before, "m:big")) > 2.5 * board.SLOT
+    m = store.get_mission("small")
+    m.state, m.combined_into = State.COMBINED, "big"
+    store.save_mission(m)
+    data = board.layout()
+    assert gap(note(data, "m:small"), note(data, "m:big")) <= 2.5 * board.SLOT
+
+def test_the_board_data_cannot_end_its_script(client):
+    store.save_mission(Mission(slug="x", topic="Odd <!--<script> title </script>"))
+    html = client.get("/board").text
+    data = html.split('id="board-data">')[1].split("</script>")[0]
+    assert "<" not in data and "\\u003c!--" in data

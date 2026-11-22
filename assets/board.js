@@ -309,7 +309,7 @@
     if (dragEl) dragEl.classList.remove("lifted");
     dragEl = null;
     if (!g || g.kind === "pinch") return;
-    if (g.moved && g.kind !== "pan") return save(byId(g.id));
+    if (g.moved && g.kind !== "pan") return save(byId(g.id), g.kind === "resize");
     if (g.moved) return;
     if (g.kind === "pan") return unpick();        // a click on the empty board clears everything
     const n = byId(g.id);
@@ -402,10 +402,12 @@
     gear.setAttribute("aria-expanded", String(open));
   }
 
-  async function save(n) {
+  async function save(n, resized) {
+    // a plain drag sends no size, so the note keeps growing with its stage; only a resize fixes it
+    const move = resized ? { id: n.id, x: n.x, y: n.y, size: n.size } : { id: n.id, x: n.x, y: n.y };
     try {
       await fetch("/board/move", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: n.id, x: n.x, y: n.y, size: n.size }) });
+        body: JSON.stringify(move) });
     } catch (_) { /* the next poll puts it back where the server has it */ }
   }
 

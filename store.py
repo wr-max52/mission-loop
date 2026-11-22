@@ -251,6 +251,16 @@ def delete_mentions(slug: str, kinds: tuple[str, ...]) -> None:
         c.execute(f"DELETE FROM mentions WHERE (a = ? OR b = ?) AND kind IN ({','.join('?' * len(kinds))})",
                   (slug, slug, *kinds))
 
+def replace_mentions(kinds: tuple[str, ...], found: list[Mention]) -> None:
+    """Forget every mention of these kinds and save the ones found, in one transaction (the board's backfill)."""
+    rows = []
+    for k in found:
+        k.a, k.b = _pair(k.a, k.b)
+        rows.append((k.a, k.b, k.kind, k.model_dump_json()))
+    with conn() as c:
+        c.execute(f"DELETE FROM mentions WHERE kind IN ({','.join('?' * len(kinds))})", kinds)
+        c.executemany("INSERT OR REPLACE INTO mentions VALUES (?, ?, ?, ?)", rows)
+
 def delete_mention(a: str, b: str, kind: str) -> None:
     a, b = _pair(a, b)
     with conn() as c:

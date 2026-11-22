@@ -2732,7 +2732,10 @@ def board_state() -> dict:
     for n in data["notes"]:
         if n["kind"] == "mission":
             m = missions[n["slug"]]
-            brief, article = _brief(m.slug), _article(m.slug)
+            try:
+                brief, article = _brief(m.slug), _article(m.slug)
+            except ValueError:             # an artifact from an older schema: show the note without it
+                brief = article = None
             thesis = brief.thesis if brief else m.brief_sources.thesis if m.brief_sources else ""
             sources = len(brief.sources) if brief else 0
             links = strung.get(n["id"], 0)
@@ -2771,8 +2774,11 @@ async def board_move(request: Request) -> JSONResponse:
         body = await request.json()
         prefix, _, slug = str(body["id"]).partition(":")
         kind = {"m": "mission", "e": "epic"}[prefix]
-        size = body.get("size")
-        note = board.move(kind, slug, float(body["x"]), float(body["y"]), None if size is None else float(size))
+        x, y, size = body["x"], body["y"], body.get("size")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x, y)) or \
+                (size is not None and (isinstance(size, bool) or not isinstance(size, (int, float)))):
+            raise ValueError("x, y and size must be numbers")
+        note = board.move(kind, slug, float(x), float(y), None if size is None else float(size))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(note.model_dump())
@@ -2848,11 +2854,14 @@ _MENTIONS_FOUND = False                    # an older desk's mentions are found 
 async def board_page(request: Request) -> Response:
     global _MENTIONS_FOUND
     if not _MENTIONS_FOUND:
-        await run_in_threadpool(board.find_all_mentions)
-        _MENTIONS_FOUND = True
+        _MENTIONS_FOUND = True             # once per start, even if it fails: the board shows without them
+        try:
+            await run_in_threadpool(board.find_all_mentions)
+        except Exception as e:
+            print(f"board: finding mentions failed ({type(e).__name__}: {e})", flush=True)
     data = await run_in_threadpool(board_state)
     focus = request.query_params.get("focus", "")
-    raw = json.dumps(data).replace("</", "<\\/")
+    raw = json.dumps(data).replace("<", "\\u003c")   # no "</script>" or "<!--" can end the data block
     empty = "" if data["notes"] else ('<p class="board-empty">Nothing on the board yet. '
                                       '<a href="/">Add a mission</a> and it shows up here.</p>')
     style = data["style"]
