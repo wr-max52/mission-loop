@@ -3,7 +3,7 @@ import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
-import activity, agents, clock, doctor, notify, orchestrator, store
+import activity, agents, clock, doctor, notify, orchestrator, settings, store
 from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
@@ -263,6 +263,10 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
         publisher.refresh_assets()         # the site's own copies of the scripts follow the code's
     url = f"http://127.0.0.1:{port}"
     print(f"Mission Loop UI: {url}  (Ctrl-C to quit)", flush=True)
+    if settings.mcp_share():               # Settings -> MCP server: shared on this network while the UI is open
+        import mcp_share
+        threading.Thread(target=lambda: print(f"MCP server: {mcp_share.start() or mcp_share.url()}", flush=True),
+                         daemon=True).start()
     if open_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
@@ -276,6 +280,22 @@ def _port_free(port: int) -> bool:
             return True
         except OSError:
             return False
+
+@app.command("mcp")
+def mcp_cmd(port: int = typer.Option(0, help="Port (default: the one on the Settings page, else 8780)")):
+    """Share every tool Researcher Chat has as one MCP server on this network (what Settings -> MCP server runs
+    beside the UI), in the foreground. Clients need the token shown on the Settings page."""
+    import uvicorn, mcp_share
+    port = port or settings.mcp_port()
+    if not mcp_share.port_free(port):
+        print(f"Port {port} is in use: the UI may already be sharing (Settings -> MCP server). "
+              f"Pick another: python run.py mcp --port {port + 1}", flush=True)
+        raise typer.Exit(1)
+    settings.mcp_token()                   # made now if it is the first time
+    host = mcp_share.lan_address()
+    print(f"MCP server: http://{host}:{port}{mcp_share.PATH}  (only this network; the token is on the Settings page "
+          f"under MCP server, or in {settings.MCP_TOKEN_FILE})  Ctrl-C to quit", flush=True)
+    uvicorn.run(mcp_share.build_app(), host=mcp_share.BIND, port=port, log_level="warning")
 
 @app.command("doctor")
 def doctor_cmd():
