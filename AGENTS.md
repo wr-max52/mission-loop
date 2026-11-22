@@ -14,7 +14,7 @@ That file is the citizen's whole identity (no recovery): never commit, print or 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 epics epic rename-epic`
-- Tests: `pytest -q` (expects 194 passed; no Ollama or network needed; any request to 1F916 fails the test)
+- Tests: `pytest -q` (expects 201 passed; no Ollama or network needed; any request to 1F916 fails the test)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -56,8 +56,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
     text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)
     and `site/feed.xml` (RSS 2.0) from the `meta.json` files, newest first, full text. Always on; reaching it is
-    what makes a mission DONE. Feed links are relative unless `MISSION_LOOP_SITE_URL` is set in `.env`; entry
-    ids are the slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
+    what makes a mission DONE. Feed links are relative unless a site address is set (the UI's Settings page
+    saves it in `data/settings.json`, which wins over `MISSION_LOOP_SITE_URL` in `.env`); entry ids are the
+    slugs either way. Each pass starts by giving older `meta.json` files their text and rebuilding.
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
     `CHANNELS` in `agents/__init__.py`). At the end of every pass `orchestrator.post_to_channels` gives each
     enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
@@ -85,7 +86,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
-the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`). `ui.py`
+the finder's inspiration line and to start, stop or wake the loop (a loop started there runs in the background and logs to `data/loop.log`).
+Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
+as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. While the loop runs, the UI highlights
 the agent working at that moment, read from `data/activity.json` (written by `activity.py`).
@@ -108,8 +111,8 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
-| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set `MISSION_LOOP_SITE_URL` once it is hosted |
-| Turn on 1F916 posting | `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
+| Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the site address on the Settings page once it is hosted |
+| Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

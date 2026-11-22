@@ -27,8 +27,8 @@ def rebuild_index(site: Path | None = None) -> Path:
     """site/index.html, feed.json and feed.xml, all from the same entries."""
     site = site or SITE
     found = entries(site)
-    (site / "feed.json").write_text(feed_json(found, settings.SITE_URL))
-    (site / "feed.xml").write_text(feed_xml(found, settings.SITE_URL))
+    (site / "feed.json").write_text(feed_json(found, settings.site_url()))
+    (site / "feed.xml").write_text(feed_xml(found, settings.site_url()))
     out = site / "index.html"
     out.write_text(index_html(found))
     return out

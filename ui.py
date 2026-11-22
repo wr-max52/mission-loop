@@ -5,7 +5,7 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import fcntl, hashlib, re, subprocess, sys, time
+import fcntl, hashlib, os, re, subprocess, sys, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -13,9 +13,10 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response
 from starlette.routing import Route, Mount
+from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, store
-from agents import f916
+from agents import f916, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 
@@ -44,6 +45,9 @@ MESSAGES = {
     "epic_moved": "Missions moved to that epic.",
     "epic_rejected": "Proposed epic rejected. Its missions went back to the epics the finder picked for them.",
     "epic_renamed": "Epic renamed. Published pages show the new name.",
+    "site_url_saved": "Site address saved. The feeds use full links now.",
+    "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
+    "joined": "Joined 1F916. Published articles post there from the next pass, one a day, newest first.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -55,6 +59,8 @@ ERRORS = {
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different, approved epic to move them to.",
+    "site_url": "The site address must be a full http:// or https:// address, or empty.",
+    "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
 }
 
 # ---------- loop status ----------
@@ -264,6 +270,9 @@ ICON_MISSIONS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/>
 ICON_SITE = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>'
              '<path d="M12 3c3 3 3.6 6 3.6 9s-.6 6-3.6 9c-3-3-3.6-6-3.6-9s.6-6 3.6-9z"/></svg>')
 
+ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/>'
+                 '<path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>')
+
 def nav_status() -> str:
     """The loop's state for the top bar. It only says Running while the loop really holds the lock."""
     if not loop_running():
@@ -290,7 +299,8 @@ setInterval(async () => {{
             f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a>{THEME_TOGGLE}</span></nav>'
+            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a>'
+            f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
             f"{body}</main>{script}</body></html>")
     return HTMLResponse(html)
 
@@ -363,8 +373,8 @@ def channel_names(m: Mission) -> str:
 def f916_status() -> str:
     """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
     if not agents.f916_enabled():
-        return ("1F916 is off: no key in data/1f916.json. "
-                "Join once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
+        return ('1F916 is off. Join on the <a href="/settings">Settings</a> page, '
+                "or once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
     queued, until, state = len(orchestrator.queue(f916)), f916.spent_until(), f916.load_state()
     if until and until > clock.now():
         when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
@@ -374,6 +384,80 @@ def f916_status() -> str:
     line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong>, one article a day, newest first · '
             f"{queued} queued · {when}")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
+
+# ---------- settings: the feed and channels ----------
+
+HANDLE = re.compile(r"[A-Za-z0-9_-]{2,32}")
+
+def settings_body(request: Request, error: str = "") -> str:
+    url, env = settings.site_url(), settings.SITE_URL
+    count = len(publisher.entries())
+    feeds = ('<a href="/site/feed.xml" target="_blank">site/feed.xml</a> (RSS) · '
+             '<a href="/site/feed.json" target="_blank">site/feed.json</a> (JSON Feed)')
+    hosted = escape(url.rstrip("/") + "/")
+    links = (f"Links in the feeds are full addresses under {hosted}; once the site is there, its feeds are "
+             f"{hosted}feed.xml and {hosted}feed.json." if url else
+             "No site address yet, so links in the feeds are relative to the feed file. "
+             "That works wherever the site folder is served.")
+    source = (' <span class="hint">(from MISSION_LOOP_SITE_URL in .env; saving here overrides it)</span>'
+              if env and not settings.saved().get("site_url") else "")
+    if agents.f916_enabled():
+        f916_row = f"<p>{f916_status()}</p>"
+    elif os.environ.get("MISSION_LOOP_STUBS") == "1":
+        f916_row = "<p>1F916 is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
+    else:
+        f916_row = """<p>Off. Joining makes a permanent, public citizen on <a href="https://1f916.ai" target="_blank" rel="noopener">1f916.ai</a>.
+Its secret key is saved to <code>data/1f916.json</code> on this machine only; there is no recovery if it is lost.</p>
+<form method="post" action="/settings/join-1f916" class="actions">
+  <label for="handle" style="margin-top:0">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
+  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="e.g. loop-desk">
+  <p><button>Join 1F916</button></p>
+</form>"""
+    err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
+    return f"""{err}<h1>Settings</h1>
+<h2 class="group">Feed</h2>
+<p>Every published article goes to the site and to its feeds, side by side. Channels post from the feed.</p>
+<p>{feeds} · {count} article{"" if count == 1 else "s"}</p>
+<form method="post" action="/settings/site-url" class="actions">
+  <label for="site_url" style="margin-top:0">Site address{source} <span class="hint">optional: where the site is hosted, e.g. https://example.com/news/. Leave empty while it is only on this machine.</span></label>
+  <input type="text" id="site_url" name="site_url" maxlength="300" value="{escape(settings.saved().get("site_url", ""), quote=True)}" placeholder="{escape(env or "https://example.com/news/", quote=True)}">
+  <p class="hint">{links}</p>
+  <p><button>Save site address</button></p>
+</form>
+<h2 class="group">Channels</h2>
+<h3>Local site and feeds</h3><p>Always on.</p>
+<h3>1F916</h3>{f916_row}"""
+
+async def settings_page(request: Request) -> HTMLResponse:
+    return page("Settings", settings_body(request))
+
+async def save_site_url(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        url = settings.set_site_url(str(form.get("site_url") or "")[:300])
+    except ValueError:
+        return go("/settings", error="site_url")
+    orchestrator.refresh_feed()            # the feeds pick up the new address right away
+    return go("/settings", done="site_url_saved" if url else "site_url_cleared")
+
+async def join_1f916(request: Request) -> Response:
+    """The same registration as `python run.py join-1f916`, which saves the key before anything else."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    handle = str((await request.form()).get("handle") or "").strip()
+    if not HANDLE.fullmatch(handle):
+        return go("/settings", error="handle")
+    from agents.llm import MODEL
+    try:
+        await run_in_threadpool(f916.register, handle, MODEL)
+    except (FileExistsError, RuntimeError) as e:
+        return page("Settings", settings_body(request, f"1F916 did not join: {e}"))
+    if loop_running():
+        wake()
+    return go("/settings", done="joined")
 
 
 # ---------- epics ----------
@@ -770,6 +854,9 @@ app = Starlette(routes=[
     Route("/", home),
     Route("/missions", add_mission, methods=["POST"]),
     Route("/inspiration", save_inspiration, methods=["POST"]),
+    Route("/settings", settings_page),
+    Route("/settings/site-url", save_site_url, methods=["POST"]),
+    Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
