@@ -182,6 +182,11 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                     f'<a href="{escape(s.url)}">{escape(s.title)}</a>'
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
+    body.append(f'<p class="note">{check_note(a, brief_checked, article_checked)}</p></article>')
+    return _page(a.title, "\n".join(body), home)
+
+def check_note(a: Article, brief_checked: bool = True, article_checked: bool = True) -> str:
+    """What was and wasn't checked, for the foot of every published copy of an article."""
     sources_note = ("Every source above was fetched and its quote matched against the page by code. "
                     if brief_checked else
                     "The research failed the automated source check, so sources or quotes above may be wrong. ")
@@ -194,9 +199,33 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                               "their sources were checked, but the possibility itself was not confirmed. "
                               if brief_checked else
                               "Passages labeled as possibilities are informed inferences, not verified facts. ")
-    body.append(f'<p class="note">{sources_note}{article_note}{possibilities_note}'
-                "A human approved the research and reviewed this article before it was published.</p></article>")
-    return _page(a.title, "\n".join(body), home)
+    return (f"{sources_note}{article_note}{possibilities_note}"
+            "A human approved the research and reviewed this article before it was published.")
+
+def article_text(b: ResearchBrief, a: Article, brief_checked: bool = True, article_checked: bool = True) -> str:
+    """The article as plain text for channels that take a text post. Citations become [1], [2] with the
+    same numbers as the site, and the numbered sources follow the text. No length limit here."""
+    nums = _source_numbers(b, a)
+
+    def cite(match) -> str:
+        ids = [i.strip() for i in match.group(1).split(",")]
+        return "".join(f"[{nums[i]}]" for i in ids if i in nums)
+
+    def para(text: str) -> str:
+        return POSSIBILITY.sub(lambda m: f"[{POSSIBILITY_LABEL}] {m.group(0)}", CITATION.sub(cite, text))
+
+    lines = [a.dek, ""]
+    if not (brief_checked and article_checked):
+        lines += ["[Failed automated checks: see the note at the end.]", ""]
+    for sec in a.sections:
+        lines += [f"## {sec.heading}", ""]
+        for p in sec.paragraphs:
+            lines += [para(p), ""]
+    lines += ["## Sources", ""]
+    for s in sorted(b.sources, key=lambda s: nums[s.id]):
+        lines += [f"[{nums[s.id]}] ({s.stance}) {s.title}: {s.url}", f'    "{s.quote}"']
+    lines += ["", check_note(a, brief_checked, article_checked)]
+    return "\n".join(lines)
 
 def index_html(entries: list[dict]) -> str:
     """entries: dicts with slug, title, dek, published_at (ISO string), newest first."""

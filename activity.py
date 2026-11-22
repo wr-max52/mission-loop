@@ -18,6 +18,7 @@ AGENTS = {                                 # in pipeline order
     "writer": "Article writer",
     "article_check": "Article checker",
     "publisher": "Publisher",
+    "1f916": "1F916 poster",               # posts published articles, one a day, newest first
 }
 
 def begin(slug: str, agent: str) -> None:

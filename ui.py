@@ -14,7 +14,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
-import activity, clock, orchestrator, settings, store
+import activity, agents, clock, orchestrator, settings, store
+from agents import f916
 from contracts import Mission, State, ResearchBrief, Article, slugify
 from render import CSS, brief_html, THEME_INIT, THEME_TOGGLE
 
@@ -289,7 +290,8 @@ def agent_strip(now: dict | None) -> str:
     chips = [f'<span class="agent on" aria-current="step">{name}</span>' if key == working
              else f'<span class="agent">{name}</span>'
              for key, name in activity.AGENTS.items()
-             if key != "contacts" or settings.OUTREACH or key == working]
+             if key == working or (key != "contacts" or settings.OUTREACH)
+             and (key != "1f916" or agents.f916_enabled())]
     strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
     if now and not now["slug"]:            # the mission finder works for the desk, not one mission
         status = (f'<strong>{activity.AGENTS[working]}</strong> is looking for new missions'
@@ -332,12 +334,35 @@ def finder_panel() -> str:
   <p><button>Save inspiration</button></p>
 </form>"""
 
+def channel_names(m: Mission) -> str:
+    """Where a published mission went, e.g. "Local site, 1F916" or "Local site · 1F916 queued #2"."""
+    names = ", ".join(orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m))
+    if agents.f916_enabled() and "1f916" not in m.channels:
+        slugs = [q.slug for q in orchestrator.f916_queue()]
+        names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
+    return names
+
+def f916_status() -> str:
+    """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
+    if not agents.f916_enabled():
+        return ("1F916 is off: no key in data/1f916.json. "
+                "Join once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
+    queued, until, state = len(orchestrator.f916_queue()), f916.spent_until(), f916.load_state()
+    if until and until > clock.now():
+        when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
+    else:
+        when = "can post on the next pass" if queued else "nothing waiting"
+    problem = state.get("note", "") if not state.get("spent_until") else ""
+    line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong>, one article a day, newest first · '
+            f"{queued} queued · {when}")
+    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
 def card(m: Mission, now: dict | None = None) -> str:
     color = tone(m)
     working = working_on(m, now)
     sub = working or next_step(m)
     if m.state == State.DONE and m.published_at:
-        sub = f"Published {m.published_at:%b %-d, %Y}"
+        sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
@@ -356,7 +381,10 @@ async def home(request: Request) -> HTMLResponse:
         body.append('<p class="muted">No missions yet. Add one below.</p>')
     for title, ms in groups:
         if ms:
-            body.append(f'<h2 class="group">{title} ({len(ms)})</h2>' + "".join(card(m, now) for m in ms))
+            body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
+            if title == "Published":
+                body.append(f'<p class="muted">{f916_status()}</p>')
+            body.append("".join(card(m, now) for m in ms))
     body.append("""<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
   <label for="topic">Topic <span class="hint">what to research, in one line</span></label>
@@ -390,7 +418,9 @@ def actions_for(m: Mission) -> str:
         return (f'<div class="actions"><div class="buttons">'
                 f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
                 f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
-                f'</div><p class="hint">Publishing writes it to the local site (site/{escape(m.slug)}/).</p>'
+                f'</div><p class="hint">Publishing writes it to the local site (site/{escape(m.slug)}/)'
+                + (" and queues it for 1F916, which takes one post a day, newest first." if agents.f916_enabled()
+                   else ".") + "</p>"
                 + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings.")
                 + "</div>")
     if m.state == State.PARKED:
@@ -408,8 +438,26 @@ def actions_for(m: Mission) -> str:
                 f'below so the agent can learn from them. {push_hint}</p></div>')
     if m.state == State.DONE:
         return (f'<div class="actions"><div class="buttons">'
-                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the published site</a></div></div>')
+                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the published site</a></div>'
+                f'{channels_html(m)}</div>')
     return ""
+
+def channels_html(m: Mission) -> str:
+    rows = []
+    for key, post in orchestrator.channels(m).items():
+        name = escape(orchestrator.CHANNEL_NAMES.get(key, key))
+        where = escape(post.where)
+        link = (f'<a href="{where}" target="_blank" rel="noopener">{where}</a>' if post.where.startswith("https://")
+                else f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>')
+        rows.append(f"<li>{name}: {link} · {post.at:%b %-d, %Y %H:%M} UTC</li>")
+    if agents.f916_enabled() and "1f916" not in m.channels:
+        slugs = [q.slug for q in orchestrator.f916_queue()]
+        place = f"#{slugs.index(m.slug) + 1} of {len(slugs)}" if m.slug in slugs else "queued"
+        rows.append(f"<li>1F916: waiting, {place} in the queue (one post a day, newest first)</li>")
+    if m.channel_errors.get("1f916"):
+        rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
+                    "It stays queued behind the others.</li>")
+    return f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul>{"".join(rows)}</ul>'
 
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]

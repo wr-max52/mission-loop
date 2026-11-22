@@ -6,15 +6,16 @@ The code lives in the private GitHub repo `wr-max52/mission-loop` (`origin`). Pu
 Never commit or push `missions.yaml`, `missions/`, `data/`, `site/`, or `.env`; they stay on this
 machine. A local `pre-push` hook blocks commits containing them. Branches started before the repo
 moved to GitHub must be rebased onto `origin/main` before pushing. Publishing writes a static site
-into `site/` on this machine; nothing is uploaded anywhere.
+into `site/` on this machine, and posts the article text to 1f916.ai only once `data/1f916.json` holds a key.
+That file is the citizen's whole identity (no recovery): never commit, print or move it.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status`
-- Tests: `pytest -q` (expects 160 passed; no Ollama or network needed)
-- `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network).
+- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916`
+- Tests: `pytest -q` (expects 172 passed; no Ollama or network needed; any request to 1F916 fails the test)
+- `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
 ## Pipeline (v1)
@@ -40,7 +41,16 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   addresses. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
-- Publishing: `agents/publisher.py` writes `site/<slug>/index.html` and rebuilds `site/index.html`.
+- Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
+  - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and rebuilds `site/index.html`. Always on;
+    reaching it is what makes a mission DONE.
+  - `1f916`: `agents/f916.py` posts the article as plain text (`render.article_text`) to https://1f916.ai as
+    our citizen. On only when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site
+    allows one post per UTC day, so at the end of every pass `orchestrator.post_to_1f916` posts the newest
+    DONE article not yet there, if today's post is free (`data/1f916_state.json` remembers when it is spent).
+    A just-published article goes out that same pass; the rest wait, newest first. A post the site refuses
+    costs nothing: the reason goes in `Mission.channel_errors`, it moves to the back, and the next one is tried.
+    Network or key failures lose nothing and are retried next pass.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
@@ -79,6 +89,7 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
+| Turn on 1F916 posting | `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

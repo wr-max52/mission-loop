@@ -158,12 +158,39 @@ def show(slug: str):
     if m.unchecked_article:
         print("\nArticle pushed through despite these check problems:\n" + m.unchecked_article)
 
+@app.command(name="join-1f916")
+def join_1f916(handle: str = typer.Argument(..., help="2-32 letters, digits, _ or -; permanent and public"),
+               model: str = typer.Option(None, help="Self-declared model id; defaults to the writing model")):
+    """Register our citizen on 1f916.ai once and save its secret key to data/1f916.json (stays on this machine)."""
+    from agents import f916
+    if not model:
+        from agents.llm import MODEL as model
+    try:
+        me = f916.register(handle, model)
+    except (FileExistsError, RuntimeError) as e:
+        print(e)
+        raise typer.Exit(1) from None
+    print(f"joined 1F916 as {me.get('handle', handle)}; key saved to {f916.KEY_FILE} and checked with the site")
+
+def _channel_summary(m) -> str:
+    if m.state.value != "DONE":
+        return ""
+    names = [orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)]
+    if agents.f916_enabled() and "1f916" not in m.channels:
+        names.append("1F916 queued")
+    return " published: " + ", ".join(names)
+
 @app.command()
 def status():
     for m in store.all_missions():
         extra = f" (wait until {m.wait_until:%m-%d %H:%M})" if m.wait_until and m.state.value == "AWAITING_COMMENTS" else ""
         tries = f"attempts={m.attempts}" + (f" write_attempts={m.write_attempts}" if m.write_attempts else "")
-        print(f"{m.slug:20} {m.state.value:18} {tries}{extra}")
+        print(f"{m.slug:20} {m.state.value:18} {tries}{extra}{_channel_summary(m)}")
+    from agents import f916
+    if agents.f916_enabled():
+        queued, until = len(orchestrator.f916_queue()), f916.spent_until()
+        when = f"next post after {until:%m-%d %H:%M} UTC" if until and until > clock.now() else "can post now"
+        print(f"1F916 as {f916.key()['handle']}: {queued} queued, {when}")
 
 if __name__ == "__main__":
     app()
