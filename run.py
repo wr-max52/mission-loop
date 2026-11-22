@@ -40,14 +40,58 @@ def init(path: str = "missions.yaml"):
     store.init()
     for item in yaml.safe_load(Path(path).read_text()) or []:
         if not store.get_mission(item["slug"]):
-            store.save_mission(Mission(**item))
+            epic = _epic(item.pop("epic", "") or "")   # missions.yaml names the epic by title
+            store.save_mission(Mission(**item, epic=epic))
             print(f"added {item['slug']}")
+
+def _epic(name: str) -> str:
+    """The slug of the epic with this title, made if new. Blank means no epic."""
+    try:
+        return store.create_epic(name).slug if name.strip() else ""
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
 
 @app.command()
 def add(slug: str, topic: str, objective: str = "",
+        epic: str = typer.Option("", help="Epic title (1 to 4 words); a new name makes a new epic"),
         wait_hours: float = typer.Option(48, help="Comment wait after outreach (skipped when no one is emailed)")):
     store.init()
-    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, wait_hours=wait_hours))
+    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=_epic(epic), wait_hours=wait_hours))
+
+@app.command()
+def epics():
+    """List epics with their mission counts. Proposed ones wait for you in the UI."""
+    store.init()
+    missions = store.all_missions()
+    for e in store.all_epics():
+        n = sum(m.epic == e.slug for m in missions)
+        print(f"{e.title:32} {n:3} missions{'  (proposed)' if e.status == 'proposed' else ''}")
+    loose = sum(not m.epic for m in missions)
+    if loose:
+        print(f"{'(no epic)':32} {loose:3} missions")
+
+@app.command()
+def epic(slug: str, title: str = typer.Argument(..., help='Epic title; a new name makes a new epic; "" clears it')):
+    """Put a mission in an epic."""
+    m = store.get_mission(slug)
+    if not m:
+        raise typer.BadParameter(f"no mission {slug}")
+    _epic(title)                           # validate first
+    orchestrator.assign_epic(m, title, clock.now())
+    print(f"{slug} -> {title or 'no epic'}")
+
+@app.command("rename-epic")
+def rename_epic(name: str, title: str):
+    """Rename an epic (by its current title or slug). Published pages are redrawn with the new name."""
+    e = store.find_epic(name)
+    if not e:
+        raise typer.BadParameter(f"no epic {name}")
+    try:
+        orchestrator.rename_epic(e.slug, title, clock.now())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"{e.title} -> {title}")
 
 @app.command()
 def inspire(line: str = typer.Argument(None, help='The new line; "" clears it and turns the finder off')):
@@ -185,7 +229,7 @@ def status():
     for m in store.all_missions():
         extra = f" (wait until {m.wait_until:%m-%d %H:%M})" if m.wait_until and m.state.value == "AWAITING_COMMENTS" else ""
         tries = f"attempts={m.attempts}" + (f" write_attempts={m.write_attempts}" if m.write_attempts else "")
-        print(f"{m.slug:20} {m.state.value:18} {tries}{extra}{_channel_summary(m)}")
+        print(f"{m.slug:20} {m.state.value:18} {tries}{extra}{_channel_summary(m)}{'  [' + m.epic + ']' if m.epic else ''}")
     from agents import f916
     if agents.f916_enabled():
         queued, until = len(orchestrator.f916_queue()), f916.spent_until()

@@ -16,8 +16,8 @@ from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, store
 from agents import f916
-from contracts import Mission, State, ResearchBrief, Article, slugify
-from render import CSS, brief_html, THEME_INIT, THEME_TOGGLE
+from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
+from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -39,6 +39,11 @@ MESSAGES = {
     "started": "Loop started.",
     "stopping": "Stop requested. The loop finishes its current task, then exits.",
     "woken": "The loop runs a pass now.",
+    "epic_set": "Epic saved.",
+    "epic_approved": "New epic approved.",
+    "epic_moved": "Missions moved to that epic.",
+    "epic_rejected": "Proposed epic rejected. Its missions went back to the epics the finder picked for them.",
+    "epic_renamed": "Epic renamed. Published pages show the new name.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -47,6 +52,9 @@ ERRORS = {
     "notes": "Say what needs fixing so the agent can act on it.",
     "state": "That mission isn't waiting for that action any more.",
     "running": "The loop is already running.",
+    "epic": "An epic title is 1 to 4 words.",
+    "epic_exists": "There is already an epic with that name.",
+    "epic_target": "Pick a different, approved epic to move them to.",
 }
 
 # ---------- loop status ----------
@@ -148,6 +156,7 @@ def signature() -> str:
     """Changes whenever anything the dashboard shows changes; the page polls it to refresh itself."""
     with store.conn() as c:
         rows = c.execute("SELECT data FROM missions ORDER BY rowid").fetchall()
+        rows += c.execute("SELECT slug || title || status AS data FROM epics ORDER BY rowid").fetchall()
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
     now = running_now()
     working = f'{now["slug"]}:{now["agent"]}' if now else ""
@@ -232,6 +241,15 @@ table.events td { border-bottom:1px solid var(--rule); padding:.4rem .5rem .4rem
 table.events td.when { color:var(--muted); white-space:nowrap; }
 details summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
 .muted { color:var(--muted); }
+.card .sub .epic { margin-right:.35rem; }
+.epic-review { border-style:dashed; border-color:var(--muted); }
+.epic-review ul { margin:.4rem 0 .8rem; padding-left:1.2rem; }
+.epic-review .buttons form { display:flex; gap:.4rem; align-items:center; margin:0; }
+.epic-review input[type=text], .epic-review select { width:auto; min-width:10rem; }
+select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); border-radius:8px;
+         background:var(--bg); color:var(--fg); }
+form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
+form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
 """
 
 ELAPSED_JS = """<script>
@@ -357,7 +375,59 @@ def f916_status() -> str:
             f"{queued} queued · {when}")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
 
-def card(m: Mission, now: dict | None = None) -> str:
+
+# ---------- epics ----------
+
+def mission_pill(m: Mission, epics: dict[str, Epic]) -> str:
+    e = epics.get(m.epic)
+    return epic_pill(e.title, proposed=e.status == "proposed") if e else ""
+
+def epic_datalist() -> str:
+    """Suggestions for every epic field: pick an approved epic, or type a new name."""
+    options = "".join(f'<option value="{escape(e.title, quote=True)}">' for e in store.all_epics("active"))
+    return f'<datalist id="epic-names">{options}</datalist>'
+
+def epic_proposals(missions: list[Mission]) -> str:
+    """The finder's proposed epics, each waiting for the human to approve, rename, redirect or reject it."""
+    active = store.all_epics("active")
+    epics = {e.slug: e for e in store.all_epics()}
+    out = []
+    for e in store.all_epics("proposed"):
+        ms = [m for m in missions if m.epic == e.slug]
+        slug = quote(e.slug)
+        items = "".join(f'<li><a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>'
+                        + (f' <span class="hint">· if rejected: {escape(epics[m.epic_fallback].title)}</span>'
+                           if m.epic_fallback in epics else ' <span class="hint">· if rejected: no epic</span>')
+                        + "</li>" for m in ms)
+        move = ""
+        if active:
+            options = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>' for a in active)
+            move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="Existing epic">'
+                    f'{options}</select><button>Move them there</button></form>')
+        out.append(
+            f'<div class="actions epic-review"><p style="margin-top:0">{epic_pill(e.title, proposed=True)} '
+            f'The mission finder proposes a new epic for {len(ms)} missions:</p><ul>{items}</ul>'
+            f'<div class="buttons"><form method="post" action="/epics/{slug}/approve">'
+            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
+            f'<button class="primary">Approve epic</button></form>{move}'
+            f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form></div>'
+            f'<p class="hint">Edit the name before approving to rename it. Reject puts each mission back in the '
+            f'existing epic the finder picked for it.</p></div>')
+    return "".join(out)
+
+def epic_list(missions: list[Mission]) -> str:
+    active = store.all_epics("active")
+    if not active:
+        return ""
+    rows = "".join(
+        f'<form method="post" action="/epics/{quote(e.slug)}/rename" class="inline">'
+        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
+        f'<span class="hint">{sum(m.epic == e.slug for m in missions)} missions</span><button>Rename</button></form>'
+        for e in active)
+    return f'<details><summary>Epics ({len(active)})</summary>{rows}</details>'
+
+def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = None) -> str:
+    epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
     working = working_on(m, now)
     sub = working or next_step(m)
@@ -366,7 +436,7 @@ def card(m: Mission, now: dict | None = None) -> str:
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
+            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
 
 # ---------- pages ----------
 
@@ -376,7 +446,11 @@ async def home(request: Request) -> HTMLResponse:
               ("In progress", [m for m in missions if not needs_you(m) and m.state != State.DONE]),
               ("Published", [m for m in missions if m.state == State.DONE])]
     now = running_now()
+    epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request), loop_panel("/"), finder_panel()]
+    proposals = epic_proposals(missions)
+    if proposals:
+        body.append('<h2 class="group">New epic proposed</h2>' + proposals)
     if not missions:
         body.append('<p class="muted">No missions yet. Add one below.</p>')
     for title, ms in groups:
@@ -384,8 +458,9 @@ async def home(request: Request) -> HTMLResponse:
             body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
             if title == "Published":
                 body.append(f'<p class="muted">{f916_status()}</p>')
-            body.append("".join(card(m, now) for m in ms))
-    body.append("""<h2 class="group">New mission</h2>
+            body.append("".join(card(m, now, epics) for m in ms))
+    body.append(epic_list(missions))
+    body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
   <label for="topic">Topic <span class="hint">what to research, in one line</span></label>
   <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">
@@ -393,6 +468,8 @@ async def home(request: Request) -> HTMLResponse:
   <textarea id="objective" name="objective" rows="4"></textarea>
   <label for="slug">Short name <span class="hint">optional; made from the topic if left blank</span></label>
   <input type="text" id="slug" name="slug" placeholder="transit-levy">
+  <label for="epic">Epic <span class="hint">optional: pick one, or type a new name of 1 to 4 words</span></label>
+  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="e.g. Fed Policy Capture">
   <p><button class="primary">Add mission</button></p>
 </form>""")
     tail = log_tail()
@@ -464,8 +541,10 @@ async def mission(request: Request) -> Response:
     m = store.get_mission(slug)
     if not m:
         return page("Not found", '<h1>No such mission</h1><p><a href="/">Back to missions</a></p>')
+    epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request),
-            f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> <span class="muted">{escape(m.slug)}</span></p>',
+            f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
+            f'<span class="muted">{escape(m.slug)}</span></p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
         body.append(f'<p class="muted">{escape(m.objective)}</p>')
@@ -473,6 +552,13 @@ async def mission(request: Request) -> Response:
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
     body.append(actions_for(m))
+    current = epics.get(m.epic)
+    hint = " (proposed; approve it on the home page)" if current and current.status == "proposed" else ""
+    body.append(f'{epic_datalist()}<form method="post" action="/m/{quote(slug)}/epic" class="inline">'
+                f'<label for="epic" style="margin:0">Epic<span class="hint">{hint}</span></label>'
+                f'<input type="text" id="epic" name="epic" list="epic-names" maxlength="48" '
+                f'value="{escape(current.title if current else "", quote=True)}" placeholder="none">'
+                f'<button>Save epic</button></form>')
 
     if m.validator_notes:
         title = "Why it was parked" if m.state == State.PARKED else \
@@ -583,6 +669,12 @@ async def act(request: Request) -> Response:
         except ValueError:
             return go(here, error="state")
         done = "pushed"
+    elif action == "epic":
+        name = str(form.get("epic") or "")
+        if name.strip() and not epic_title(name):
+            return go(here, error="epic")
+        orchestrator.assign_epic(m, name, now)
+        return go(here, done="epic_set")    # nothing for the loop to do
     else:
         return PlainTextResponse("Unknown action.", status_code=404)
     if loop_running():
@@ -602,7 +694,11 @@ async def add_mission(request: Request) -> Response:
         return go("/", error="slug")
     if store.get_mission(slug):
         return go("/", error="exists")
-    store.save_mission(Mission(slug=slug, topic=topic, objective=objective))
+    name = str(form.get("epic") or "")
+    if name.strip() and not epic_title(name):
+        return go("/", error="epic")
+    epic = store.create_epic(name).slug if name.strip() else ""
+    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=epic))
     store.log_event(slug, clock.now(), "", State.QUEUED.value, "added in the UI")
     if loop_running():
         wake()
@@ -616,6 +712,36 @@ async def save_inspiration(request: Request) -> Response:
     if line and loop_running():
         wake()
     return go("/", done="inspired" if line else "uninspired")
+
+async def epic_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    slug, action = request.path_params["slug"], request.path_params["action"]
+    if not store.get_epic(slug):
+        return PlainTextResponse("No such epic.", status_code=404)
+    form, now = await request.form(), clock.now()
+    title = str(form.get("title") or "")
+    if action in ("approve", "rename") and not epic_title(title):
+        return go("/", error="epic")
+    try:
+        if action == "approve":
+            orchestrator.approve_epic(slug, title, now)
+            done = "epic_approved"
+        elif action == "merge":
+            orchestrator.merge_epic(slug, str(form.get("into") or ""), now)
+            done = "epic_moved"
+        elif action == "reject":
+            orchestrator.reject_epic(slug, now)
+            done = "epic_rejected"
+        elif action == "rename":
+            orchestrator.rename_epic(slug, title, now)
+            done = "epic_renamed"
+        else:
+            return PlainTextResponse("Unknown action.", status_code=404)
+    except ValueError as e:
+        return go("/", error="epic_exists" if "already" in str(e) else
+                  "epic_target" if action == "merge" else "state")
+    return go("/", done=done)
 
 async def loop_action(request: Request) -> Response:
     if not same_origin(request):
@@ -647,6 +773,7 @@ app = Starlette(routes=[
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
+    Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),

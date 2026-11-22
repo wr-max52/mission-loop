@@ -13,8 +13,8 @@ That file is the citizen's whole identity (no recovery): never commit, print or 
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916`
-- Tests: `pytest -q` (expects 172 passed; no Ollama or network needed; any request to 1F916 fails the test)
+- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 epics epic rename-epic`
+- Tests: `pytest -q` (expects 187 passed; no Ollama or network needed; any request to 1F916 fails the test)
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -33,12 +33,23 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   most 3, each resting on a URL the searches returned and not too close to an existing topic. They are
   queued and researched in the same pass, and still go through human brief review. A finder failure is
   logged and never stops the pass.
+- Epics: every mission can sit in one epic, a 1 to 4 word thematic title for a long-running line of
+  inquiry (`epics` table; `Mission.epic` is its slug, which never changes when the title does). Humans
+  name an epic when adding a mission; a new name makes a new, active epic. The finder sees each active
+  epic with a few of its topics and must give every mission the best existing fit. It may also propose
+  a new epic, but code keeps that only when 2+ missions from the same pass share it; the proposal then
+  waits on the UI home page (approve, rename and approve, move to another epic, or reject, which puts
+  each mission back in the finder's best fit, `Mission.epic_fallback`). Epics show as pills on the
+  board and the published site (approved epics only); renaming redraws the published pages.
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`.
   A small model (`MISSION_LOOP_SEARCH_MODEL`, default `bonsai-2:4b`) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`), then the main model (`MISSION_LOOP_MODEL`) writes the
   brief from whatever was found. `page_tools.py` adds `find_in_page` (exact sentences from the text
   the validator checks) and `page_links` (a page's links to other sites), and requests only public
-  addresses. With outreach on, a second small-model run
+  addresses. `related.py` (code, no model) adds up to 3 published articles most like the mission by
+  word overlap, any epic (its own epic ranks a little higher), with the possibilities they left open
+  and the pages they cited. They are background only: the site never leaves this machine, so they
+  can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
 - Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
@@ -78,6 +89,9 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 |---|---|
 | Open the UI | `python run.py ui` → http://127.0.0.1:8770 |
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |
+| Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
+| See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
+| Approve a proposed epic | the "New epic proposed" panel on the UI home page |
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it off) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |

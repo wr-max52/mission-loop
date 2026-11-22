@@ -40,11 +40,29 @@ class Mission(BaseModel):
     published_at: datetime | None = None
     channels: dict[str, ChannelPost] = {}  # channel key ("site", "1f916") -> where it was published
     channel_errors: dict[str, str] = {}    # channel key -> why its last try refused this article
+    epic: str = ""                         # slug of the epic this mission belongs to ("" = none yet)
+    epic_fallback: str = ""                # finder's best existing epic, used if its proposed new epic is rejected
+
+class Epic(BaseModel):
+    """A long-running line of inquiry: a short thematic title, not a goal. The missions in it describe it,
+    so its meaning can drift. The slug never changes; the title can."""
+    slug: str
+    title: str
+    status: Literal["active", "proposed"] = "active"   # proposed = suggested by the finder, awaiting the human
+
+MAX_EPIC_WORDS = 4
+
+def epic_title(text: str) -> str:
+    """The title cleaned to one line, or "" if it isn't a usable epic title (1 to MAX_EPIC_WORDS words)."""
+    title = " ".join(text.split()).strip(" .,:;-")
+    return title if title and len(title.split()) <= MAX_EPIC_WORDS and len(title) <= 48 else ""
 
 class MissionIdea(BaseModel):
     topic: str
     objective: str
     source_url: str                        # a search result showing the claim is really being made
+    epic: str = ""                         # title of the existing epic it fits best
+    new_epic: str = ""                     # a proposed new epic; kept only if 2+ ideas share it
 
 class Claim(BaseModel):
     text: str
@@ -107,6 +125,10 @@ POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
 def slugify(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())
     return "-".join(words[:5])[:60].strip("-")
+
+def words(text: str) -> set[str]:
+    """Meaningful words (longer than 3 letters), for cheap topic overlap checks."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
 
 def cited_ids(text: str) -> list[str]:
     return [i.strip() for group in CITATION.findall(text) for i in group.split(",")]
