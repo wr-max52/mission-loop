@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 683 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 684 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -465,7 +465,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   each server start (`find_all_mentions`: each mission read once, pairs checked once, one transaction; an artifact
   that won't load is skipped); and `background` (research was shown a related
   published article, recorded by `related.similar_block`). `assets/board.js` draws it (no library: one CSS
-  transform for pan and zoom, strings in SVG): wheel or pinch zooms round the pointer, every fit glides, a drag moves
+  transform for pan and zoom, strings in SVG, kept cheap so a zoomed board never shows flat patches: one shadow or
+  glow on the whole strings layer, sized to the strings, never one per string; the laser pulse fades that layer, never
+  each string; strings are kept and only moved ones rewritten; the view's `--gx/--gy/--gz` don't inherit; a look that
+  didn't change draws nothing): wheel or pinch zooms round the pointer, every fit glides, a drag moves
   a note and its corner resizes it (`POST /board/move`, saved `by="human"`; only a resize fixes the size; the Theorist's board turn may move it later), a
   mission note opens a preview (title, thesis or objective, stage, a link to its page), and an epic note picks it:
   the bar at the top shows its missions and a degree selector (1 = its own missions, each step adds what is one more

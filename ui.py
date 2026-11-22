@@ -3410,17 +3410,26 @@ async def board_page(request: Request) -> Response:
             f'<div class="board-legend"><span><i class="e"></i>Epic</span><span><i class="l"></i>Link</span>'
             f'<span><i class="m"></i>Same source or mention</span></div>'
             f'<div class="board-zoom"></div>'
-            f'<div class="board-tools"><button type="button" data-tool="out" title="Zoom out" aria-label="Zoom out">−</button>'
-            f'<button type="button" data-tool="in" title="Zoom in" aria-label="Zoom in">+</button>'
-            f'<button type="button" data-tool="fit" title="Fit everything" aria-label="Fit everything">'
-            f'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>'
+            f'<div class="board-tools"><button type="button" data-tool="out" title="Zoom out" aria-label="Zoom out">{ICON_ZOOM_OUT}</button>'
+            f'<button type="button" data-tool="in" title="Zoom in" aria-label="Zoom in">{ICON_ZOOM_IN}</button>'
+            f'<button type="button" data-tool="fit" title="Fit everything" aria-label="Fit everything">{ICON_FIT}</button>'
             f'<button type="button" data-tool="style" title="Board style" aria-label="Board style" '
             f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
             f'</div><script type="application/json" id="board-data">{raw}</script>'
             f'{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
     return page("Board", body)
 
+# The board's tools are drawn, not typed: a "−" or "+" glyph sits on its font's baseline, never in the middle.
+ICON_ZOOM_OUT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>'
+ICON_ZOOM_IN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg>'
+ICON_FIT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>'
+
 BOARD_CSS = """
+/* the view's offsets and zoom, which only a moving surface's own background reads: never inherited, so moving the
+   view restyles the board alone, not its hundreds of notes and strings */
+@property --gx { syntax:"<length>"; inherits:false; initial-value:0px; }
+@property --gy { syntax:"<length>"; inherits:false; initial-value:0px; }
+@property --gz { syntax:"<number>"; inherits:false; initial-value:1; }
 body:has(.board-wrap) { overflow-x:hidden; }
 body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap { --string:#c0242b; position:relative; width:calc(100vw - 2rem); margin-left:calc(50% - 50vw + 1rem);
@@ -3437,14 +3446,16 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
   box-shadow:inset 0 0 0 12px #6e4a2a, inset 0 0 0 14px #4c321b, inset 0 0 60px rgba(0,0,0,.35); }
 .board-wrap:active { cursor:grabbing; }
 .board-wrap .world { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
-.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible; }
+.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible;   /* board.js sizes it */
+  filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }       /* one shadow for every string, never one each */
 .board-wrap .str path { fill:none; stroke-linecap:round; }
-.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }
+.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; }
 .board-wrap .str.link .line { stroke-width:1.8; }
 .board-wrap .str.mention .line { stroke-width:1.3; stroke-dasharray:5 4; opacity:.8; }
 .board-wrap .str .hit { stroke:transparent; stroke-width:12; pointer-events:stroke; }
 .board-wrap .str.epic .hit { pointer-events:none; }
 .board-wrap .faded { opacity:.2; filter:saturate(.3); transition:opacity .3s; }
+.board-wrap .str.faded { filter:none; }                     /* the strings are one colour: fading is enough */
 .board-wrap .note { border:none; margin:0; }                /* not the site's .note */
 .board-wrap .note { --s:1; position:absolute; transform:translate(-50%,-50%) rotate(var(--r,0deg));
   width:calc(160px * var(--s)); padding:calc(20px * var(--s)) calc(13px * var(--s)) calc(11px * var(--s));
@@ -3524,9 +3535,9 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-zoom { position:absolute; right:206px; top:36px; font:600 11px system-ui, sans-serif; color:rgba(255,255,255,.9);
   text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:3; }
 .board-tools { position:absolute; right:24px; top:24px; display:flex; gap:6px; z-index:3; }
-.board-tools button { width:38px; height:38px; border:none; display:grid; place-items:center; font:600 18px system-ui, sans-serif;
-  color:var(--fg); cursor:pointer; }
-.board-tools svg { width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; }
+.board-tools button { width:38px; height:38px; padding:0; border:none; display:grid; place-items:center; line-height:0;
+  color:var(--fg); cursor:pointer; }                         /* padding:0: the app's button padding pushed icons off centre */
+.board-tools svg { display:block; width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; stroke-linecap:round; }
 .board-empty { position:absolute; inset:0; display:grid; place-items:center; margin:0; color:#fff;
   font:italic 1.2rem Georgia, serif; text-shadow:0 1px 3px rgba(0,0,0,.6); }
 .board-empty a { color:#fff; }
@@ -3556,12 +3567,16 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .note.unsorted { color:#6b6b70; }
 
 /* ---------- what joins them: string (default), laser, wire ---------- */
-.board-wrap.str-laser .str .line { stroke-width:1.7; filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser svg.strings { filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser .str .line { stroke-width:1.7; }
 .board-wrap.str-laser .str .core { stroke:#fff; stroke-width:.6; opacity:.9; }
 .board-wrap.str-laser .str.mention .line, .board-wrap.str-laser .str.mention .core { stroke-dasharray:6 6; }
-.board-wrap.str-laser.animate .str .line { animation:laser 2.6s ease-in-out infinite alternate; }
+/* the pulse fades the whole layer of strings, which the compositor does alone: pulsing each string repainted the
+   whole board every frame, and a zoomed-in board fell behind and showed flat patches of cork */
+.board-wrap.str-laser.animate svg.strings { animation:laser 2.6s ease-in-out infinite alternate; }
 @keyframes laser { from { opacity:.65; } to { opacity:1; } }
-.board-wrap.str-wire .str .line { stroke-width:2; filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire svg.strings { filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire .str .line { stroke-width:2; }
 .board-wrap.str-wire .str .core { stroke:rgba(255,255,255,.6); stroke-width:.7; transform:translate(-.4px, -.5px); }
 .board-wrap.str-wire .str.mention .line { stroke-dasharray:none; stroke-width:1.2; opacity:.75; }
 .board-wrap.str-laser .board-legend i { box-shadow:0 0 6px var(--string); }
@@ -3620,7 +3635,8 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 /* ---------- cards: hologram ---------- */
 .board-wrap.cards-hologram .note { --holo:#7fd8ff; color:#e8fbff; background:linear-gradient(160deg, color-mix(in srgb, var(--holo) 22%, transparent),
   color-mix(in srgb, var(--holo) 8%, transparent)), repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px);
-  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px; backdrop-filter:blur(2px);
+  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px;
+  background-color:rgba(6,12,24,.5);                         /* a tint, not a backdrop blur: strings behind stay faint */
   box-shadow:0 0 14px color-mix(in srgb, var(--holo) 45%, transparent), inset 0 0 18px color-mix(in srgb, var(--holo) 25%, transparent);
   text-shadow:0 0 6px color-mix(in srgb, var(--holo) 70%, transparent); }
 .board-wrap.cards-hologram .note .t { font-family:"SF Mono", Menlo, Consolas, monospace; font-weight:600; letter-spacing:.01em; }
@@ -3656,7 +3672,7 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap.cards-hologram.animate .note:nth-child(3n) { animation-delay:-2.3s; }
 .board-wrap.cards-hologram.animate .note:nth-child(3n+1) { animation-delay:-4.6s; }
 @keyframes holo { 0%, 92%, 100% { opacity:1; } 93% { opacity:.72; } 94% { opacity:1; } 96% { opacity:.85; } }
-@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap .str .line { animation:none !important; } }
+@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap svg.strings { animation:none !important; } }
 
 /* ---------- the gear's panel ---------- */
 .board-style { position:absolute; right:24px; top:72px; width:300px; max-width:calc(100% - 48px); z-index:5; cursor:auto;
@@ -3676,7 +3692,6 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-style .dot.own { position:relative; overflow:hidden; background:conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
 .board-style .dot.own input { position:absolute; inset:-6px; width:40px; height:40px; opacity:0; cursor:pointer; }
 .board-style .more { display:block; margin-top:.8rem; font-size:12px; }
-.board-tools button svg { width:18px; height:18px; fill:none; stroke:var(--fg); stroke-width:1.8; }
 /* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
 .board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
   pointer-events:none; image-rendering:pixelated; }
@@ -3696,7 +3711,8 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 
 /* ---------- strings: pixel (right-angle elbows) ---------- */
 .board-wrap.str-pixel .str path { stroke-linecap:square; stroke-linejoin:miter; }
-.board-wrap.str-pixel .str .line { stroke-width:3; filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel svg.strings { filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel .str .line { stroke-width:3; }
 .board-wrap.str-pixel .str.link .line { stroke-width:2.5; }
 .board-wrap.str-pixel .str.mention .line { stroke-width:2; stroke-dasharray:6 6; opacity:.9; }
 .board-wrap.str-pixel .board-legend i { border-top-width:3px; }
