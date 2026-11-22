@@ -227,6 +227,8 @@ class Article(BaseModel):
     title: str
     dek: str                               # one-sentence summary shown under the title
     sections: list[Section] = Field(min_length=2)
+    claim: str = ""                        # the big idea in plain words, cited, shown in a box at the top
+                                           # (empty for articles written before it existed: no box)
 
 class PlannedSection(BaseModel):
     heading: str
@@ -238,6 +240,7 @@ class ArticlePlan(BaseModel):
     """An article's first step. Each section is then written and checked on its own."""
     title: str
     dek: str
+    claim: str = ""                        # the box at the top: who did what and why it matters, cited
     sections: list[PlannedSection] = Field(min_length=2)
 
 class ArticleDraft(BaseModel):
@@ -271,6 +274,16 @@ def cite_by_id(text: str, brief: "ResearchBrief") -> str:
 
 # The required wording of a possibility. Shared by the checkers and the renderer.
 POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
+
+# Key words an article marks in **bold** (who did what). Shared by the writer, the checker and the renderer.
+BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+def tidy_bold(text: str) -> str:
+    """Bold markers that don't pair up would show as stray asterisks: drop them all."""
+    return text if "**" not in BOLD.sub("", text) else text.replace("**", "")
+
+def unbold(text: str) -> str:
+    return text.replace("**", "")
 
 SITE_FOLDERS = {"about", "assets"}       # the published site's own folders: no mission may use them as its slug
 

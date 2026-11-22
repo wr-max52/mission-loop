@@ -7,12 +7,13 @@ from urllib.parse import quote
 from xml.etree import ElementTree as ET
 import flowchart, settings, wayback
 from icons import icon
-from contracts import ResearchBrief, Article, CITATION, POSSIBILITY, cited_ids
+from contracts import ResearchBrief, Article, BOLD, CITATION, POSSIBILITY, cited_ids, unbold
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
 UNCHECKED_FACTS_HEADING = "Claimed facts (this brief failed the source check)"
 POSSIBILITIES_HEADING = "Possibilities (not verified)"
 POSSIBILITY_LABEL = "Possibility, not verified"
+CLAIM_LABEL = "The claim"                  # the box above an article: its big idea in plain words
 
 def _claims_of(b: ResearchBrief, kind: str) -> list:
     return [c for c in b.claims if c.kind == kind]
@@ -23,7 +24,7 @@ def _archived(url: str) -> str:
     return f' <span class="stance">(archived copy, {day})</span>' if day else ""
 
 def _has_possibility(a: Article) -> bool:
-    return any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
+    return bool(POSSIBILITY.search(a.claim)) or any(POSSIBILITY.search(p) for sec in a.sections for p in sec.paragraphs)
 
 UNSOURCED = " (No source found makes this case.)"
 
@@ -51,10 +52,13 @@ def brief_markdown(slug: str, b: ResearchBrief, checked: bool = True) -> str:
 def article_markdown(slug: str, b: ResearchBrief, a: Article) -> str:
     lines = ["---", f"slug: {slug}", f"title: {a.title}", f"dek: {a.dek}", "---", "",
              f"# {a.title}", "", f"*{a.dek}*", ""]
+    label = lambda text: POSSIBILITY.sub(lambda m: f"**[{POSSIBILITY_LABEL}]** {m.group(0)}", text)
+    if a.claim:
+        lines += [f"> **{CLAIM_LABEL}:** {label(a.claim)}", ""]
     for sec in a.sections:
         lines += [f"## {sec.heading}", ""]
         for p in sec.paragraphs:
-            lines += [POSSIBILITY.sub(lambda m: f"**[{POSSIBILITY_LABEL}]** {m.group(0)}", p), ""]
+            lines += [label(p), ""]
     lines += ["## Sources", ""]
     lines += [f"- **{s.id}** ({s.stance}) [{s.title}]({s.url})\n  > {s.quote}" for s in b.sources]
     return "\n".join(lines) + "\n"
@@ -63,11 +67,10 @@ def _source_numbers(b: ResearchBrief, a: Article) -> dict[str, int]:
     """Number sources in order of first citation; uncited sources go last."""
     known = {s.id for s in b.sources}
     order: list[str] = []
-    for sec in a.sections:
-        for p in sec.paragraphs:
-            for sid in cited_ids(p):
-                if sid in known and sid not in order:
-                    order.append(sid)
+    for p in [a.claim] + [p for sec in a.sections for p in sec.paragraphs]:     # reading order, the box first
+        for sid in cited_ids(p):
+            if sid in known and sid not in order:
+                order.append(sid)
     order += [s.id for s in b.sources if s.id not in order]
     return {sid: n for n, sid in enumerate(order, 1)}
 
@@ -120,6 +123,10 @@ ul.connected .why { color: var(--muted); font-size: .9rem; }
 ol.sources li { margin-bottom: 1rem; }
 ol.sources blockquote { margin: .35rem 0 0; padding: .5rem .75rem; background: var(--quote);
                         border-left: 3px solid var(--rule); }
+aside.claim { margin: 0 0 1.75rem; padding: .9rem 1.1rem; background: var(--quote);
+              border-left: 4px solid var(--accent); border-radius: 0 6px 6px 0; }
+aside.claim p { margin: .3rem 0 0; font-size: 1.15rem; line-height: 1.5; }
+aside.claim > .stance { color: var(--accent); }
 .stance { font: 600 0.7rem -apple-system, system-ui, sans-serif; text-transform: uppercase;
           letter-spacing: .06em; color: var(--muted); }
 .note { font: 0.85rem/1.5 -apple-system, system-ui, sans-serif; color: var(--muted);
@@ -235,7 +242,8 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
         return f'<span class="stance">{POSSIBILITY_LABEL}</span> {match.group(0)}'
 
     def para(text: str) -> str:
-        return POSSIBILITY.sub(label, CITATION.sub(cite, escape(text, quote=False)))
+        bold = BOLD.sub(r"<strong>\1</strong>", escape(text, quote=False))
+        return POSSIBILITY.sub(label, CITATION.sub(cite, bold))
 
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
     failed = "" if brief_checked and article_checked else " · Failed automated checks"
@@ -243,6 +251,8 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
     back = f'<a class="back" href="{home}">&larr; All articles</a>' if slug else ""
     body = [f"{back}<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
             f'<p class="meta">{pill + " " if epic else ""}{when} · {len(b.sources)} sources{failed}</p>']
+    if a.claim:
+        body.append(f'<aside class="claim"><span class="stance">{CLAIM_LABEL}</span><p>{para(a.claim)}</p></aside>')
     for sec in a.sections:
         body.append(f"<h2>{escape(sec.heading)}</h2>")
         body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
@@ -317,6 +327,8 @@ def article_text(b: ResearchBrief, a: Article, brief_checked: bool = True, artic
     lines = [a.dek, ""]
     if not (brief_checked and article_checked):
         lines += ["[Failed automated checks: see the note at the end.]", ""]
+    if a.claim:
+        lines += [f"{CLAIM_LABEL}: {para(a.claim)}", ""]
     for sec in a.sections:
         lines += [f"## {sec.heading}", ""]
         for p in sec.paragraphs:
@@ -420,7 +432,8 @@ AGENT_NOTES = [
     ("Reviews", "a human",
      "A person approves every brief or sends it back with notes, and reads every article before it is published."),
     ("Article writer", "Principal Investigator",
-     "Writes the article from the approved brief, labeling each possibility \u201cPossibility, not verified\u201d."),
+     "Writes the article from the approved brief in plain words: the claim up top, a short story, the evidence, "
+     "the other side, then the fine print, labeling each possibility \u201cPossibility, not verified\u201d."),
     ("Publisher", "code, no model",
      "Writes the article to this site, updates the feeds and passes it on to the other places it appears."),
 ]

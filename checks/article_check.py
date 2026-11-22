@@ -10,13 +10,15 @@ fed back while the piece is still small; check_article is the gate on the finish
 """
 import re
 from rapidfuzz import fuzz
-from contracts import Mission, ResearchBrief, Article, ArticlePlan, OutreachRecord, Section, cited_ids, POSSIBILITY
+from contracts import (Mission, ResearchBrief, Article, ArticlePlan, OutreachRecord, Section, cited_ids, POSSIBILITY,
+                       unbold)
 from checks.validator import _norm
 
 MIN_WORDS = 300
 MIN_SECTIONS, MAX_SECTIONS = 3, 5
 QUOTE_MATCH = 90                           # rapidfuzz partial_ratio threshold, same as the validator
 MIN_QUOTE_WORDS = 5                        # shorter quoted phrases are treated as terms, not quotations
+CLAIM = "The claim at the top"             # how the checks name the box above the article
 URL = re.compile(r"https?://|www\.|\]\(", re.I)
 QUOTED = re.compile(r"[\"“]([^\"“”]+)[\"”]")
 
@@ -29,6 +31,7 @@ def quotable(brief: ResearchBrief, records: list[OutreachRecord] | None = None) 
 
 def quote_problem(where: str, q: str, allowed: list[tuple[str, str]]) -> str | None:
     """A quotation that isn't copied from anything quotable, with the nearest thing that is."""
+    q = unbold(q)                          # bolding a word inside a quotation doesn't change the words
     if len(q.split()) < MIN_QUOTE_WORDS:
         return None
     nq = _norm(q)
@@ -74,12 +77,23 @@ def section_problems(sec: Section, brief: ResearchBrief, records: list[OutreachR
         problems.append(f"This is the counterpoint section: cite at least one of {sorted(contradicting)}")
     return problems
 
+def claim_problems(claim: str, brief: ResearchBrief) -> list[str]:
+    """The box at the top: checked like a paragraph, and it may only use 'it is possible that' if the brief can."""
+    problems = paragraph_problems(CLAIM, claim, {s.id for s in brief.sources}, quotable(brief))
+    if POSSIBILITY.search(claim) and not any(c.kind == "possibility" for c in brief.claims):
+        problems.append(f"{CLAIM} says 'it is possible that' but the brief has no possibilities")
+    return problems
+
 def plan_problems(plan: ArticlePlan, brief: ResearchBrief) -> list[str]:
     problems = []
     if not plan.title.strip():
         problems.append("Title is empty")
     if not plan.dek.strip():
         problems.append("Dek (one-sentence summary) is empty")
+    if not plan.claim.strip():
+        problems.append(f"{CLAIM} is empty; state who did what and why it matters in 1 or 2 cited sentences")
+    else:
+        problems += claim_problems(plan.claim, brief)
     if not MIN_SECTIONS <= len(plan.sections) <= MAX_SECTIONS:
         problems.append(f"The plan has {len(plan.sections)} sections; plan {MIN_SECTIONS} to {MAX_SECTIONS}")
     count = len(brief.claims)
@@ -104,6 +118,9 @@ def check_article(m: Mission, brief: ResearchBrief, article: Article,
         problems.append("Title is empty")
     if not article.dek.strip():
         problems.append("Dek (one-sentence summary) is empty")
+
+    if article.claim.strip():              # older articles have none
+        problems += claim_problems(article.claim, brief)
 
     all_cited: set[str] = set()
     words = 0

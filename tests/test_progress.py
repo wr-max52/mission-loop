@@ -180,8 +180,9 @@ async def test_a_stop_during_the_source_checks_keeps_the_pick_and_checks_it_next
 
 # --- the article --------------------------------------------------------------------------------------------
 
-PLAN = ArticlePlan(title="T", dek="D", sections=[PlannedSection(heading=h, point="p", counterpoint=h == "C")
-                                                 for h in "ABC"])
+PLAN = ArticlePlan(title="T", dek="D", claim="Big idea [s1].",
+                   sections=[PlannedSection(heading=h, point="p", counterpoint=h == "C")
+                             for h in "ABC"])
 
 def good(heading):
     cite = "s4" if heading == "C" else "s1"

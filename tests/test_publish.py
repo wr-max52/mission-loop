@@ -116,6 +116,26 @@ def test_possibilities_are_labeled_in_the_article():
     assert "not verified facts" in html                # the footer must not imply they were checked
     assert f"**[{POSSIBILITY_LABEL}]** It is possible that" in article_markdown("x", brief, a)
 
+def test_the_claim_box_leads_the_article_and_bold_words_show():
+    from render import article_html, article_markdown, article_text, CLAIM_LABEL, POSSIBILITY_LABEL
+    brief, a = _brief_and_article("**The county paid** the vendor **twice** [s1].")
+    a = a.model_copy(update={"claim": "It is possible that **the vendor was shared** [s2]."})
+    html = article_html(brief, a, published_at=None)
+    assert html.index('<aside class="claim">') < html.index("<h2>A</h2>")          # above the article body
+    assert f'<span class="stance">{CLAIM_LABEL}</span>' in html
+    assert f"{POSSIBILITY_LABEL}</span> It is possible that <strong>the vendor was shared</strong>" in html
+    assert "<strong>The county paid</strong> the vendor <strong>twice</strong>" in html and "**" not in html
+    assert '<sup><a href="#src-1">[1]</a></sup>.</p></aside>' in html               # the box's source is [1]
+    assert f"> **{CLAIM_LABEL}:** **[{POSSIBILITY_LABEL}]** It is possible that" in article_markdown("x", brief, a)
+    text = article_text(brief, a)
+    assert text.index(f"{CLAIM_LABEL}: [{POSSIBILITY_LABEL}]") < text.index("## A")
+    assert "not verified facts" in html                # the box's possibility counts for the footer too
+
+def test_an_article_without_a_claim_box_has_none():
+    from render import article_html, CLAIM_LABEL
+    brief, a = _brief_and_article("A fact [s1].")
+    assert 'class="claim"' not in article_html(brief, a, published_at=None)
+
 def test_footer_stays_plain_without_possibilities():
     from render import article_html, POSSIBILITY_LABEL
     brief, a = _brief_and_article("A fact [s1].")
