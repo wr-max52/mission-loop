@@ -104,15 +104,41 @@ def test_tools_never_change_anything():
     for tool in (status_tools.loop_status, status_tools.list_missions):
         tool()
     status_tools.mission_status("grid"); status_tools.agent_steps("grid"); status_tools.search_missions("grid")
+    status_tools.publication_status()
     assert (store.get_mission("grid").model_dump_json(), len(store.events("grid"))) == before
     assert not orchestrator.loop_running()                          # it only tests the lock, never keeps it
+
+def test_publication_status_shows_channels_and_published_articles():
+    from contracts import ChannelPost
+    store.save_mission(Mission(slug="old", topic="Old story", state=State.DONE, published_at=T0,
+                               channels={"site": ChannelPost(at=T0, where="site/old/index.html")},
+                               channel_errors={"bluesky": "too long"}))
+    store.save_mission(Mission(slug="next", topic="Next story", state=State.ARTICLE_READY, reviewed=True))
+    out = status_tools.publication_status()
+    assert "Published: 1" in out and "Old story [old]" in out and "on: Local site" in out
+    assert "refused: too long" in out and "publishing next pass: Next story" in out
+    assert "1F916: off" in out and "Bluesky: off" in out
+
+def test_add_mission_queues_a_new_mission_only():
+    store.save_mission(Mission(slug="grid", topic="Why the grid failed in July"))
+    assert "already exists: grid" in status_tools.add_mission("why the grid failed in July")
+    assert "at least a few words" in status_tools.add_mission("x")
+    assert "1 to 4 words" in status_tools.add_mission("Who owns the reservoir land", epic="a b c d e")
+    out = status_tools.add_mission("Who owns the reservoir land", "Find the deed holders", epic="Water rights")
+    m = store.get_mission("who-owns-the-reservoir-land")
+    assert "Queued who-owns-the-reservoir-land" in out and "loop is off" in out
+    assert m.state == State.QUEUED and m.objective == "Find the deed holders" and not m.approved
+    assert store.get_epic(m.epic).title == "Water rights"
+    assert store.events(m.slug)[-1]["note"] == "added by the chat assistant"
+    assert not orchestrator.WAKE_FLAG.exists()                      # no loop to wake
 
 async def test_loop_server_runs_over_mcp_from_any_folder():
     """mcp.json names status_tools.py relative to itself; the server reads the working folder's data."""
     store.save_mission(Mission(slug="grid", topic="Why the grid failed"))
     async with Toolbox(["loop"], config_path=assistant.CONFIG) as tb:
         assert {t["function"]["name"] for t in tb.tools} == {
-            "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions"}
+            "loop_status", "list_missions", "mission_status", "agent_steps", "search_missions",
+            "publication_status", "add_mission"}
         assert "Why the grid failed" in await tb.call("mission_status", {"slug": "grid"})
 
 # ---------- the assistant ----------
@@ -146,7 +172,7 @@ async def test_assistant_looks_then_answers(monkeypatch):
     assert seen[0][2] == assistant.default_model() == llm.model_for("assistant")   # the copy the loop already loaded
     tool_msg = seen[1][0][-1]
     assert tool_msg["role"] == "tool" and len(tool_msg["content"]) == assistant.MAX_TOOL_CHARS
-    assert len(seen[0][0][0]["content"]) < 700                      # the system prompt stays tiny
+    assert len(seen[0][0][0]["content"]) < 1800                     # the system prompt stays small: an app overview, no more
 
 async def test_assistant_answers_without_tools_once_its_budget_is_spent(monkeypatch):
     seen = scripted(monkeypatch, *[call("loop_status")] * assistant.MAX_TOOL_CALLS, say("Best guess."))

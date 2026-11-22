@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 307 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 309 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
@@ -147,11 +147,13 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   bottom right of every UI page opens it in a panel over the left third, or `python run.py ask "..." [--model]`.
   It needs Ollama but not the loop, so it works with the loop stopped. The panel has a model picker (installed
   Ollama models that can call tools; the default is shared with the loop, any other is loaded beside it), and keeps the
-  conversation in that browser tab only, so the page's refreshes don't wipe it. It is not a worker: a one-paragraph prompt, at most 5 tool calls, tool results cut
+  conversation in that browser tab only, so the page's refreshes don't wipe it. It is not a worker: a short prompt that explains the app, at most 5 tool calls, tool results cut
   to 2,500 characters, only the last 4 messages the page sends back, no memory and nothing saved. Its tools come
   from the `loop` MCP server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`, `agent_steps`,
-  `search_missions`), plus `search` when `BRAVE_API_KEY` is set. They only read the database, `data/activity.json`,
-  the trails and `data/loop.log`, so asking never touches a running agent. By default it uses the small model with
+  `search_missions`, `publication_status`, `add_mission`), plus `search` when `BRAVE_API_KEY` is set. All but
+  `add_mission` only read the database, `data/activity.json`, the channels' state files, the trails and
+  `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the UI's Add
+  mission box (it still needs brief approval) and never changes an existing one. By default it uses the small model with
   the loop's options (`settings.chat_model`: `chat_model` in settings.json, then `MISSION_LOOP_CHAT_MODEL`, else
   the Research Assistant's model), so Ollama reuses the loaded copy instead of reloading it.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
