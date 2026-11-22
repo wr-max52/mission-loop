@@ -221,6 +221,24 @@ def reject(m: Mission, notes: str, now) -> None:
     store.save_mission(m)
     store.log_event(m.slug, now, before.value, m.state.value, "rejected by human")
 
+def auto_approve(now, busy: set[str] = frozenset()) -> int:
+    """Auto mode: approve every brief waiting for review and every proposed epic, as a human would. Articles are
+    left alone: publishing always waits for a human. An epic with a mission a worker is busy with waits for a later
+    sweep, so no worker saves over the move. Returns how many briefs were approved (epics move no mission on)."""
+    if not settings.auto_mode():
+        return 0
+    approved = 0
+    for m in store.all_missions():
+        if m.state == State.BRIEF_READY and not m.approved:
+            m.approved = True
+            store.save_mission(m)
+            store.log_event(m.slug, now, m.state.value, m.state.value, "brief approved by auto mode")
+            approved += 1
+    for e in store.all_epics("proposed"):
+        if not any(m.slug in busy for m in _in_epic(e.slug)):
+            approve_epic(e.slug, "", now, by="auto mode")
+    return approved
+
 def parked_while_writing(m: Mission) -> bool:
     return store.load_artifact(m.slug, "outreach") is not None   # brief was approved already
 
@@ -266,6 +284,7 @@ def push_through(m: Mission, now) -> None:
     m.validator_notes = ""                 # the writer reads these as problems in its own draft
     store.save_mission(m)
     store.log_event(m.slug, now, before.value, m.state.value, note)
+    auto_approve(now)                      # auto mode approves a pushed-through brief too, never an article
 
 def _record(m: Mission, before: State, note: str | None, now) -> int:
     if note is None:
@@ -355,6 +374,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
         while True:
             if not STOP_FLAG.exists() and tasks < max_tasks:
                 busy = {m.slug for _, m, _ in running.values() if m}
+                changed += auto_approve(now_fn(), busy)
                 missions = in_flow_order([m for m in store.active_missions()
                                           if m.slug not in busy and m.slug not in failed])
                 for m in missions:
@@ -769,7 +789,7 @@ def assign_epic(m: Mission, name: str, now) -> None:
     _drop_empty_proposals()
     _refresh_pages([m])
 
-def approve_epic(slug: str, title: str, now) -> None:
+def approve_epic(slug: str, title: str, now, by: str = "") -> None:
     """Human accepts a proposed epic, optionally renamed. A name that matches another epic merges into it."""
     epic = store.get_epic(slug)
     if not epic or epic.status != "proposed":
@@ -783,7 +803,7 @@ def approve_epic(slug: str, title: str, now) -> None:
     epic.title, epic.status = clean, "active"
     store.save_epic(epic)
     missions = _in_epic(slug)
-    _move(missions, slug, now, f"new epic approved: {clean}")
+    _move(missions, slug, now, f"new epic approved{' by ' + by if by else ''}: {clean}")
     _refresh_pages(missions)
 
 def merge_epic(slug: str, into: str, now) -> None:

@@ -55,6 +55,9 @@ MESSAGES = {
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
+    "every_saved": "Saved. The next loop you start rests that long between looks for work.",
+    "auto_on": "Auto mode on. Briefs and new epics are approved for you; articles still wait for you to publish them.",
+    "auto_off": "Auto mode off. Every brief and new epic waits for you again.",
     "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
     "animations_off": "Animations off. The Missions page stays still.",
     "theme_saved": "Appearance saved.",
@@ -83,6 +86,7 @@ ERRORS = {
     "notes": "Say what needs fixing so the agent can act on it.",
     "state": "That mission isn't waiting for that action any more.",
     "running": "The loop is already running.",
+    "every": "Give the rest between looks for work in whole minutes.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different, approved epic to move them to.",
@@ -219,7 +223,8 @@ def signature() -> str:
         rows += c.execute("SELECT slug || title || status AS data FROM epics ORDER BY rowid").fetchall()
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
     working = ",".join(f'{e["worker"]}:{e["slug"]}:{e["agent"]}' for e in running_now())
-    raw = "".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
+    raw = ("".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
+           f"|{settings.auto_mode()}")
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 # ---------- page shell ----------
@@ -239,7 +244,21 @@ nav.top .links a { display:inline-flex; align-items:center; gap:.4rem; padding:.
 nav.top .links a:hover { border-color:var(--fg); }
 nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
                      stroke-linecap:round; stroke-linejoin:round; }
-.status { display:inline-flex; align-items:center; gap:.4rem; margin-right:.5rem;
+form.auto { margin:0 .5rem 0 0; }
+form.auto .switch { font-size:.9rem; font-weight:600; gap:.45rem; }
+form.auto .switch input { width:2.2rem; height:1.3rem; }
+form.auto .switch input::after { width:calc(1.3rem - 6px); height:calc(1.3rem - 6px); }
+form.auto .switch input:checked::after { transform:translateX(.9rem); }
+form.loop-ctl { display:inline-flex; align-items:center; gap:.45rem; margin:0 .5rem 0 0; }
+form.loop-ctl button.play { display:inline-grid; place-items:center; width:2.1rem; height:2.1rem; padding:0;
+                            border-radius:50%; border:1px solid var(--muted); background:var(--quote); color:var(--fg); }
+form.loop-ctl button.play:hover:not(:disabled) { border-color:var(--fg); }
+form.loop-ctl button.play.on { background:#237a35; border-color:#237a35; color:#fff; }
+form.loop-ctl button.play:disabled { opacity:.55; cursor:default; }
+form.loop-ctl button.play .ico { width:1rem; height:1rem; }
+form.loop-ctl button.play .ico svg { stroke-width:2.6; }
+form.loop-ctl button.play:not(.on):not(.stopping) .ico svg { fill:currentColor; }   /* a solid play triangle */
+.status { display:inline-flex; align-items:center; gap:.4rem;
           color:var(--muted); font-size:.9rem; font-weight:600; }
 .status.on { color:var(--fg); }
 .status .dot.on { animation:blink 1.4s ease-in-out infinite; }
@@ -534,15 +553,36 @@ def heading(name: str, title: str, count: int | None = None, anchor: str = "", c
     a = f' id="{anchor}"' if anchor else ""
     return f'<h2 class="{cls}"{a}>{icon(name)}<span>{escape(title)}</span>{n}</h2>'
 
-def nav_status() -> str:
-    """The loop's state for the top bar. It only says Running while the loop really holds the lock."""
+def loop_button() -> str:
+    """Play/pause for the loop, in the top bar on every page beside the Auto switch, with the loop's state. It only
+    says Running while the loop really holds the lock. Play starts it (resting settings.loop_every minutes when it
+    has nothing to do); pause asks it to stop after the current agent saves its work."""
+    every = settings.loop_every()
     if not loop_running():
-        text, dot = "Loop off", ""
+        action, ico, text, dot = "start", "play", "Loop off", ""
+        title = f"Start the loop. When it has nothing to do it rests {every:g} min (Settings) before looking again."
     elif orchestrator.STOP_FLAG.exists():
-        text, dot = "Stopping", "stopping"
+        action, ico, text, dot = "", "pause", "Stopping", "stopping"
+        title = "Stopping: the agent at work saves what it has (2 minutes at most), then the loop exits."
     else:
-        text, dot = "Running", "on"
-    return f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span>'
+        action, ico, text, dot = "stop", "pause", "Running", "on"
+        title = "Pause the loop. The agent at work saves what it has (2 minutes at most), then the loop stops."
+    button = (f'<button class="play {dot}" title="{escape(title)}" aria-label="{escape(title)}"'
+              f' onclick="this.form.back.value = location.pathname"{"" if action else " disabled"}>{icon(ico)}</button>')
+    return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
+            f'<input type="hidden" name="back" value="/"><input type="hidden" name="every" value="{every:g}">'
+            f'{button}'
+            f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span></form>')
+
+def auto_switch() -> str:
+    """Auto mode, in the top bar on every page: approves every brief and proposed epic, never publishing."""
+    on = settings.auto_mode()
+    title = ("Auto mode: the loop approves every brief and every proposed epic for you. "
+             "Publishing an article always waits for you.")
+    return (f'<form class="auto" method="post" action="/auto"><input type="hidden" name="back" value="/">'
+            f'<label class="switch" title="{escape(title)}"><input type="checkbox" role="switch" name="auto" value="on"'
+            f'{" checked" if on else ""} onchange="this.form.back.value = location.pathname; this.form.submit()">'
+            f'<span>Auto</span></label></form>')
 
 def html_attrs() -> str:
     """The theme and chat colour from the Settings page, on <html> so they apply before first paint. "system"
@@ -580,8 +620,10 @@ async function refresh() {{
   next.querySelectorAll("details > summary").forEach(e => {{ if (open.has(e.textContent)) e.parentNode.open = true; }});
   next.prepend(...main.querySelectorAll(".flash.err"));   // an error stays until clicked away
   main.replaceChildren(...next.childNodes);
-  const status = doc.querySelector("nav.top .status"), shown = document.querySelector("nav.top .status");
-  if (status && shown) shown.replaceWith(document.importNode(status, true));
+  for (const sel of ["nav.top form.loop-ctl", "nav.top form.auto"]) {{
+    const fresh = doc.querySelector(sel), shown = document.querySelector(sel);
+    if (fresh && shown) shown.replaceWith(document.importNode(fresh, true));
+  }}
   document.title = doc.title;
   showElapsed();
   if (window.Researchers) window.Researchers.rescan();
@@ -593,7 +635,7 @@ async function refresh() {{
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title><style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
-            f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
+            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a></span></nav>'
             f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
@@ -643,7 +685,8 @@ def flow_state() -> dict:
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
                      "name": activity.AGENTS[e["agent"]]} for e in now],
-        "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
+        "waiting": {"epic_review": len(store.all_epics("proposed")),
+                    "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
         "states": {m.slug: m.state.value for m in missions},
@@ -651,13 +694,18 @@ def flow_state() -> dict:
     }
 
 def flow_strip(state: dict) -> str:
-    """The pipeline strip. It is always drawn; with the loop off nothing on it is lit. assets/flow.js
-    keeps it current without reloading the page, and the pixel researchers live on its track."""
-    steps, lit = flow_steps(), {e["step"]: e["worker"] for e in state["working"]}
-    track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you")
+    """The pipeline strip, laid out as a snake: lane 0 runs left to right from the top left (the Theorist) to the
+    first human review, a square end on the right; lane 1 comes back right to left one level lower to the next
+    review on the left, and so on. Each review spans the two lanes it joins, so the snake turns through it. It is
+    always drawn; with the loop off nothing on it is lit. assets/flow.js keeps it current without reloading the
+    page (and stacks it on a narrow screen), and the pixel researchers stand on its tiles."""
+    auto = settings.auto_mode()
+    steps, lit = flow_steps(auto), {e["step"]: e["worker"] for e in state["working"]}
+    track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you", auto=auto)
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
-    attrs = f'data-shape="{",".join(k for k, _, _ in steps)}" data-working="{escape(working, quote=True)}"'
+    attrs = f'data-shape="{",".join(k + ("*" if kind == "auto" else "") for k, kind, _ in steps)}" ' \
+            f'data-working="{escape(working, quote=True)}"'
     off = "" if state["running"] else " off"
     return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
             f'<div class="flow-scroll"><div class="flow-track"{lab}>{track}</div></div>'
@@ -669,16 +717,13 @@ def loop_panel(back: str) -> str:
         state, dot = "Loop is stopping: saving the current work (2 minutes at most)", "stopping"
         controls = ""
     elif running:
-        state, dot = "Loop is running", "on"
+        state, dot = "Loop is running. Pause it with the button at the top of the page", "on"
         controls = (f'<form method="post" action="/loop/wake"><input type="hidden" name="back" value="{back}">'
-                    f'<button>Check for work now</button></form>'
-                    f'<form method="post" action="/loop/stop"><input type="hidden" name="back" value="{back}">'
-                    f'<button>Stop loop</button></form>')
+                    f'<button>Check for work now</button></form>')
     else:
-        state, dot = "Loop is off. Nothing will be researched, written or published until you start it", ""
-        controls = (f'<form method="post" action="/loop/start"><input type="hidden" name="back" value="{back}">'
-                    f'<span class="hint">every</span><input type="number" name="every" value="5" min="1" step="1">'
-                    f'<span class="hint">min</span><button class="primary">Start loop</button></form>')
+        state, dot = ("Loop is off. Nothing will be researched, written or published until you press play at the "
+                      "top of the page"), ""
+        controls = ""
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
             f'{flow_strip(flow_state())}</div>{FLOW_JS}')
 
@@ -1264,6 +1309,13 @@ def settings_body(request: Request, error: str = "") -> str:
     return f"""{err}<h1>Settings</h1>
 {workers_section(conn)}
 {connection_section(conn)}
+{heading("clock", "Loop")}
+<form method="post" action="/settings/loop-every" class="inline">
+  <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
+  <input type="number" id="every" name="every" value="{settings.loop_every():g}" min="1" step="1" style="width:5rem">
+  <span class="hint">minutes before looking again (a loop already running keeps its own until you start it again)</span>
+  <button>Save</button>
+</form>
 {heading("monitor", "Display")}
 {display_forms()}
 <form method="post" action="/settings/animations" class="actions">
@@ -1307,6 +1359,28 @@ async def save_chat_color(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="chat_color")
     return go("/settings", done="chat_color_saved")
+async def save_auto(request: Request) -> Response:
+    """The top bar's Auto switch. Turning it on approves what already waits (briefs, proposed epics) right away;
+    the loop approves the rest as they come. Publishing always stays with the human."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    on = form.get("auto") == "on"          # an unticked box sends nothing
+    settings.set_auto_mode(on)
+    if on:
+        orchestrator.auto_approve(clock.now())
+    if loop_running():
+        wake()
+    return go(_back(form), done="auto_on" if on else "auto_off")
+
+async def save_loop_every(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        settings.set_loop_every(float((await request.form()).get("every") or settings.LOOP_EVERY))
+    except ValueError:
+        return go("/settings", error="every")
+    return go("/settings", done="every_saved")
 
 async def save_animations(request: Request) -> Response:
     if not same_origin(request):
@@ -2166,9 +2240,9 @@ async def loop_action(request: Request) -> Response:
         if loop_running():
             return go(back, error="running")
         try:
-            every = max(1.0, float(form.get("every") or 5))
+            every = max(1.0, float(form.get("every") or settings.loop_every()))
         except ValueError:
-            every = 5.0
+            every = settings.loop_every()
         start_loop(every)
         return go(back, done="started")
     if action == "stop":
@@ -2191,6 +2265,8 @@ app = Starlette(routes=[
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
+    Route("/auto", save_auto, methods=["POST"]),
+    Route("/settings/loop-every", save_loop_every, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),

@@ -1,20 +1,28 @@
 """The pipeline strip: the flow chart drawn on the UI's home page (live) and on the published site's About
 page (a looping demo). Both draw it from here, so they always show the same pipeline.
 
-Agents sit on the main track in runtime order, each code check is a vertical block right after the agent it
-checks, and each human review is a sidestep below, between the check that leads to it and the agent that
-follows it. assets/flow.js shrinks it to fit and relights it; assets/researchers.js puts researchers on it.
+It is a snake. The steps, in runtime order, are cut into lanes at each human review: lane 0 runs left to right
+from the top left (the Theorist) to the first review, a square end on the right; lane 1 comes back right to left
+one level lower to the next review on the left; and so on, each review spanning the two lanes it joins, so the
+snake turns through it. Agents are tiles with an icon, each code check a narrow tile right after the agent it
+checks. In auto mode (the UI only) the two reviews it takes over are drawn as automatic. assets/flow.js shrinks it
+to fit and relights it; assets/researchers.js puts researchers on it, each on its own step's row.
 """
 from html import escape
 import activity, settings
 from contracts import Mission
+from icons import icon, CSS as ICON_CSS
 
 # (key, kind, label on the strip), in runtime order
 FLOW = [
     ("theorist", "agent", "Theorist"),
+    ("theorist_check", "check", "check"),  # theorist.settle
     ("finder", "agent", "Finder"),
+    ("finder_check", "check", "check"),    # finder._keep and the 2+ missions rule for a new epic
+    ("epic_review", "human", "Review epics"),   # the epics both the Theorist and the finder propose
     ("sources", "agent", "Sources"),
     ("contacts", "agent", "Contacts"),
+    ("contact_check", "check", "check"),   # researcher.find_contacts' check, before the main model
     ("brief", "agent", "Brief"),
     ("source_check", "check", "check"),
     ("brief_review", "human", "Review brief"),
@@ -23,99 +31,188 @@ FLOW = [
     ("article_review", "human", "Review article"),
     ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
 ]
-HUMAN_STEPS = {"brief_review": ("Brief review: you approve the brief or send it back", "review"),
+TILES = {   # key -> (icon, the line under its name on the strip)
+    "theorist": ("bulb", "evolves the line"), "finder": ("compass", "finds missions"),
+    "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
+    "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
+    "publisher": ("broadcast", "site and channels"),
+}
+REVIEW_SUB = {"epic_review": "you approve", "brief_review": "you approve", "article_review": "you publish"}
+HUMAN_STEPS = {"epic_review": ("Epic review: you approve, rename, move or reject the epics the Theorist and "
+                               "the finder propose", "propose"),   # the purple of the New epic card
+               "brief_review": ("Brief review: you approve the brief or send it back", "review"),
                "article_review": ("Article review: you publish the article or send it back", "publish")}
-CHECK_TITLE = ("{name}: code, no model. A failure goes back for another try; "
-               "after {n} tries the mission is parked for you")
-ICON_PERSON = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/>'
-               '<path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>')
+# Auto mode takes over exactly these two reviews (key -> its label and title then); publishing is never automatic.
+AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: the epics the Theorist and the finder propose are "
+                              "approved for you"),
+              "brief_review": ("Auto-approve brief", "Auto mode: every brief that passed its check is approved for you")}
+RETRY = "A failure is another try; after {n} tries the mission is parked for you."
+CHECKS = {   # every code check on the strip: what it holds the step before it to
+    "theorist_check": "Theorist check: code, no model. The line must still ask questions and keep at least half its "
+                      "words, a new epic needs 2+ missions and a new name, and the new mission must be new to the "
+                      "desk. Whatever fails is dropped; nothing is parked.",
+    "finder_check": "Finder check: code, no model. It keeps at most 3 missions, each resting on a page the searches "
+                    "found and unlike any topic the desk has, and a new epic only when 2+ of them share it. Whatever "
+                    "fails is dropped; nothing is parked.",
+    "contact_check": "Contact check: code, no model. Each contact's name and email must be on the pages read. " + RETRY,
+    "source_check": "Source check: code, no model. Every claim cited, its quotes found on the page, 3 supporting "
+                    "websites, at least one fact and a counterpoint. " + RETRY,
+    "article_check": "Article check: code, no model. Every paragraph cited to a checked source in the approved brief, "
+                     "quotes copied from those sources, no outside links, the opposing view cited. " + RETRY,
+}
 
-def flow_steps() -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: contacts only while outreach is on."""
-    return [s for s in FLOW if s[0] != "contacts" or settings.OUTREACH]
+def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
+    """The strip's steps for this setup: contacts and their check only while outreach is on, and with auto (the
+    UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
+    return [(k, "auto", AUTO_STEPS[k][0]) if auto and k in AUTO_STEPS else (k, kind, text)
+            for k, kind, text in FLOW if k not in ("contacts", "contact_check") or settings.OUTREACH]
 
-def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], review_href: str = "") -> str:
-    """The strip's track. lit: step -> the worker on it right now; waiting: missions at each human review;
-    parked: missions parked at each check. review_href links the human reviews (a span without it)."""
-    units: list[list[str]] = []
-    for key, kind, text in flow_steps():
+def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
+    """Cut the steps into lanes at each human review: lane 0, review 0, lane 1, review 1, ... Each review is the end
+    of the lane before it and the start of the one after. The last lane may be empty."""
+    out, ends = [[]], []
+    for step in steps:
+        if step[1] in ("human", "auto"):
+            ends.append(step)
+            out.append([])
+        else:
+            out[-1].append(step)
+    return out, ends
+
+def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], review_href: str = "",
+          auto: bool = False) -> str:
+    """The strip's track: its lanes and the reviews between them. lit: step -> the worker on it right now; waiting:
+    missions at each human review; parked: missions parked at each check. review_href links the human reviews (a
+    span without it). auto draws the reviews auto mode takes over as automatic."""
+    steps = flow_steps(auto)
+    runs, ends = lanes(steps)
+    parked_n = Mission.model_fields["max_attempts"].default
+
+    def tile(key: str, kind: str, text: str) -> str:
         on = " on" if key in lit else ""
         cur = f' aria-current="step" data-worker="{lit[key]}"' if on else ""
-        if kind == "agent":
-            units.append(['<span class="join" aria-hidden="true"></span>'] if units else [])
-            parts = units[-1]
-            parts.append(f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
-        elif kind == "check":
-            parts.append('<span class="join short" aria-hidden="true"></span>')
+        if kind == "check":
             n = parked.get(key, 0)
-            title = CHECK_TITLE.format(name=activity.AGENTS[key], n=Mission.model_fields["max_attempts"].default)
-            parts.append(f'<span class="check{on}" data-step="{key}" title="{escape(title)}"{cur}>'
-                         f'<span class="label">{text}</span>'
-                         f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
-        else:
-            title, tone = HUMAN_STEPS[key]
-            n = waiting.get(key, 0)
-            tag, href = ("a", f' href="{escape(review_href)}"') if review_href else ("span", "")
-            parts.append(f'<span class="detour"><{tag} class="human {tone}{" waiting" if n else ""}"{href} '
-                         f'data-step="{key}" title="{escape(title)}">{ICON_PERSON}{text}'
-                         f'<b class="count"{"" if n else " hidden"}>{n}</b></{tag}></span>')
-    return "".join(f'<span class="unit">{"".join(u)}</span>' for u in units)
+            return (f'<span class="check{on}" data-step="{key}" title="{escape(CHECKS[key].format(n=parked_n))}"{cur}>'
+                    f'{icon("shield")}<span class="label">{text}</span>'
+                    f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
+        name, sub = TILES[key]
+        return (f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{icon(name)}'
+                f'<span class="text"><span class="name">{text}</span><span class="sub">{sub}</span></span></span>')
 
-CSS = """/* the pipeline strip: agents on the track, checks as vertical blocks, human reviews as sidesteps below.
-   It never scrolls: assets/flow.js sets --s to shrink it to the panel's width, and below a readable size it
-   wraps between units (an agent with its check and review), each line starting with the arrow it continues. */
+    def review(key: str, kind: str, text: str, place: str) -> str:
+        if kind == "auto":
+            return (f'<span class="human auto" data-step="{key}" title="{escape(AUTO_STEPS[key][1])}" style="{place}">'
+                    f'{icon("bolt")}<span class="text"><span class="name">{text}</span>'
+                    f'<span class="sub">auto mode</span></span></span>')
+        title, tone = HUMAN_STEPS[key]
+        n = waiting.get(key, 0)
+        tag, href = ("a", f' href="{escape(review_href)}"') if review_href else ("span", "")
+        return (f'<{tag} class="human {tone}{" waiting" if n else ""}"{href} data-step="{key}" '
+                f'title="{escape(title)}" style="{place}">{icon("person")}<span class="text"><span class="name">{text}</span>'
+                f'<span class="sub">{REVIEW_SUB[key]}</span></span><b class="count"{"" if n else " hidden"}>{n}</b></{tag}>')
+
+    out = []
+    for i, run in enumerate(runs):
+        rtl, last = i % 2 == 1, i == len(runs) - 1
+        if not run and last:
+            break
+        # Each agent with the arrow into it and its checks is one unit, so a stacked lane wraps between units.
+        units: list[list[str]] = []
+        for key, kind, text in run:
+            if kind == "check":
+                units[-1] += ['<span class="join short" aria-hidden="true"></span>', tile(key, kind, text)]
+                continue
+            lead = ('<span class="join" aria-hidden="true"></span>' if units else
+                    '<span class="join edge" aria-hidden="true"></span>' if i else "")   # out of the review before
+            units.append([lead, tile(key, kind, text)])
+        parts = [f'<span class="unit">{"".join(u)}</span>' for u in units]
+        if i < len(ends):
+            parts.append('<span class="join edge" aria-hidden="true"></span>')     # into the review that ends it
+        # A lane reaches into an end column no review holds: the first lane's start, the last lane's end.
+        start_free, end_free = i == 0, i >= len(ends)
+        left_free, right_free = (end_free, start_free) if rtl else (start_free, end_free)
+        cols = f"{1 if left_free else 2} / {4 if right_free else 3}"
+        out.append(f'<span class="lane{" rtl" if rtl else ""}" style="grid-row:{i + 1}; grid-column:{cols}">'
+                   + "".join(parts) + "</span>")
+        if i < len(ends):
+            key, kind, text = ends[i]
+            span = 2 if i + 1 < len(runs) and (runs[i + 1] or i + 1 < len(ends)) else 1
+            out.append(review(key, kind, text, f"grid-row:{i + 1} / span {span}; grid-column:{1 if rtl else 3}"))
+    return "".join(out)
+
+CSS = ICON_CSS + """/* the pipeline strip: a snake. Each lane runs between two human reviews, the reviews are square ends at the lanes'
+   ends, and the lanes turn at each one: left to right, then right to left one level lower, and so on (ui.flow_strip).
+   Agents are tiles with an icon, each code check a narrow tile right after the agent it checks. It never scrolls:
+   assets/flow.js sets --s to shrink it to the panel's width, and below a readable size it stacks (.stack): one
+   column in flow order, lanes wrapping, every arrow pointing on. */
 .flow { flex-basis:100%; min-width:0; margin-top:.3rem; --line:color-mix(in srgb, var(--muted) 60%, transparent); }
 .flow-scroll { overflow:hidden; padding-bottom:.25rem; }
-.flow-track { --s:1; --u:calc(1rem * var(--s)); --row:calc(var(--u) * 1.6); --drop:var(--u); --hh:calc(var(--u) * 1.45);
-              --ch:calc(var(--row) + var(--u) * 1.1);
-              display:flex; align-items:flex-start; width:100%; position:relative; }
-.flow-track[data-lab] { padding-top:5rem; }          /* headroom for the researchers and their speech bubbles */
+.flow-track { --s:1; --u:calc(1rem * var(--s)); --tile:calc(var(--u) * 3.1); --cap:calc(var(--u) * 7.6);
+              display:grid; grid-template-columns:var(--cap) minmax(min-content, 1fr) var(--cap);
+              row-gap:calc(var(--u) * 1.3); width:100%; position:relative; }
+.flow-track[data-lab] { padding-top:5rem; row-gap:max(3.4rem, calc(var(--u) * 1.3)); }   /* room for the researchers */
+.flow .lane { display:flex; align-items:center; min-width:0; }
+.flow .lane.rtl { flex-direction:row-reverse; }
 .flow .unit { display:contents; }
-.flow.wrap .flow-track { flex-wrap:wrap; row-gap:calc(var(--u) * .7); }
-.flow.wrap .unit { display:flex; align-items:flex-start; flex:none; }
-.flow.wrap .join:not(.short) { flex:none; width:calc(var(--u) * 1.5); }
-.flow .step { flex:none; height:var(--row); line-height:calc(var(--row) - 2px); padding:0 calc(var(--u) * .65);
-              border-radius:999px; border:1px solid var(--rule); background:var(--quote); color:var(--muted);
-              font-size:calc(var(--u) * .78); font-weight:600; white-space:nowrap; }
+.flow .step { flex:none; display:flex; align-items:center; gap:calc(var(--u) * .55); box-sizing:border-box;
+              height:var(--tile); min-width:calc(var(--u) * 8.4); padding:0 calc(var(--u) * .8);
+              border-radius:calc(var(--u) * .55); border:1px solid var(--rule); background:var(--quote); color:var(--muted); }
+.flow .step .ico { width:calc(var(--u) * 1.35); height:calc(var(--u) * 1.35); }
+.flow .step .name { display:block; font-size:calc(var(--u) * .86); font-weight:700; line-height:1.15; white-space:nowrap; }
+.flow .step .sub { display:block; font-size:calc(var(--u) * .68); line-height:1.2; white-space:nowrap; opacity:.85; }
 .flow .step.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
-.flow .join { flex:1 0 var(--u); max-width:calc(var(--u) * 3.5); height:var(--row); position:relative; }   /* stretch to fill */
+.flow .join { flex:1 0 calc(var(--u) * 1.6); height:var(--tile); position:relative; }   /* stretch to fill the lane */
 .flow .join::before { content:""; position:absolute; left:2px; right:4px; top:calc(50% - 1px); border-top:2px solid var(--line); }
 .flow .join::after { content:""; position:absolute; right:1px; top:calc(50% - 4px);
                      border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .join.short { flex:none; width:calc(var(--u) * .5); } .flow .join.short::after { display:none; }
-.flow .join.short::before { right:1px; }
-.flow .check { flex:none; position:relative; width:var(--u); height:var(--ch); border-radius:4px; overflow:visible;
-               border:1px solid var(--line); display:flex; align-items:center; justify-content:center;
+.flow .lane.rtl .join::before { left:4px; right:2px; }
+.flow .lane.rtl .join::after { right:auto; left:1px; border-left:0; border-right:5px solid var(--line); }
+.flow .join.short { flex:none; width:calc(var(--u) * .6); }
+.flow .join.short::after { display:none; }
+.flow .join.short::before, .flow .lane.rtl .join.short::before { left:1px; right:1px; }
+.flow .check { flex:none; position:relative; box-sizing:border-box; width:calc(var(--u) * 2.5); height:var(--tile);
+               border-radius:calc(var(--u) * .4); border:1px solid var(--line); color:var(--muted);
+               display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(var(--u) * .15);
                background:repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
-.flow .check .label { writing-mode:vertical-rl; transform:rotate(180deg); font-size:calc(var(--u) * .56); font-weight:700;
-                      letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
-.flow .check.on { background:#237a35; border-color:#237a35; animation:working 2s ease-out infinite; }
-.flow .check.on .label { color:#fff; }
+.flow .check .ico { width:calc(var(--u) * 1.1); height:calc(var(--u) * 1.1); }
+.flow .check .label { font-size:calc(var(--u) * .54); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.flow .check.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
 .flow .check.on::after { content:""; position:absolute; left:1px; right:1px; height:3px; border-radius:2px;
                          background:#b2f2bb; animation:scan 1.1s ease-in-out infinite alternate; }
-.flow .parked-count { position:absolute; right:calc(100% + 3px); bottom:-1px; min-width:var(--u); height:var(--u);
-                      border-radius:999px; background:#c92a2a; color:#fff; font-size:calc(var(--u) * .62);
+.flow .parked-count { position:absolute; top:calc(var(--u) * -.5); right:calc(var(--u) * -.5); min-width:var(--u);
+                      height:var(--u); border-radius:999px; background:#c92a2a; color:#fff; font-size:calc(var(--u) * .62);
                       line-height:var(--u); text-align:center; padding:0 calc(var(--u) * .2); }
-.flow .detour { flex:none; position:relative; padding:calc(var(--row) + var(--drop)) calc(var(--u) * .9) 0; }
-.flow .detour::before { content:""; position:absolute; left:calc(var(--u) * -.5); width:calc(var(--u) * 1.4 - 3px); top:var(--ch);
-                        height:calc(var(--row) + var(--drop) + var(--hh) / 2 - var(--ch));
-                        border-left:2px solid var(--line); border-bottom:2px solid var(--line);
-                        border-bottom-left-radius:7px; }
-.flow .detour::after { content:""; position:absolute; right:0; width:calc(var(--u) * .9); top:calc(var(--row) / 2 - 1px);
-                       height:calc(var(--row) / 2 + var(--drop) + var(--hh) / 2);
-                       border-right:2px solid var(--line); border-bottom:2px solid var(--line);
-                       border-bottom-right-radius:7px; }
-.flow .human { position:relative; display:inline-flex; align-items:center; gap:calc(var(--u) * .3); height:var(--hh);
-               padding:0 calc(var(--u) * .55); border-radius:999px; border:1px dashed var(--line); background:var(--bg);
-               color:var(--muted); font-size:calc(var(--u) * .74); font-weight:600; white-space:nowrap; text-decoration:none; }
-.flow .human::before { content:""; position:absolute; left:-6px; top:calc(50% - 4px);
-                       border:4px solid transparent; border-right:0; border-left:5px solid var(--line); }
-.flow .human svg { width:calc(var(--u) * .85); height:calc(var(--u) * .85); fill:none; stroke:currentColor; stroke-width:2.2;
-                   stroke-linecap:round; stroke-linejoin:round; }
+/* a human review: the square end of a lane, where the snake turns. In auto mode the two it takes over are green. */
+.flow .human { position:relative; align-self:stretch; box-sizing:border-box; min-height:var(--tile);
+               display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(var(--u) * .3);
+               padding:calc(var(--u) * .5); border-radius:calc(var(--u) * .55); border:2px dashed var(--line);
+               background:var(--bg); color:var(--muted); text-align:center; text-decoration:none; }
+.flow .human .ico { width:calc(var(--u) * 1.7); height:calc(var(--u) * 1.7); }
+.flow .human .name { display:block; font-size:calc(var(--u) * .86); font-weight:700; line-height:1.15; }
+.flow .human .sub { display:block; font-size:calc(var(--u) * .68); line-height:1.2; }
 .flow .human.waiting { border-style:solid; border-color:var(--tone); background:var(--tint); color:var(--fg); }
-.flow .human .count { background:var(--tone); color:#fff; border-radius:999px; font-size:calc(var(--u) * .68);
-                      line-height:calc(var(--u) * 1.05); padding:0 calc(var(--u) * .38); }
+.flow .human .count { position:absolute; top:calc(var(--u) * .4); right:calc(var(--u) * .4); background:var(--tone);
+                      color:#fff; border-radius:999px; font-size:calc(var(--u) * .7); line-height:calc(var(--u) * 1.15);
+                      min-width:calc(var(--u) * 1.15); padding:0 calc(var(--u) * .3); box-sizing:border-box; }
 .flow .human.arrived { animation:arrived 1s ease-out 3; }
+.flow .human.auto { border-style:solid; border-color:#237a35; color:var(--fg);
+                    background:color-mix(in srgb, #237a35 12%, var(--bg)); }
+.flow .human.auto .ico { color:#237a35; }
+.flow .human.auto .ico svg { fill:currentColor; stroke:none; }
+.flow.stack .flow-track { display:flex; flex-direction:column; align-items:stretch; }
+.flow.stack .lane, .flow.stack .lane.rtl { flex-direction:row; flex-wrap:wrap; row-gap:calc(var(--u) * .6); }
+.flow.stack .unit { display:flex; align-items:center; flex:none; }
+.flow.stack .step { min-width:0; }
+.flow.stack .flow-track[data-lab] .lane { row-gap:3.4rem; }
+.flow.stack .join { flex:none; width:calc(var(--u) * 1.4); }
+.flow.stack .join.short { width:calc(var(--u) * .6); }
+.flow.stack .join.edge { display:none; }
+.flow.stack .lane.rtl .join::before { left:2px; right:4px; }
+.flow.stack .lane.rtl .join::after { left:auto; right:1px; border-right:0; border-left:5px solid var(--line); }
+.flow.stack .human { flex-direction:row; justify-content:flex-start; text-align:left; padding:calc(var(--u) * .5) calc(var(--u) * .8); }
+.flow.stack .human .count { position:static; margin-left:auto; }
+.flow .text { display:block; }
 .flow [hidden] { display:none; }
 .flow.off .step, .flow.off .check { opacity:.7; }
 .flow .now { margin-top:.45rem; }
@@ -125,6 +222,7 @@ CSS = """/* the pipeline strip: agents on the track, checks as vertical blocks, 
   .flow .step.on, .flow .check.on, .flow .check.on::after, .flow .human.arrived { animation:none; }
 }
 .flow .human.review { --tone:#1f6feb; --tint:rgba(31,111,235,.12); }
+.flow .human.propose { --tone:#7048e8; --tint:rgba(112,72,232,.12); }
 .flow .human.publish { --tone:#237a35; --tint:rgba(47,158,68,.14); }
 @keyframes working { from { box-shadow:0 0 0 0 rgba(47,158,68,.6); } to { box-shadow:0 0 0 .45rem rgba(47,158,68,0); } }
 canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-rendering:pixelated; width:100%; }

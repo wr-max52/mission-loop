@@ -103,6 +103,8 @@ def loop_status() -> str:
     for m in missions:
         counts[_label(m)] = counts.get(_label(m), 0) + 1
     lines.append("Missions: " + (", ".join(f"{n} {k}" for k, n in counts.items()) or "none"))
+    lines.append("Auto mode: " + ("on (briefs and new epics are approved automatically; publishing still waits "
+                                  "for the human)" if settings.auto_mode() else "off (every approval waits for the human)"))
     waiting = [m for m in missions if _needs_human(m)]
     lines.append(f"Waiting for the human: {len(waiting) or 'nothing'}")
     lines += [f"- {m.topic[:80]} [{m.slug}]: {_label(m)}" for m in waiting[:MAX_LIST]]
