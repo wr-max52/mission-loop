@@ -211,18 +211,29 @@ def embed_providers() -> list[str]:
     """Providers whose embedding models the library can use now: Ollama, then each connected one with an embeddings API."""
     return [LOCAL] + [p for p in cloud_providers() if can_embed(p)]
 
+WORDS_ONLY = "-"   # saved as embed_model: words only, even while .env names a model
+
 def embed_model() -> str:
     """The library's embedding model: settings.json, then MISSION_LOOP_EMBED_MODEL; "" ranks by words only."""
-    return saved().get("embed_model") or _env(EMBED_ENV)
+    got = saved().get("embed_model")
+    if got == WORDS_ONLY:
+        return ""
+    return got or _env(EMBED_ENV)
 
 def set_embed_model(ref: str) -> str:
-    """Save the embedding model ("" goes back to .env, else words only). Raises ValueError for a bad name or a
-    provider without embeddings."""
+    """Save the embedding model: a model name, "" to go back to .env, or WORDS_ONLY to rank by words only (stored
+    only while .env names a model; otherwise nothing is stored). A name equal to .env's is not stored either, so a
+    later .env edit still applies. Raises ValueError for a bad name or a provider without embeddings."""
     ref = ref.strip()
     if len(ref) > 200 or any(c.isspace() for c in ref):
         raise ValueError("that isn't a model name")
-    if ref and not can_embed(split_model(ref)[0]):
+    env = _env(EMBED_ENV)
+    if ref == WORDS_ONLY:
+        ref = WORDS_ONLY if env else ""
+    elif ref and not can_embed(split_model(ref)[0]):
         raise ValueError(f"{PROVIDERS[split_model(ref)[0]]['name']} offers no embedding models")
+    elif ref == env:
+        ref = ""
     save(embed_model=ref)
     return embed_model()
 

@@ -219,6 +219,26 @@ def test_embedding_model_is_config(monkeypatch):
     monkeypatch.setenv("MISSION_LOOP_STUBS", "1")
     assert library.embed_model() == ""                                     # stub runs never reach the network
 
+def test_words_only_and_env_model_are_kept_apart(monkeypatch):
+    monkeypatch.setenv("MISSION_LOOP_EMBED_MODEL", "env-embed")
+    settings.set_embed_model("env-embed")                                  # the same as .env: nothing stored
+    assert "embed_model" not in settings.saved() and settings.embed_model() == "env-embed"
+    settings.set_embed_model(settings.WORDS_ONLY)                          # words only, though .env names a model
+    assert settings.embed_model() == "" and settings.saved()["embed_model"] == settings.WORDS_ONLY
+    settings.set_embed_model("")
+    assert settings.embed_model() == "env-embed"
+    monkeypatch.delenv("MISSION_LOOP_EMBED_MODEL")
+    settings.set_embed_model(settings.WORDS_ONLY)                          # no .env model: nothing to override
+    assert "embed_model" not in settings.saved()
+
+def test_a_sync_with_no_model_keeps_the_vectors(monkeypatch):
+    desk()
+    use(monkeypatch, Embedder())
+    _, vectors, _ = library.sync("embed-test")
+    library.sync("")                                                       # a stub run, or a server without .env
+    _, again, _ = library.sync("embed-test", time_limit=-1)
+    assert again.keys() == vectors.keys()
+
 # ---------- the MCP server ----------
 
 async def test_library_server_runs_over_mcp():
@@ -367,6 +387,8 @@ def test_chat_proposes_an_epic_through_the_theorists_checks():
     assert store.get_mission("dam").epic_fallback == store.find_epic("Water Rights").slug
     assert store.events("dam")[-1]["note"] == ("the chat assistant proposes the new epic Public Money: "
                                                "Both follow public money.")
+    status_tools.propose_epic("Grid Money", "dam, grid", "Both follow grid money.")
+    assert store.find_epic("Public Money") is None                       # emptied by the second proposal: dropped
 
 def test_chat_proposes_a_combine_and_links_missions():
     desk()
@@ -423,6 +445,15 @@ def test_settings_saves_and_checks_the_embedding_model(client, monkeypatch):
     assert len(fake.requests) == 1 and "library_top_n" not in settings.saved()    # unchanged model: no new check
     client.post("/settings/library", data={"do": "save", "provider": "none", "model": "", "top_n": "5"})
     assert settings.embed_model() == ""
+
+def test_settings_leave_the_env_model_in_env(client, monkeypatch):
+    use(monkeypatch, fake := Embedder())
+    monkeypatch.setenv("MISSION_LOOP_EMBED_MODEL", "embed-test")
+    client.post("/settings/library", data={"do": "save", "provider": "ollama", "model": "embed-test", "top_n": "10"})
+    assert "embed_model" not in settings.saved() and not fake.requests     # only top N changed
+    assert "(from MISSION_LOOP_EMBED_MODEL in .env)" in client.get("/settings").text
+    client.post("/settings/library", data={"do": "save", "provider": "none", "model": "", "top_n": "10"})
+    assert settings.embed_model() == ""                                    # words only wins over .env
 
 def test_settings_refuses_a_model_that_fails_its_check(client, monkeypatch):
     use(monkeypatch, Embedder(fail=True))

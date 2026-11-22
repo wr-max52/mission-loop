@@ -1239,7 +1239,7 @@ def library_section(conn: dict) -> str:
                           for n, label in names)
     tops = "".join(f'<option value="{n}"{" selected" if n == settings.library_top_n() else ""}>{n}</option>'
                    for n in settings.TOP_N_CHOICES)
-    source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and not settings.saved().get("embed_model")
+    source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and settings.saved().get("embed_model") in (None, "")
               else "")
     now = f" Embedding model: <code>{escape(current)}</code>{source}." if current else ""
     return f"""{heading("book", "Library", anchor="library")}
@@ -1748,9 +1748,10 @@ async def save_library(request: Request) -> Response:
         if pid != "none" and not model:
             raise ValueError("name the embedding model")
         ref = settings.model_ref(pid, model) if pid != "none" else ""
-        if ref and ref != settings.embed_model():
-            await run_in_threadpool(library.check, ref)
-        settings.set_embed_model(ref)
+        if ref != settings.embed_model():                 # unchanged: store nothing, so .env keeps applying
+            if ref:
+                await run_in_threadpool(library.check, ref)
+            settings.set_embed_model(ref or settings.WORDS_ONLY)
     except (ValueError, library.LibraryError) as e:
         return page("Settings", settings_body(request, f"The embedding model was not saved: {e}"))
     settings.set_library_top_n(top_n)

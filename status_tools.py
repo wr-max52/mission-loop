@@ -427,6 +427,7 @@ def propose_epic(title: str, missions: str, why: str = "") -> str:
                                                 {w["slug"] for w in _working()})
     except ValueError as err:
         return f"Not done: {err}."
+    orchestrator._drop_empty_proposals()     # as apply_theory does: an epic whose missions just moved away goes
     return (f"Proposed the epic {epic.title} with {moved} mission(s); it waits for the human's approval on the UI "
             f"home page" + (" (auto mode approves it shortly)." if settings.auto_mode() else "."))
 

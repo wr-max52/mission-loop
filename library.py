@@ -30,6 +30,7 @@ from contracts import Mission, State, ResearchBrief, Article
 DB = Path("data/library.db")
 TRANSPORT: httpx.BaseTransport | None = None   # tests swap in a MockTransport
 TIMEOUT = httpx.Timeout(120, connect=10)
+QUERY_TIME = 30                                 # seconds to embed a search's query
 CHUNK_CHARS = 1200                         # a long article section is split into passages about this long
 PASSAGE_CHARS = 700                        # a passage as a search shows it
 BATCH = 32                                 # passages per embedding request
@@ -166,7 +167,9 @@ def sync(ref: str | None = None, time_limit: float = EMBED_TIME) -> tuple[list[P
         c.executemany("DELETE FROM vectors WHERE id = ?", [(i,) for i in gone])
         c.executemany("INSERT OR IGNORE INTO passages VALUES (?, ?, ?)",   # another server may add it first
                       [(p.id, p.slug, p.kind) for p in found if p.id not in have])
-        c.execute("DELETE FROM vectors WHERE model != ?", (ref,))
+        if ref:                                      # with no model set, keep the vectors for when one is back
+            c.execute("DELETE FROM vectors WHERE model != ?", (ref,))
+        c.execute("DELETE FROM vectors WHERE id NOT IN (SELECT id FROM passages)")   # left by a racing sync
         vectors = {r[0]: _unpack(r[1]) for r in c.execute("SELECT id, vec FROM vectors WHERE model = ?", (ref,))}
     if not ref:
         return found, {}, ""
@@ -178,7 +181,7 @@ def sync(ref: str | None = None, time_limit: float = EMBED_TIME) -> tuple[list[P
             break
         batch = todo[i:i + BATCH]
         try:
-            got = embed([p.indexed() for p in batch], ref)
+            got = embed([p.indexed() for p in batch], ref, time_limit - (time.monotonic() - started))
         except LibraryError as e:
             note = f"ranked by words only: {e}"
             break
@@ -195,7 +198,8 @@ def status() -> dict:
         return {"passages": 0, "missions": 0, "embedded": 0, "model": ref}
     with _db() as c:
         n, missions = c.execute("SELECT COUNT(*), COUNT(DISTINCT slug) FROM passages").fetchone()
-        done = c.execute("SELECT COUNT(*) FROM vectors WHERE model = ?", (ref,)).fetchone()[0] if ref else 0
+        done = c.execute("SELECT COUNT(*) FROM vectors v JOIN passages p ON p.id = v.id WHERE v.model = ?",
+                         (ref,)).fetchone()[0] if ref else 0
     return {"passages": n, "missions": missions, "embedded": done, "model": ref}
 
 def _norm(v: list[float]) -> list[float]:
@@ -212,12 +216,13 @@ def _unpack(blob: bytes) -> list[float]:
 
 # ---------- embeddings: Ollama, or a cloud provider's OpenAI-shaped /embeddings ----------
 
-def _client() -> httpx.Client:
-    return httpx.Client(timeout=TIMEOUT, transport=TRANSPORT) if TRANSPORT else httpx.Client(timeout=TIMEOUT)
+def _client(seconds: float | None = None) -> httpx.Client:
+    timeout = TIMEOUT if seconds is None else httpx.Timeout(max(1.0, min(seconds, TIMEOUT.read)), connect=10)
+    return httpx.Client(timeout=timeout, transport=TRANSPORT) if TRANSPORT else httpx.Client(timeout=timeout)
 
-def embed(texts: list[str], ref: str) -> list[list[float]]:
-    """One vector per text from the embedding model ref. Raises LibraryError for a provider that can't embed,
-    isn't connected, refuses or answers with something else."""
+def embed(texts: list[str], ref: str, seconds: float | None = None) -> list[list[float]]:
+    """One vector per text from the embedding model ref, waiting at most seconds (default TIMEOUT). Raises
+    LibraryError for a provider that can't embed, isn't connected, refuses or answers with something else."""
     from agents import providers           # late: agents import settings, which is fine, but keep this module light
     pid, name = settings.split_model(ref)
     if not name:
@@ -226,7 +231,7 @@ def embed(texts: list[str], ref: str) -> list[list[float]]:
         raise LibraryError(f"{settings.PROVIDERS[pid]['name']} offers no embedding models")
     if pid == settings.LOCAL:
         url, body, headers = settings.ollama_host() + "/api/embed", {"model": name, "input": texts,
-                                                                    "keep_alive": "24h"}, {}
+                                                                    "keep_alive": "5m"}, {}
     else:
         if not settings.provider_on(pid):
             raise LibraryError(f"{settings.PROVIDERS[pid]['name']} isn't connected; add its key on the Settings page")
@@ -234,7 +239,7 @@ def embed(texts: list[str], ref: str) -> list[list[float]]:
         body, headers = {"model": name, "input": texts}, providers._headers(pid, settings.provider_key(pid))
     label = settings.PROVIDERS[pid]["name"]
     try:
-        with _client() as c:
+        with _client(seconds) as c:
             r = c.post(url, json=body, headers=headers)
     except httpx.HTTPError as e:
         raise LibraryError(f"{label} is not reachable ({type(e).__name__})")
@@ -310,9 +315,9 @@ def search(query: str, top_n: int | None = None, epic: str = "", mission: str = 
     words_rank = _ranks(bm25(query, found))
     meaning_rank: dict[str, int] = {}
     ref = embed_model()
-    if ref and any(p.id in vectors for p in found):
+    if ref and any(p.id in vectors for p in found) and not note.startswith("ranked by words only"):
         try:
-            q = _norm(embed([query], ref)[0])
+            q = _norm(embed([query], ref, QUERY_TIME)[0])
             sims = {p.id: sum(a * b for a, b in zip(q, vectors[p.id])) for p in found if p.id in vectors}
             meaning_rank = _ranks(sims)
         except LibraryError as e:
