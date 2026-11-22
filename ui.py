@@ -593,6 +593,36 @@ label.tick .hint { margin-left:-.15rem; }
 .pubbox.add > summary { color:var(--fg); font-size:1rem; }
 .pubbox details.formats { margin:.8rem 0; }
 h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
+/* the Settings page: its sections down the right, a nav down the left that lights the one in view */
+main:has(.settings) { max-width: 72rem; }
+.settings { display:grid; grid-template-columns:12rem minmax(0, 1fr); gap:2.5rem; align-items:start; }
+.set-nav { position:sticky; top:1.25rem; display:flex; flex-direction:column; gap:.15rem; }
+.set-nav a { display:flex; align-items:center; gap:.6rem; padding:.5rem .75rem; border-radius:8px; color:var(--muted);
+             font-size:.92rem; font-weight:600; text-decoration:none; white-space:nowrap;
+             transition:background .15s, color .15s, box-shadow .15s; }
+.set-nav a:hover { color:var(--fg); background:var(--quote); }
+.set-nav a.on { color:var(--fg); background:var(--quote); box-shadow:inset 3px 0 0 var(--accent); }
+.set-nav a.on .ico { color:var(--accent); }
+.set-nav .ico { width:1.05rem; height:1.05rem; }
+.set { scroll-margin-top:1.25rem; padding-bottom:1rem; margin-bottom:2.5rem; border-bottom:1px solid var(--rule); }
+.set:last-child { border-bottom:0; margin-bottom:0; }
+.set > h2 { display:flex; align-items:center; gap:.6rem; font-family:Georgia, serif; font-size:1.5rem; margin:0 0 .9rem; }
+.set > h2 .ico { width:1.3rem; height:1.3rem; color:var(--accent); }
+.set h3.part { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase;
+               letter-spacing:.08em; color:var(--muted); margin:2rem 0 .6rem; scroll-margin-top:1.25rem; }
+.set h3.part .ico { width:1.05rem; height:1.05rem; color:var(--fg); }
+.set > h2 + h3.part { margin-top:.4rem; }
+.set > h2 + .actions, .set > h2 + form.actions { margin-top:0; }
+.set .actions[id], .set form[id] { scroll-margin-top:1.25rem; }
+@media (max-width: 820px) {
+  .settings { display:block; }       /* not a grid row, so the bar sticks the whole way down */
+  .set-nav { top:0; z-index:5; flex-direction:row; overflow-x:auto; scrollbar-width:none; gap:.25rem;
+             margin:0 -1rem 1rem; padding:.5rem 1rem; background:var(--bg); border-bottom:1px solid var(--rule); }
+  .set-nav::-webkit-scrollbar { display:none; }
+  .set-nav a { padding:.4rem .7rem; }
+  .set-nav a.on { box-shadow:inset 0 -3px 0 var(--accent); }
+  .set, .set h3.part, .set .actions[id], .set form[id] { scroll-margin-top:4rem; }
+}
 /* Display: the theme as a segmented choice, the chat colour as ink swatches */
 :root:not([data-theme]) { color-scheme: light dark; }
 .display h3 { display:flex; align-items:center; gap:.45rem; margin:0 0 .2rem; font-family:Georgia, serif; font-size:1.1rem; }
@@ -703,6 +733,11 @@ ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
 ICON_BOARD = f'<svg viewBox="0 0 24 24" aria-hidden="true">{ICON_PATHS["board"]}</svg>'   # one drawing, in icons.py
 
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
+
+def part(name: str, title: str, anchor: str = "") -> str:
+    """A part of one of the Settings page's sections, e.g. Library under Research."""
+    a = f' id="{anchor}"' if anchor else ""
+    return f'<h3 class="part"{a}>{icon(name)}<span>{escape(title)}</span></h3>'
 
 def heading(name: str, title: str, count: int | None = None, anchor: str = "", cls: str = "group") -> str:
     """A section heading with its icon, e.g. the finger for anything waiting on you."""
@@ -1202,7 +1237,7 @@ def workers_section(conn: dict, models: list[dict] | None = None) -> str:
         lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
     models = models if models is not None else llm.catalog(conn)
     cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
-    return (f'{heading("people", "Workers", anchor="workers")}<p>{lead} The source checker, article checker and publisher are '
+    return (f'<p>{lead} The source checker, article checker and publisher are '
             f'code and use no model.</p><div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
 # The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
@@ -1317,7 +1352,7 @@ The key is checked with {escape(spec["name"])}, then saved to <code>data/provide
 
 def connection_section(conn: dict) -> str:
     cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
-    return (f'{heading("plug", "Model providers", anchor="providers")}<p>The workers can use any model from the '
+    return ("<p>The workers can use any model from the "
             "providers connected here, and each worker can use a different one. Ollama runs free on this machine; a "
             "cloud provider needs only its API key. Keys stay on this machine, in <code>data/providers.json</code> "
             "or <code>.env</code>, and are never committed.</p>"
@@ -1344,7 +1379,7 @@ def library_section(conn: dict) -> str:
     source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and settings.saved().get("embed_model") in (None, "")
               else "")
     now = f" Embedding model: <code>{escape(current)}</code>{source}." if current else ""
-    return f"""{heading("book", "Library", anchor="library")}
+    return f"""{part("book", "Library", "library")}
 <p>The Theorist and Researcher Chat search the desk's library before they reason: every mission's objective, each
 brief's claims with the quotes they cite, counterpoints and sources, and every article section. It always ranks by
 words; an embedding model adds ranking by meaning. It keeps itself up to date and lives in <code>data/library.db</code>
@@ -1680,8 +1715,7 @@ def publishing_section() -> str:
     else:
         cards = "".join(channel_card(c) for c in live) or \
             '<p class="muted">No channels yet, so articles stay on the local site. Add one below.</p>'
-    return heading("broadcast", "Publishing", anchor="publishing") + f"""
-<p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
+    return f"""<p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
 <strong>channels</strong>, everywhere else the articles go. Each channel posts from the local site, newest first, and
 remembers what it has posted. Publish any article again from the <a href="/published">Published</a> page.</p>
 {local_site_box()}
@@ -1746,36 +1780,103 @@ def display_forms() -> str:
   <noscript><p><button>Save</button></p></noscript>
 </form>{CHAT_COLOR_JS}"""
 
+# The Settings page's sections, in order: (anchor, icon, title). The nav down its left lists them.
+SETTINGS_SECTIONS = [
+    ("setup", "compass", "Setup"),
+    ("workers", "people", "Workers"),
+    ("providers", "plug", "Model providers"),
+    ("research", "search", "Research"),
+    ("display", "monitor", "Display"),
+    ("publication", "newspaper", "Publication"),
+    ("publishing", "broadcast", "Publishing"),
+]
+
+# The nav down the Settings page's left: a click glides to its section, and scrolling lights the section in view.
+SETTINGS_NAV_JS = """<script>
+(() => {
+  const nav = document.querySelector(".set-nav");
+  if (!nav) return;
+  const links = [...nav.querySelectorAll("a")];
+  const secs = links.map(a => document.getElementById(a.hash.slice(1)));
+  let hold = 0;                                    // while a click glides there, scrolling past others lights nothing
+  function light(i) {
+    links.forEach((a, j) => { a.classList.toggle("on", j === i); a.toggleAttribute("aria-current", j === i); });
+    const a = links[i];
+    if (a && nav.scrollWidth > nav.clientWidth)    // the bar across the top on a narrow screen keeps it in view
+      nav.scrollTo({left: a.offsetLeft - (nav.clientWidth - a.offsetWidth) / 2, behavior: "smooth"});
+  }
+  function spy() {
+    if (Date.now() < hold) return;
+    const across = getComputedStyle(nav).flexDirection === "row";     // the bar across the top on a narrow screen
+    const line = Math.min(innerHeight * .3, 220) + (across ? nav.offsetHeight : 0);
+    let i = 0;
+    secs.forEach((s, j) => { if (s && s.getBoundingClientRect().top <= line) i = j; });
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) i = secs.length - 1;
+    light(i);
+  }
+  addEventListener("scroll", spy, {passive: true});          // seven boxes measured: cheap enough on every scroll
+  addEventListener("scrollend", () => { hold = 0; spy(); });
+  addEventListener("resize", spy);
+  nav.addEventListener("click", e => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    const i = links.indexOf(a), s = secs[i];
+    if (!s) return;
+    e.preventDefault();
+    hold = Date.now() + 1200;
+    light(i);
+    const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    s.scrollIntoView({behavior: calm ? "auto" : "smooth", block: "start"});
+    history.replaceState(history.state, "", a.hash);
+  });
+  spy();
+  addEventListener("DOMContentLoaded", spy, {once: true});   // after KEEP_SCROLL_JS puts the page back where it was
+  addEventListener("load", spy, {once: true});
+})();
+</script>"""
+
+def settings_section(anchor: str, body: str) -> str:
+    ico, title = next((i, t) for a, i, t in SETTINGS_SECTIONS if a == anchor)
+    return f'<section class="set" id="{anchor}"><h2>{icon(ico)}<span>{escape(title)}</span></h2>{body}</section>'
+
 def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
     models = llm.catalog(conn)
     sprites = script("researchers.js") if settings.animations() else ""
-    return f"""{err}<h1>Settings</h1>
-{setup_section(conn)}
-{workers_section(conn, models)}
-{connection_section(conn)}
-{search_section()}
-{library_section(conn)}
-{heading("clock", "Loop")}
+    on = ' class="on" aria-current="true"'
+    nav = "".join(f'<a href="#{a}"{on if n == 0 else ""}>{icon(i)}<span>{escape(t)}</span></a>'
+                  for n, (a, i, t) in enumerate(SETTINGS_SECTIONS))
+    loop = f"""{part("clock", "Loop")}
 <form method="post" action="/settings/loop-every" class="inline">
   <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
   <input type="number" id="every" name="every" value="{settings.loop_every():g}" min="1" step="1" style="width:5rem">
   <span class="hint">minutes before looking again (a loop already running keeps its own until you start it again)</span>
   <button>Save</button>
-</form>
-{heading("monitor", "Display")}
-{display_forms()}
-{board_style_form()}
-<form method="post" action="/settings/animations" class="actions">
+</form>"""
+    animations = f"""<form method="post" action="/settings/animations" class="actions display">
+  <h3>{icon("activity")}Animations</h3>
+  <p class="hint">Little pixel researchers who drop by the missions a model is working on, and stand by their worker here.</p>
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
-  Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
+  Animations</label>
   <noscript><p><button>Save</button></p></noscript>
-</form>
-{avatar_link()}
-{publication_section()}
-{publishing_section()}
+</form>"""
+    sections = "".join([
+        settings_section("setup", setup_section(conn)),
+        settings_section("workers", workers_section(conn, models) + loop),
+        settings_section("providers", connection_section(conn)),
+        settings_section("research", search_section() + library_section(conn)),
+        settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
+        settings_section("publication", publication_section()),
+        settings_section("publishing", publishing_section()),
+    ])
+    return f"""{err}<h1>Settings</h1>
+<div class="settings">
+<nav class="set-nav" aria-label="Settings sections">{nav}</nav>
+<div class="set-body">{sections}</div>
+</div>
+{SETTINGS_NAV_JS}
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
@@ -2332,7 +2433,7 @@ def setup_section(conn: dict) -> str:
     summary = ("Everything is set up." if doctor.done(found) else
                "The loop can start; the rest helps it do its job." if all(c.ok for c in found if c.blocks_loop) else
                "The loop can't start until a model is connected.")
-    return (f'{heading("compass", "Setup", anchor="setup")}<div class="actions"><p>{summary} The same checks: '
+    return (f'<div class="actions"><p>{summary} The same checks: '
             f'<code>python run.py doctor</code>.</p>{note}<ul class="checks">{rows}</ul>{again}</div>')
 
 def search_section() -> str:
@@ -2347,7 +2448,7 @@ def search_section() -> str:
         state = (f'No key yet, so research can\'t search the web (it can still read pages). '
                  f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">Get a free key from Brave</a>.')
     status = toolbox_status()
-    return (f'{heading("search", "Web search", anchor="search")}<div class="actions"><p>{state}</p>'
+    return (f'{part("search", "Web search", "search")}<div class="actions"><p>{state}</p>'
             f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
 
 def toolbox_status() -> str:
@@ -2358,8 +2459,7 @@ def toolbox_status() -> str:
 
 def publication_section() -> str:
     name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
-    return (f'{heading("newspaper", "Publication", anchor="publication")}'
-            f'<form method="post" action="/settings/publication" class="actions">'
+    return (f'<form method="post" action="/settings/publication" class="actions">'
             f'<p class="hint">How the published site introduces itself: its pages, About page and feeds. '
             f'Saving redraws every published page.</p>'
             f'<label for="pub-name">Name</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
@@ -3088,25 +3188,30 @@ def board_style_panel(style: dict) -> str:
             f'aria-label="Your own colour"></label></div>'
             f'<a class="more" href="/settings#board">Also on the Settings page</a></div>')
 
+# A click on one of the Settings page's board choices sends that choice alone (`changed`), so a page showing an older
+# look (the gear on the board changed it in another tab, or the browser restored old ticks) never saves the rest back.
+BOARD_PICK = "this.form.changed.value = this.name; this.form.requestSubmit()"
+
 def board_style_form() -> str:
     """The same choices on the Settings page; each change saves at once."""
     style = settings.board_style()
     def choice(key: str, options: dict) -> str:
         return "".join(f'<label><input type="radio" name="{key}" value="{v}"{" checked" if style[key] == v else ""} '
-                       f'onchange="this.form.requestSubmit()">{escape(n)}</label>' for v, n in options.items())
+                       f'onchange="{BOARD_PICK}">{escape(n)}</label>' for v, n in options.items())
     colors = settings.BOARD_STRINGS[style["string"]]
     swatches = "".join(
         f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
-        f'{" checked" if style["color"] == c else ""} onchange="this.form.requestSubmit()"><span class="dab"></span>'
+        f'{" checked" if style["color"] == c else ""} onchange="{BOARD_PICK}"><span class="dab"></span>'
         f'{escape(n)}</label>' for n, c in colors.items())
     presets = {c for kind in settings.BOARD_STRINGS.values() for c in kind.values()}
     own = style["color"] not in presets
     swatches += (f'<label class="swatch own{" set" if own else ""}" style="--c:{style["color"]};--ink:{settings.ink_on(style["color"])}">'
                  f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="Your own colour" '
                  f'onchange="this.form.querySelectorAll(\'input[name=color]\').forEach(r => r.checked = false); '
-                 f'this.form.requestSubmit()">Your own</label>')
-    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board">
-  <h3>{ICON_BOARD}Board</h3>
+                 f'this.form.changed.value = \'color\'; this.form.requestSubmit()">Your own</label>')
+    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board" autocomplete="off">
+  <input type="hidden" name="changed" value="">
+  <h3>{icon("board")}Board</h3>
   <p class="hint">How the <a href="/board">board</a> looks: its surface, its cards, and what joins them. The gear on the
   board changes the same thing.</p>
   <div class="choice" role="radiogroup" aria-label="Surface">{choice("surface", settings.BOARD_SURFACES)}</div>
@@ -3136,6 +3241,8 @@ async def save_board_style(request: Request) -> Response:
     values = {k: form.get(k) for k in ("surface", "cards", "string", "color") if form.get(k)}
     if "color" not in values and form.get("own"):
         values["color"] = form.get("own")      # the colour picker: no preset is ticked
+    if form.get("changed") in ("surface", "cards", "string", "color"):
+        values = {k: v for k, v in values.items() if k == form.get("changed")}   # one click, one change
     if "string" in values and values["string"] != settings.board_style()["string"]:
         values.pop("color", None)              # a new kind brings its own first colour
     try:
@@ -3507,7 +3614,7 @@ def avatar_link() -> str:
     n, off = len(avatars.custom()), len(avatars.off())
     bits = [f"{n} of your own" if n else "", f"{off} staying home" if off else ""]
     now = " · ".join(b for b in bits if b) or "just the twelve built-in researchers"
-    return f"""<div class="actions avatar-link">
+    return f"""<div class="actions display avatar-link">
   <h3>{icon("person")}Avatars</h3>
   <p class="hint">Dress a researcher from pieces, or ask a model to draw one. They join their crew and drop by like
   everyone else; switch anyone off to keep them home. Right now: {escape(now)}.</p>
