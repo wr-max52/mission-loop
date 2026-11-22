@@ -95,12 +95,14 @@ def _gather(m: Mission, now) -> str:
         activity.begin(m.slug, "sources")
         evidence = agents.gather(m, now, paused) if paused else agents.gather(m, now)
     except Exception as e:             # model, tool or network failure counts as a failed attempt
+        activity.fail(e)
         store.delete_artifact(m.slug, "evidence")   # the next attempt searches afresh
         m.search_paused = False
         return _research_failed(m, None, f"research crashed: {type(e).__name__}: {e}")
     store.save_artifact(m.slug, "evidence", evidence)
     m.search_paused = not evidence.finished
     if not evidence.finished:          # the stop button cut the search short: it carries on next start
+        activity.outcome("stopped", "paused mid-search; it carries on when the loop starts again")
         calls = sum(1 for x in evidence.messages if x.get("role") == "tool")
         return f"stopped mid-search after {calls} tool result(s); the search carries on when the loop starts again"
     m.gathered = True
@@ -122,6 +124,7 @@ def _write_brief(m: Mission, now) -> str:
         activity.begin(m.slug, "source_check")
         ok, notes = agents.validate(m, brief)
     except stopping.Interrupted as e:  # a stopped attempt isn't a failed one
+        activity.fail(e)
         m.interrupted_brief = e.draft
         if e.draft:                    # the draft replaces the sources; without one, the brief is rewritten from them
             _drop_evidence(m)
@@ -131,6 +134,7 @@ def _write_brief(m: Mission, now) -> str:
                  "the brief is written again from the same sources")
         return f"stopped mid-brief; {saved} when the loop starts again"
     except Exception as e:             # a crash is a failed attempt; the next one searches again
+        activity.fail(e)
         ok = False                         # a brief that can't pass (too few sources held up) brings its draft
         brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {type(e).__name__}: {e}"
     _drop_evidence(m)
@@ -143,6 +147,7 @@ def _write_brief(m: Mission, now) -> str:
         m.rejected_brief = None
         m.state = State.BRIEF_READY
         return f"brief passed on attempt {m.attempts}; review {path}"
+    activity.outcome("failed", notes)
     return _research_failed(m, brief, notes)
 
 def _drop_evidence(m: Mission) -> None:
@@ -191,6 +196,7 @@ def step(m: Mission, now) -> str | None:
             activity.begin(m.slug, "article_check")
             ok, notes = agents.check_article(m, brief, article, records)
         except stopping.Interrupted as e:
+            activity.fail(e)
             m.write_attempts -= 1
             m.interrupted_article = e.draft
             saved = ("its draft is checked" if e.draft else
@@ -198,6 +204,7 @@ def step(m: Mission, now) -> str | None:
                      else "nothing usable was written; writing restarts")
             return f"stopped mid-writing; {saved} when the loop starts again"
         except Exception as e:             # same rule as research: a crash is a failed attempt
+            activity.fail(e)
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
@@ -208,6 +215,7 @@ def step(m: Mission, now) -> str | None:
             m.rejected_article = None
             m.state = State.ARTICLE_READY
             return f"article passed check on attempt {m.write_attempts}; review {path}"
+        activity.outcome("failed", notes)
         m.validator_notes = notes
         if article is not None:            # keep the failed article for humans, who may push it through
             m.rejected_article = RejectedArticle(article=article, notes=notes)
@@ -353,6 +361,7 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
         try:
             note = step(m, now_fn())
         except Exception as e:
+            activity.fail(e)
             _broke(m, before, e, now_fn(), failed)
             break
         finally:
@@ -389,6 +398,9 @@ def _as_worker(seat: str, fn, *args):
     checkpoint.use(save_progress)
     try:
         return fn(*args)
+    except BaseException as e:
+        activity.fail(e)                   # the step log says it failed (or was stopped)
+        raise
     finally:
         checkpoint.use(None)
         activity.clear()
@@ -534,6 +546,7 @@ def find_new_missions(now) -> int:
         activity.begin("", "finder")
         ideas = agents.find_missions(inspiration, [m.topic for m in missions], now, _finder_epics(missions))
     except Exception as e:
+        activity.fail(e)
         print(f"mission finder failed: {type(e).__name__}: {e}", flush=True)
         return 0
     finally:
@@ -607,6 +620,7 @@ def think(now):
         activity.begin("", "theorist")
         return agents.tidy_board(now) if kind == "board" else agents.theorize(now)
     except Exception as e:
+        activity.fail(e)
         why = f"{type(e).__name__}: {e}"
         print(f"theorist {'board turn ' if kind == 'board' else ''}failed: {why}", flush=True)
         failed = {"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": turn, "kind": kind, "failed": why}
@@ -885,6 +899,7 @@ def post_to(channel, now, max_refusals: int = MAX_REFUSALS, only_asked: bool = F
             print(f"{channel.NAME}: no post allowance now ({e})", flush=True)
             break
         except Refused as e:
+            activity.fail(e)
             m.channel_errors[channel.KEY] = str(e)
             m.publish_requests.pop(channel.KEY, None)
             store.save_mission(m)
@@ -892,6 +907,7 @@ def post_to(channel, now, max_refusals: int = MAX_REFUSALS, only_asked: bool = F
             refusals += 1
             continue
         except Exception as e:             # bad key, network, site down: nothing is lost, try next turn
+            activity.fail(e)
             print(f"{channel.NAME} posting failed: {type(e).__name__}: {e}", flush=True)
             break
         finally:

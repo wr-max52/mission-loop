@@ -7,6 +7,7 @@ runs agents itself. Work happens in the loop, which the UI can start, stop and w
 """
 import asyncio, concurrent.futures, hashlib, json, os, re, subprocess, sys, threading, time
 from html import escape
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, quote
 from starlette.applications import Starlette
@@ -322,8 +323,21 @@ form.loop-ctl button.play.off:hover { background:#2b8a3e; border-color:#2b8a3e; 
 .dot { width:.6rem; height:.6rem; border-radius:50%; background:var(--muted); display:inline-block; }
 .dot.on { background:#2f9e44; } .dot.stopping { background:#e8a33d; }
 .loop .grow { flex:1; }
-.now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
+.now { flex-basis:100%; color:var(--muted); font-size:.9rem; display:flex; align-items:flex-end; gap:.4rem 1rem; flex-wrap:wrap; }
 .now strong, .now a { color:var(--fg); }
+.now .steps { list-style:none; margin:0; padding:0; flex:1; min-width:16rem; }
+.now .steps li { padding:.1rem 0; }
+.now .steps li.past { font-size:.82rem; opacity:.8; }
+.now .steps li.past strong { font-weight:600; }
+.now .steps li.past + li.live, .now .steps li.live + li.past { margin-top:.25rem; }
+.now .steps li.live + li.past { border-top:1px solid var(--rule); padding-top:.35rem; }
+.now a.steps-all, a.steps-all { font-size:.82rem; color:var(--muted); white-space:nowrap; }
+.out.failed { color:#c92a2a; font-weight:600; cursor:help; }
+.out.stopped { color:#b26a00; font-weight:600; cursor:help; }
+.out.live { color:#2f9e44; font-weight:600; }
+table.steps-log .out { cursor:auto; }
+table.steps-log td strong { white-space:nowrap; } table.steps-log .out.done { color:var(--muted); }
+table.steps-log td.took { white-space:nowrap; font-variant-numeric:tabular-nums; }
 @keyframes blink { 50% { opacity:.2; } }
 h1 { font-family: Georgia, serif; }
 h2.group { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
@@ -627,10 +641,16 @@ h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
 """
 
 ELAPSED_JS = """<script>
-const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e => {
-  const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(e.dataset.since)));
-  e.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-});
+const showElapsed = () => {
+  document.querySelectorAll("[data-since]").forEach(e => {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(e.dataset.since)));
+    e.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  });
+  document.querySelectorAll("[data-ago]").forEach(e => {      // ui.ago, kept current; older dates stay as written
+    const s = Date.now() / 1000 - Number(e.dataset.ago);
+    if (s < 86400) e.textContent = s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`;
+  });
+};
 setInterval(showElapsed, 1000);
 </script>"""
 
@@ -828,12 +848,64 @@ def doing(e: dict) -> str:
     return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> is working on '
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
-def flow_status(now: list[dict], running: bool) -> str:
-    """The lines under the strip: who is working on what, and for how long. With more than one worker busy,
-    one line each, named."""
-    lines = [(f'<span class="who">{settings.seat_name(e["worker"])}</span> ' if settings.seat_name(e["worker"])
-              and len(now) > 1 else "") + doing(e) for e in now]
-    return "<br>".join(lines) or ("No agent is working right now." if running else "Loop is off, so every step is idle.")
+def took(seconds: float) -> str:
+    """How long a step took: "0.4s", "12s", "4m 12s", "1h 3m"."""
+    seconds = max(0.0, float(seconds))
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    s = int(seconds)
+    return f"{s // 3600}h {s % 3600 // 60}m" if s >= 3600 else f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
+
+def ago(at: float) -> str:
+    """When a step ended, from now: "just now", "5m ago", "2h ago", else the date."""
+    s = time.time() - float(at)
+    if s < 60:
+        return "just now"
+    if s < 3600:
+        return f"{int(s // 60)}m ago"
+    if s < 86400:
+        return f"{int(s // 3600)}h ago"
+    return datetime.fromtimestamp(float(at)).strftime("%b %-d, %H:%M")
+
+PAST = {"theorist": "looked across the desk for patterns", "finder": "looked for new missions"}
+OUTCOME = {"failed": "failed", "stopped": "stopped"}
+
+def step_task(e: dict, topics: dict[str, str]) -> str:
+    """What a finished step did: "worked on <topic>" (a link), or what a desk-wide agent did."""
+    if not e.get("slug"):
+        return PAST.get(e["agent"], "worked for the desk")
+    return (f'worked on <a href="/m/{quote(e["slug"])}">'
+            f'{escape(topics.get(e["slug"], e["slug"]))}</a>')
+
+def step_outcome(e: dict) -> str:
+    kind = e.get("outcome", "done")
+    if kind not in OUTCOME:
+        return ""
+    why = f' title="{escape(e.get("why", ""), quote=True)}"' if e.get("why") else ""
+    return f' · <span class="out {kind}"{why}>{OUTCOME[kind]}</span>'
+
+def past_step(e: dict, topics: dict[str, str]) -> str:
+    """One finished step: "Source finder worked on <topic> · took 4m 12s · 3m ago"."""
+    return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> {step_task(e, topics)}'
+            f' · took {took(e["ended"] - e["since"])}{step_outcome(e)}'
+            f' · <span class="ago" data-ago="{float(e["ended"])}">{ago(e["ended"])}</span>')
+
+RECENT_STEPS = 3                           # finished steps shown under the strip
+
+def flow_status(now: list[dict], running: bool, topics: dict[str, str] | None = None) -> str:
+    """The brief log under the strip: who is working on what and for how long (with more than one worker busy,
+    one line each, named), then the last few finished steps, with how long each took, and a link to the full log
+    (activity.LOG, on /log)."""
+    lines = [f'<li class="live">' + (f'<span class="who">{settings.seat_name(e["worker"])}</span> '
+             if settings.seat_name(e["worker"]) and len(now) > 1 else "") + doing(e) + "</li>" for e in now]
+    if not lines:
+        idle = "No agent is working right now." if running else "Loop is off, so every step is idle."
+        lines.append(f'<li class="live idle">{idle}</li>')
+    if topics is None:
+        topics = {m.slug: m.topic for m in store.all_missions()}
+    lines += [f'<li class="past">{past_step(e, topics)}</li>' for e in activity.recent(RECENT_STEPS)]
+    return (f'<ul class="steps">{"".join(lines)}</ul>'
+            f'<a class="steps-all" href="/log">Full log &rarr;</a>')
 
 def flow_state() -> dict:
     """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
@@ -855,7 +927,7 @@ def flow_state() -> dict:
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
         "states": {m.slug: m.state.value for m in missions},
-        "now": flow_status(now, running),
+        "now": flow_status(now, running, {m.slug: m.topic for m in missions}),
     }
 
 def flow_strip(state: dict) -> str:
@@ -2691,7 +2763,9 @@ async def mission(request: Request) -> Response:
         rows = "".join(f'<tr><td class="when">{escape(e["at"][:16].replace("T", " "))}</td>'
                        f'<td>{escape(LABELS.get(State(e["to_state"]), e["to_state"]))}</td>'
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
-        body.append(f'{heading("history", "History", cls="sec")}<table class="events">{rows}</table>')
+        body.append(f'{heading("history", "History", cls="sec")}<table class="events">{rows}</table>'
+                    f'<p><a class="steps-all" href="/log?m={quote(slug)}">Every agent step on this mission, with how '
+                    f'long each took &rarr;</a></p>')
     return page(m.topic, "\n".join(body), poll=True)
 
 async def preview(request: Request) -> Response:
@@ -2959,6 +3033,64 @@ async def chat_answer(request: Request) -> JSONResponse:
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
+
+LOG_PAGE = 200                             # steps per page of the full log
+
+def step_row(e: dict, topics: dict[str, str], live: bool = False) -> str:
+    """One row of the full log: when it ended, which agent, on what, on which worker, how long, how it ended."""
+    if live:
+        when, took_ = "now", f'<span data-since="{float(e["since"])}">{elapsed(e["since"])}</span> so far'
+        out = '<span class="out live">working</span>'
+    else:
+        when = datetime.fromtimestamp(float(e["ended"])).strftime("%b %-d %H:%M:%S")
+        took_ = took(e["ended"] - e["since"])
+        kind = e.get("outcome", "done")
+        out = (f'<span class="out {kind}">{OUTCOME.get(kind, "done")}</span>'
+               + (f' <span class="muted">{escape(e["why"])}</span>' if e.get("why") else ""))
+    task = (f'<a href="/m/{quote(e["slug"])}">{escape(topics.get(e["slug"], e["slug"]))}</a>' if e.get("slug")
+            else f'<span class="muted">{PAST.get(e["agent"], "the whole desk")}</span>')
+    who = settings.seat_name(e.get("worker", "")) or "Desk"
+    return (f'<tr><td class="when">{when}</td><td><strong>{activity.AGENTS[e["agent"]]}</strong></td><td>{task}</td>'
+            f'<td class="when">{escape(who)}</td><td class="took">{took_}</td><td>{out}</td></tr>')
+
+async def log_page(request: Request) -> HTMLResponse:
+    """The full step log (activity.LOG): every agent step the loop has finished, newest first, with how long each
+    took and how it ended, the ones at work now on top. ?m=<slug> keeps one mission's; ?page= goes back in time."""
+    slug = request.query_params.get("m", "")
+    try:
+        page_no = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page_no = 1
+    topics = {m.slug: m.topic for m in store.all_missions()}
+    steps = activity.history()
+    live = running_now()
+    if slug:
+        steps, live = [e for e in steps if e.get("slug") == slug], [e for e in live if e.get("slug") == slug]
+    pages = max(1, -(-len(steps) // LOG_PAGE))
+    page_no = min(page_no, pages)
+    shown = steps[(page_no - 1) * LOG_PAGE: page_no * LOG_PAGE]
+    back = (f'<a class="back" href="/m/{quote(slug)}">&larr; Back to the mission</a>' if slug
+            else '<a class="back" href="/">&larr; Back to missions</a>')
+    whose = f' on <a href="/m/{quote(slug)}">{escape(topics.get(slug, slug))}</a>' if slug else ""
+    total = sum(e["ended"] - e["since"] for e in steps)
+    body = [f'<p>{back}</p>', "<h1>Step log</h1>",
+            f'<p class="muted">{len(steps)} finished step{"" if len(steps) == 1 else "s"}{whose}, '
+            f'{took(total)} of agent work in all. Saved on this machine in <code>{escape(str(activity.LOG))}</code>.'
+            + (' <a href="/log">Show every mission</a>.' if slug else "") + "</p>"]
+    rows = [step_row(e, topics, live=True) for e in (live if page_no == 1 else [])]
+    rows += [step_row(e, topics) for e in shown]
+    if rows:
+        body.append('<table class="events steps-log"><tr><td class="when">Ended</td><td class="when">Step</td>'
+                    '<td class="when">Mission</td><td class="when">Worker</td><td class="when">Took</td>'
+                    f'<td class="when">Outcome</td></tr>{"".join(rows)}</table>')
+    else:
+        body.append('<p class="muted">No steps yet. Each agent step is written here as it finishes, once the loop runs.</p>')
+    if pages > 1:
+        link = lambda n, label: f'<a class="btn" href="/log?{("m=" + quote(slug) + "&") if slug else ""}page={n}">{label}</a>'
+        body.append(f'<p>{link(page_no - 1, "&larr; Newer") if page_no > 1 else ""} '
+                    f'<span class="muted">Page {page_no} of {pages}</span> '
+                    f'{link(page_no + 1, "Older &rarr;") if page_no < pages else ""}</p>')
+    return page("Step log", "".join(body), poll=True)
 
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
@@ -3969,6 +4101,7 @@ app = Starlette(routes=[
     Route("/settings/custom-channel", add_custom_channel, methods=["POST"]),
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
+    Route("/log", log_page),
     Route("/board", board_page),
     Route("/board/move", board_move, methods=["POST"]),
     Route("/board/style", board_style_save, methods=["POST"]),
