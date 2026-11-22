@@ -160,6 +160,9 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                     msg = await llm.chat(messages, tools=tb.tools, model=llm.SEARCH_MODEL)
                 except llm.Cut:
                     break
+                except llm.Overrun as e:   # a stuck turn ends the run; what it found is kept
+                    print(f"search stopped: {e}; continuing with what it found", flush=True)
+                    break
                 if msg.tool_calls and stopping.requested():
                     break                  # its tool calls would never be answered
                 messages.append(msg)
@@ -217,6 +220,14 @@ async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> Researc
             msg = await llm.chat(messages, format=schema)
         except llm.Cut as cut:             # stop's grace ran out: keep what got written
             raise stopping.Interrupted(stopping.salvage(cut.text, ResearchBrief))
+        except llm.Overrun as e:           # stuck: keep what it wrote before, if that holds a brief
+            brief = stopping.salvage(e.text, ResearchBrief)
+            if brief is None:
+                raise ResearchFailed(f"the brief writer got stuck: {e}")
+            print(f"brief writer: {e}; the validator checks what it wrote before that", flush=True)
+            if pocs is not None:
+                brief.pocs = pocs
+            return brief
         try:
             brief = ResearchBrief.model_validate_json(msg.content)
             if pocs is not None:

@@ -44,7 +44,10 @@ def script(monkeypatch, replies):
     it = iter(replies)
     async def fake_chat(messages, tools=None, format=None, model=None):
         seen.append({"tools": tools, "format": format, "model": model})
-        return next(it)
+        reply = next(it)
+        if isinstance(reply, Exception):   # a reply that raises, like llm.Overrun
+            raise reply
+        return reply
     monkeypatch.setattr(llm, "chat", fake_chat)
     return seen
 
@@ -205,3 +208,18 @@ async def test_a_timeout_from_inside_a_call_is_still_a_failure(monkeypatch):
     monkeypatch.setattr(llm, "chat", fake_chat)
     with pytest.raises(TimeoutError):
         await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+
+async def test_a_stuck_brief_writer_keeps_what_it_wrote(monkeypatch):
+    script(monkeypatch, [text("DONE"), llm.Overrun("reply ran past 8192 tokens", BRIEF_JSON[:-1] + "\n" * 500)])
+    brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert brief.thesis.startswith("Stub thesis")                   # the validator checks it as usual
+
+async def test_a_stuck_brief_writer_with_nothing_usable_fails_the_attempt(monkeypatch):
+    script(monkeypatch, [text("DONE"), llm.Overrun("reply took over 10 minutes", "\n" * 500)])
+    with pytest.raises(research_mod.ResearchFailed, match="got stuck"):
+        await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+
+async def test_a_stuck_search_turn_ends_the_search_not_the_research(monkeypatch):
+    script(monkeypatch, [tool_call("search", query="x"), llm.Overrun("tool turn ran past 2048 tokens"), text(BRIEF_JSON)])
+    brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
+    assert brief.thesis.startswith("Stub thesis") and FakeToolbox.calls == [("search", {"query": "x"})]
