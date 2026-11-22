@@ -253,7 +253,8 @@ def test_settings_page_shows_both_workers_and_the_connection(client):
     assert "other-test:8b · 5.2 GB" in html and "big-test:30b · 18.0 GB · loaded" in html     # every pulled model
     assert "<strong>Source finder</strong>" in html and "<strong>Article writer</strong>" in html   # where each is used
     assert 'data-crew="assistant"' in html and 'data-crew="pi"' in html and "researchers.js" in html
-    assert "LLM connection" in html and "in memory, 21.0 GB" in html
+    assert "Model providers" in html and "in memory, 21.0 GB" in html
+    assert '<optgroup label="Ollama">' in html and "Add a provider" in html and 'value="anthropic"' in html
     assert 'name="ollama_host"' in html and 'name="f916_url"' in html and 'name="service"' in html
 
 def test_settings_page_asks_for_models_when_none_are_configured(client, monkeypatch):
@@ -326,7 +327,7 @@ def test_unchanged_model_saves_while_ollama_is_closed(client, monkeypatch):
     closed = {"host": "http://127.0.0.1:11434", "ok": False, "error": "ConnectError", "models": [], "loaded": {}}
     monkeypatch.setattr(llm, "connection", lambda timeout=2: closed)
     html = client.get("/settings").text
-    assert "small-test:1b (Ollama not reachable)" in html and "is not reachable (ConnectError)" in html
+    assert "small-test:1b (Ollama not reachable)" in html and "(ConnectError)" in html and "Connect Ollama" in html
     r = client.post("/settings/worker", data={"worker": "assistant", "model": "small-test:1b"}, follow_redirects=False)
     assert "worker_off" in r.headers["location"]
     r = client.post("/settings/worker", data={"worker": "assistant", "model": "other-test:8b", "on": "on"}, follow_redirects=False)

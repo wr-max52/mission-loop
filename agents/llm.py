@@ -1,8 +1,10 @@
-"""Thin wrapper over the Ollama client so tests can replace one function. Every call goes to the configured
-LLM connection (settings.ollama_host) with the configured models (settings.model_for); none are written here."""
+"""Every model call goes through here, so tests can replace one function. A model is an Ollama model (a bare name,
+sent to settings.ollama_host) or a cloud provider's ("anthropic/claude-...", sent by agents/providers.py); either
+way the agents get an ollama.Message back. Models come from config (settings.model_for); none are written here."""
 import asyncio, time
 import ollama
 import settings, stopping, trail
+from agents import providers
 
 def model_for(role: str) -> str:
     """The model for a role's steps: "assistant" (search and read) or "pi" (write). See settings.WORKERS."""
@@ -15,6 +17,14 @@ TURN_TOKENS = 2048                         # longest tool turn
 REPLY_TIME_LIMIT = 10 * 60                 # seconds one call may take (a brief takes about 2 minutes)
 CHARS_PER_TOKEN = 3                        # rough and on the safe side: English runs nearer 4
 TOOLS_ROOM = 2048                          # tokens left over for the tool definitions and chat template
+# A cloud model has far more room than a local 32k context, but every token is paid for, so the loop still keeps
+# its prompts bounded. Its replies get a bigger cap: reasoning models spend part of it thinking before they answer.
+CLOUD_CONTEXT = 65536
+CLOUD_REPLY_TOKENS = 16384
+
+def context_for(model: str | None) -> int:
+    """How many tokens of prompt and reply the loop gives a model: CONTEXT on Ollama, CLOUD_CONTEXT elsewhere."""
+    return CONTEXT if settings.split_model(model or "")[0] == settings.LOCAL else CLOUD_CONTEXT
 
 class Cut(Exception):
     """The stop button's grace ran out mid-reply. text is whatever the model had written by then."""
@@ -37,21 +47,22 @@ def invalid(e) -> str:
 
 COMPACT_TO = 0.7                           # share of the room a compaction leaves used, so the next turns only append
 
-def fit(messages: list, reply_tokens: int) -> list:
+def fit(messages: list, reply_tokens: int, model: str | None = None) -> list:
     """The messages, cut to fit the context with room for the reply. Prompts that overflow get cut
     from the front by Ollama, which loses the instructions, or not at all, which lets the model run
     on forever. Only tool results are shortened: the longest ones lose their ends first, so short
-    results (searches, quoted sentences) stay whole. The list passed in is not changed."""
-    room = (CONTEXT - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
+    results (searches, quoted sentences) stay whole. The list passed in is not changed. model picks the room
+    (context_for); none means Ollama's."""
+    room = (context_for(model) - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
     return _cut(messages, room, room, _tool_results(messages))
 
-def compact(messages: list, reply_tokens: int) -> list:
+def compact(messages: list, reply_tokens: int, model: str | None = None) -> list:
     """fit, for a transcript that keeps growing (the search loop). Ollama reuses its cache for the
     unchanged start of a prompt, but once a transcript is full fit recuts every long result on every
     turn, so the whole prompt is read again each turn. compact cuts deeper (to COMPACT_TO of the
     room), so the next few turns only append. Results the model hasn't read yet, after its last
     reply, stay whole when the room allows."""
-    room = (CONTEXT - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
+    room = (context_for(model) - reply_tokens - TOOLS_ROOM) * CHARS_PER_TOKEN
     tools = _tool_results(messages)
     last = max((i for i, m in enumerate(messages) if _get(m, "role") == "assistant"), default=-1)
     seen = [i for i in tools if i < last]
@@ -105,16 +116,28 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
     lost: it comes back on Cut. A tool turn in flight when stop is pressed gets the shorter turn grace, so the
     write-out still has time. A reply that hits its token cap or REPLY_TIME_LIMIT raises Overrun with what it
     had written. stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP
-    can outlive a stopped loop."""
-    client = ollama.AsyncClient(host=settings.ollama_host())   # new client per call: safe across asyncio.run() loops
+    can outlive a stopped loop. A cloud model ("provider/name") goes the same way through agents/providers.py."""
+    model = model or model_for("pi")
+    provider, name = settings.split_model(model)
+    local = provider == settings.LOCAL
     if not stoppable:
-        return (await client.chat(model=model or model_for("pi"), messages=messages, tools=tools, format=format,
+        if not local:
+            return (await providers.chat(provider, name, messages, tools, format, CLOUD_REPLY_TOKENS))[0]
+        client = ollama.AsyncClient(host=settings.ollama_host())
+        return (await client.chat(model=name, messages=messages, tools=tools, format=format,
                                   options=OPTIONS, keep_alive="24h")).message
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 
     async def call():
-        kw = dict(model=model or model_for("pi"), messages=fit(messages, reply_tokens), tools=tools, format=format,
+        if not local:
+            msg, reason = await providers.chat(provider, name, fit(messages, reply_tokens, model), tools, format,
+                                               CLOUD_REPLY_TOKENS, parts)
+            if reason == "length" and not msg.tool_calls:
+                raise Overrun(f"reply ran past {CLOUD_REPLY_TOKENS} tokens", msg.content or "".join(parts))
+            return msg
+        client = ollama.AsyncClient(host=settings.ollama_host())   # new client per call: safe across asyncio.run()
+        kw = dict(model=name, messages=fit(messages, reply_tokens), tools=tools, format=format,
                   options={**OPTIONS, "num_predict": reply_tokens}, keep_alive="24h")
         if format is None:
             response = await client.chat(**kw)
@@ -143,7 +166,7 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
                 return task.result()
     finally:
         if not task.done():                # cut off or cancelled from outside: closing the request
-            task.cancel()                  # makes Ollama stop generating
+            task.cancel()                  # closes the request, which makes the model stop generating
             try:
                 await task
             except BaseException:
@@ -164,23 +187,50 @@ def connection(timeout: float = 2) -> dict:
         out["error"] = type(e).__name__
     return out
 
+def catalog(conn: dict | None = None) -> list[dict]:
+    """Every model the workers can pick, Ollama's first: [{"ref", "provider", "name", "size", "loaded"}]. ref is what
+    is saved (a bare name on Ollama, "provider/name" elsewhere). Cloud lists are cached; nothing here raises."""
+    conn = conn or connection()
+    out = [{"ref": m["name"], "provider": settings.LOCAL, "name": m["name"], "size": m["size"],
+            "loaded": conn["loaded"].get(m["name"], 0)} for m in conn["models"]]
+    for pid in settings.cloud_providers():
+        out += [{"ref": settings.model_ref(pid, n), "provider": pid, "name": n, "size": 0, "loaded": 0}
+                for n in providers.models(pid)[0]]
+    return out
+
 def ready() -> tuple[bool, str]:
-    """Is Ollama up with every working model pulled? Checked before each pass so a stopped Ollama app
-    doesn't burn every queued mission's attempts and park them all."""
+    """Can every working model answer? Ollama up with the model pulled, or the cloud provider connected and taking
+    its key. Checked before each pass so a stopped Ollama app or a revoked key doesn't burn every queued mission's
+    attempts and park them all. Ollama is only asked when a worker uses it."""
     missing = settings.missing_models()
     if missing:
         who = " and ".join(f"the {settings.WORKERS[w]}" for w in missing)
         return False, f"no model chosen for {who}; pick one on the Settings page (or set it in .env)"
-    host = settings.ollama_host()
-    try:
-        names = {m.model for m in ollama.Client(host=host, timeout=10).list().models}
-    except Exception as e:
-        return False, f"Ollama is not reachable at {host} ({type(e).__name__}); start the Ollama app"
     working = [w for w in settings.WORKERS if settings.worker_on(w)]
+    by_provider: dict[str, list[str]] = {}
     for w in working:
-        model = settings.worker_model(w)
-        if model not in names:
-            return False, f"model {model} ({settings.WORKERS[w]}) is not pulled; run: ollama pull {model}"
+        by_provider.setdefault(settings.split_model(settings.worker_model(w))[0], []).append(w)
+    for pid, workers in by_provider.items():
+        if pid == settings.LOCAL:
+            host = settings.ollama_host()
+            try:
+                names = {m.model for m in ollama.Client(host=host, timeout=10).list().models}
+            except Exception as e:
+                return False, f"Ollama is not reachable at {host} ({type(e).__name__}); start the Ollama app"
+            for w in workers:
+                model = settings.split_model(settings.worker_model(w))[1]
+                if model not in names:
+                    return False, f"model {model} ({settings.WORKERS[w]}) is not pulled; run: ollama pull {model}"
+            continue
+        label = providers.name(pid)
+        if not settings.provider_on(pid):
+            env = settings.PROVIDERS[pid]["key_env"]
+            return False, (f"{label} isn't connected, so the {settings.WORKERS[workers[0]]} can't use it; add its "
+                           f"API key on the Settings page" + (f" (or {env} in .env)" if env else ""))
+        try:
+            providers.list_models(pid, timeout=15)
+        except providers.ProviderError as e:
+            return False, str(e)
     def who(w):
         n = settings.worker_count(w)
         return f"{settings.WORKERS[w]}{f' x{n}' if n > 1 else ''}"
