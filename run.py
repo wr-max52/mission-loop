@@ -252,7 +252,9 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
 
 def _port_free(port: int) -> bool:
+    """Like uvicorn, reuse an address a just-closed UI left in TIME_WAIT; only a live listener counts as taken."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
             return True
