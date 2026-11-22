@@ -231,6 +231,7 @@ def test_the_board_stays_cheap_to_draw(client):
     tools = html.split('<div class="board-tools">')[1].split("</div>")[0]
     assert tools.count("<button") == 4 == tools.count("<svg") and "−" not in tools and ">+<" not in tools
     assert ".board-tools button { width:38px; height:38px; padding:0;" in css
+    assert ".board-wrap:is(.surface-dark, .surface-arcade) :is(.board-crumb, .board-legend, .board-tools button, .board-style)" in css
 
 def test_a_note_a_model_works_on_names_whose_crew_visits_it(client, monkeypatch):
     import activity

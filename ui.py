@@ -3563,6 +3563,11 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
   box-shadow:inset 0 0 0 10px #d3d8dc, inset 0 0 0 11px #b6bcc2, inset 0 -40px 70px rgba(0,0,0,.07); }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-zoom { color:#555; text-shadow:none; }
 .board-wrap.surface-dark .note.unsorted, .board-wrap.surface-dark .board-empty { color:#cfe2ff; }
+/* on the dark boards the controls are lifted off the board with a lighter face and a thin light ring, or a dark
+   theme's buttons (#151517) vanish on night (#0d1220) and arcade (#1d2b53) */
+.board-wrap:is(.surface-dark, .surface-arcade) :is(.board-crumb, .board-legend, .board-tools button, .board-style) {
+  background:color-mix(in srgb, var(--bg) 86%, #9fb4d8); box-shadow:0 0 0 1px rgba(200,220,255,.28), 0 6px 16px rgba(0,0,0,.55); }
+.board-wrap:is(.surface-dark, .surface-arcade) .board-tools button:hover { box-shadow:0 0 0 1px rgba(200,220,255,.6), 0 6px 16px rgba(0,0,0,.55); }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty, .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty a { color:#555; text-shadow:none; }
 .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .note.unsorted { color:#6b6b70; }
 
