@@ -205,6 +205,15 @@ def test_the_gear_and_the_settings_page_change_the_same_look(client):
     assert 'id="board"' in page and 'name="cards" value="hologram" checked' in page
     client.post("/settings/board-style", data={"cards": "magnets"})
     assert client.get("/api/board").json()["style"]["cards"] == "magnets"
+    # a Settings page still showing the old look sends only the choice clicked, so the gear's change stays
+    client.post("/board/style", json={"surface": "grid"})
+    client.post("/settings/board-style", data={"changed": "string", "surface": "dark", "cards": "magnets",
+                                               "string": "wire", "color": "#ff3344", "own": "#ff3344"})
+    assert client.get("/api/board").json()["style"] == {"surface": "grid", "cards": "magnets", "string": "wire",
+                                                        "color": "#c87533"}
+    client.post("/settings/board-style", data={"changed": "color", "surface": "dark", "string": "laser", "own": "#123abc"})
+    assert client.get("/api/board").json()["style"]["color"] == "#123abc"
+    assert client.get("/api/board").json()["style"]["surface"] == "grid"
     assert client.post("/board/style", json={"cards": "tarot"}).status_code == 400
     assert client.post("/board/style", json={"cards": "sticky"}, headers={"origin": "https://evil.example"}).status_code == 403
 

@@ -7,6 +7,7 @@ runs agents itself. Work happens in the loop, which the UI can start, stop and w
 """
 import asyncio, concurrent.futures, hashlib, json, os, re, subprocess, sys, threading, time
 from html import escape
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, quote
 from starlette.applications import Starlette
@@ -338,8 +339,21 @@ form.loop-ctl button.play.off:hover { background:#2b8a3e; border-color:#2b8a3e; 
 .dot { width:.6rem; height:.6rem; border-radius:50%; background:var(--muted); display:inline-block; }
 .dot.on { background:#2f9e44; } .dot.stopping { background:#e8a33d; }
 .loop .grow { flex:1; }
-.now { flex-basis:100%; color:var(--muted); font-size:.9rem; }
+.now { flex-basis:100%; color:var(--muted); font-size:.9rem; display:flex; align-items:flex-end; gap:.4rem 1rem; flex-wrap:wrap; }
 .now strong, .now a { color:var(--fg); }
+.now .steps { list-style:none; margin:0; padding:0; flex:1; min-width:16rem; }
+.now .steps li { padding:.1rem 0; }
+.now .steps li.past { font-size:.82rem; opacity:.8; }
+.now .steps li.past strong { font-weight:600; }
+.now .steps li.past + li.live, .now .steps li.live + li.past { margin-top:.25rem; }
+.now .steps li.live + li.past { border-top:1px solid var(--rule); padding-top:.35rem; }
+.now a.steps-all, a.steps-all { font-size:.82rem; color:var(--muted); white-space:nowrap; }
+.out.failed { color:#c92a2a; font-weight:600; cursor:help; }
+.out.stopped { color:#b26a00; font-weight:600; cursor:help; }
+.out.live { color:#2f9e44; font-weight:600; }
+table.steps-log .out { cursor:auto; }
+table.steps-log td strong { white-space:nowrap; } table.steps-log .out.done { color:var(--muted); }
+table.steps-log td.took { white-space:nowrap; font-variant-numeric:tabular-nums; }
 @keyframes blink { 50% { opacity:.2; } }
 h1 { font-family: Georgia, serif; }
 h2.group { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
@@ -609,6 +623,36 @@ label.tick .hint { margin-left:-.15rem; }
 .pubbox.add > summary { color:var(--fg); font-size:1rem; }
 .pubbox details.formats { margin:.8rem 0; }
 h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
+/* the Settings page: its sections down the right, a nav down the left that lights the one in view */
+main:has(.settings) { max-width: 72rem; }
+.settings { display:grid; grid-template-columns:12rem minmax(0, 1fr); gap:2.5rem; align-items:start; }
+.set-nav { position:sticky; top:1.25rem; display:flex; flex-direction:column; gap:.15rem; }
+.set-nav a { display:flex; align-items:center; gap:.6rem; padding:.5rem .75rem; border-radius:8px; color:var(--muted);
+             font-size:.92rem; font-weight:600; text-decoration:none; white-space:nowrap;
+             transition:background .15s, color .15s, box-shadow .15s; }
+.set-nav a:hover { color:var(--fg); background:var(--quote); }
+.set-nav a.on { color:var(--fg); background:var(--quote); box-shadow:inset 3px 0 0 var(--accent); }
+.set-nav a.on .ico { color:var(--accent); }
+.set-nav .ico { width:1.05rem; height:1.05rem; }
+.set { scroll-margin-top:1.25rem; padding-bottom:1rem; margin-bottom:2.5rem; border-bottom:1px solid var(--rule); }
+.set:last-child { border-bottom:0; margin-bottom:0; }
+.set > h2 { display:flex; align-items:center; gap:.6rem; font-family:Georgia, serif; font-size:1.5rem; margin:0 0 .9rem; }
+.set > h2 .ico { width:1.3rem; height:1.3rem; color:var(--accent); }
+.set h3.part { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase;
+               letter-spacing:.08em; color:var(--muted); margin:2rem 0 .6rem; scroll-margin-top:1.25rem; }
+.set h3.part .ico { width:1.05rem; height:1.05rem; color:var(--fg); }
+.set > h2 + h3.part { margin-top:.4rem; }
+.set > h2 + .actions, .set > h2 + form.actions { margin-top:0; }
+.set .actions[id], .set form[id] { scroll-margin-top:1.25rem; }
+@media (max-width: 820px) {
+  .settings { display:block; }       /* not a grid row, so the bar sticks the whole way down */
+  .set-nav { top:0; z-index:5; flex-direction:row; overflow-x:auto; scrollbar-width:none; gap:.25rem;
+             margin:0 -1rem 1rem; padding:.5rem 1rem; background:var(--bg); border-bottom:1px solid var(--rule); }
+  .set-nav::-webkit-scrollbar { display:none; }
+  .set-nav a { padding:.4rem .7rem; }
+  .set-nav a.on { box-shadow:inset 0 -3px 0 var(--accent); }
+  .set, .set h3.part, .set .actions[id], .set form[id] { scroll-margin-top:4rem; }
+}
 /* Display: the theme as a segmented choice, the chat colour as ink swatches */
 :root:not([data-theme]) { color-scheme: light dark; }
 .display h3 { display:flex; align-items:center; gap:.45rem; margin:0 0 .2rem; font-family:Georgia, serif; font-size:1.1rem; }
@@ -643,10 +687,17 @@ h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
 """
 
 ELAPSED_JS = """<script>
-const showElapsed = () => document.querySelectorAll("[data-since]").forEach(e => {
-  const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(e.dataset.since)));
-  e.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-});
+const showElapsed = () => {
+  document.querySelectorAll("[data-since]").forEach(e => {
+    const s = Math.max(0, Math.floor(Date.now() / 1000 - Number(e.dataset.since)));
+    e.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  });
+  document.querySelectorAll("[data-ago]").forEach(e => {      // ui.ago, kept current; older dates stay as written
+    const s = Date.now() / 1000 - Number(e.dataset.ago);
+    const t = (k, n) => ((window.I18N || {})[k] || k).replace("{n}", n);
+    if (s < 86400) e.textContent = s < 60 ? t("just now") : s < 3600 ? t("{n}m ago", Math.floor(s / 60)) : t("{n}h ago", Math.floor(s / 3600));
+  });
+};
 setInterval(showElapsed, 1000);
 </script>"""
 
@@ -761,6 +812,11 @@ ICON_BOARD = f'<svg viewBox="0 0 24 24" aria-hidden="true">{ICON_PATHS["board"]}
 
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
 
+def part(name: str, title: str, anchor: str = "") -> str:
+    """A part of one of the Settings page's sections, e.g. Library under Research."""
+    a = f' id="{anchor}"' if anchor else ""
+    return f'<h3 class="part"{a}>{icon(name)}<span>{escape(title)}</span></h3>'
+
 def heading(name: str, title: str, count: int | None = None, anchor: str = "", cls: str = "group") -> str:
     """A section heading with its icon, e.g. the finger for anything waiting on you."""
     n = f'<span class="n" data-n="{count}">{count}</span>' if count is not None else ""
@@ -861,7 +917,8 @@ async function refresh() {{
 
 JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
               "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
-              "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed"]
+              "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed",
+              "just now", "{n}m ago", "{n}h ago"]
 
 def js_strings() -> str:
     """The few strings the page's scripts show, in the UI's language (window.I18N; English needs none)."""
@@ -899,12 +956,63 @@ def doing(e: dict) -> str:
     return (f'<strong>{agent_name(e["agent"])}</strong> · '
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
-def flow_status(now: list[dict], running: bool) -> str:
-    """The lines under the strip: who is working on what, and for how long. With more than one worker busy,
-    one line each, named."""
-    lines = [(f'<span class="who">{seat_name(e["worker"])}</span> ' if seat_name(e["worker"])
-              and len(now) > 1 else "") + doing(e) for e in now]
-    return "<br>".join(lines) or (_("Idle") if running else "")   # the loop panel already says it is off
+def took(seconds: float) -> str:
+    """How long a step took: "0.4s", "12s", "4m 12s", "1h 3m"."""
+    seconds = max(0.0, float(seconds))
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    s = int(seconds)
+    return f"{s // 3600}h {s % 3600 // 60}m" if s >= 3600 else f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
+
+def ago(at: float) -> str:
+    """When a step ended, from now: "just now", "5m ago", "2h ago", else the date."""
+    s = time.time() - float(at)
+    if s < 60:
+        return _("just now")
+    if s < 3600:
+        return _("{n}m ago").format(n=int(s // 60))
+    if s < 86400:
+        return _("{n}h ago").format(n=int(s // 3600))
+    return datetime.fromtimestamp(float(at)).strftime("%Y-%m-%d %H:%M")
+
+PAST = {"theorist": "all missions", "finder": "new missions"}     # what a desk-wide agent worked on, as doing() says it
+OUTCOME = {"failed": "failed", "stopped": "stopped"}
+
+def step_task(e: dict, topics: dict[str, str]) -> str:
+    """What a finished step worked on: its mission (a link), or all missions / new missions for a desk-wide agent."""
+    if not e.get("slug"):
+        return _(PAST.get(e["agent"], "all missions"))
+    return f'<a href="/m/{quote(e["slug"])}">{escape(topics.get(e["slug"], e["slug"]))}</a>'
+
+def step_outcome(e: dict) -> str:
+    kind = e.get("outcome", "done")
+    if kind not in OUTCOME:
+        return ""
+    why = f' title="{escape(e.get("why", ""), quote=True)}"' if e.get("why") else ""
+    return f' · <span class="out {kind}"{why}>{_(OUTCOME[kind])}</span>'
+
+def past_step(e: dict, topics: dict[str, str]) -> str:
+    """One finished step: "Source finder · <topic> · took 4m 12s · 3m ago"."""
+    return (f'<strong>{agent_name(e["agent"])}</strong> · {step_task(e, topics)}'
+            + ' · ' + _("took {time}").format(time=took(e["ended"] - e["since"])) + step_outcome(e) +
+            f' · <span class="ago" data-ago="{float(e["ended"])}">{ago(e["ended"])}</span>')
+
+RECENT_STEPS = 3                           # finished steps shown under the strip
+
+def flow_status(now: list[dict], running: bool, topics: dict[str, str] | None = None) -> str:
+    """The brief log under the strip: who is working on what and for how long (with more than one worker busy,
+    one line each, named), then the last few finished steps, with how long each took, and a link to the full log
+    (activity.LOG, on /log)."""
+    lines = [f'<li class="live">' + (f'<span class="who">{seat_name(e["worker"])}</span> '
+             if seat_name(e["worker"]) and len(now) > 1 else "") + doing(e) + "</li>" for e in now]
+    if not lines:
+        idle = _("Idle") if running else _("Loop off")
+        lines.append(f'<li class="live idle">{idle}</li>')
+    if topics is None:
+        topics = {m.slug: m.topic for m in store.all_missions()}
+    lines += [f'<li class="past">{past_step(e, topics)}</li>' for e in activity.recent(RECENT_STEPS)]
+    return (f'<ul class="steps">{"".join(lines)}</ul>'
+            f'<a class="steps-all" href="/log">' + _("Full log") + ' &rarr;</a>')
 
 def flow_state() -> dict:
     """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
@@ -926,7 +1034,7 @@ def flow_state() -> dict:
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
         "states": {m.slug: m.state.value for m in missions},
-        "now": flow_status(now, running),
+        "now": flow_status(now, running, {m.slug: m.topic for m in missions}),
     }
 
 def flow_strip(state: dict) -> str:
@@ -1266,7 +1374,7 @@ def workers_section(conn: dict, models: list[dict] | None = None) -> str:
                 _("Only the {worker} is on. It runs every step, {n} at a time.")).format(worker=worker_name(w), n=n)
     models = models if models is not None else llm.catalog(conn)
     cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
-    return (f'{heading("people", _("Workers"), anchor="workers")}{f"<p>{lead}</p>" if lead else ""}'
+    return (f'{f"<p>{lead}</p>" if lead else ""}'
             f'<div class="workers">{cards}</div>{WORKER_COUNT_JS}')
 
 # The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
@@ -1382,8 +1490,7 @@ def add_provider_forms() -> str:
 
 def connection_section(conn: dict) -> str:
     cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
-    return (f'{heading("plug", _("Model providers"), anchor="providers")}'
-            f'{cards}<h3 class="sub">{_("Add a provider")}</h3>{add_provider_forms()}')
+    return f'{cards}<h3 class="sub">{_("Add a provider")}</h3>{add_provider_forms()}'
 
 EMBEDDY = re.compile(r"embed|bge|minilm|e5-|gte|arctic|mxbai|nomic", re.I)   # an Ollama embedding model's name
 
@@ -1408,7 +1515,7 @@ def library_section(conn: dict) -> str:
     now = (" " + _("Embedding model: {model}").format(model=f"<code>{escape(current)}</code>") + f"{source}.") if current else ""
     intro = _("Missions, briefs, sources and articles, searched by the Theorist and Researcher Chat. "
               "Ranks by words; an embedding model adds meaning. Stored in {file}.").format(file="<code>data/library.db</code>")
-    return f"""{heading("book", _("Library"), anchor="library")}
+    return f"""{part("book", _("Library"), "library")}
 <p>{intro}</p>
 <div class="pubbox channel"><div class="head"><h3>{_("Index")}</h3><span class="badge">{_("On this machine")}</span></div>
 <p>{library_line()}{now}</p>
@@ -1729,7 +1836,7 @@ def publishing_section() -> str:
     else:
         cards = "".join(channel_card(c) for c in live) or \
             f'<p class="muted">{_("No channels.")}</p>'
-    return heading("broadcast", _("Publishing"), anchor="publishing") + f"""
+    return f"""
 {local_site_box()}
 <h3 class="sub">{_("Channels")} ({len(live)})</h3>
 {cards}
@@ -1800,36 +1907,103 @@ def display_forms() -> str:
   <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>{CHAT_COLOR_JS}"""
 
+# The Settings page's sections, in order: (anchor, icon, title). The nav down its left lists them.
+SETTINGS_SECTIONS = [
+    ("setup", "compass", "Setup"),
+    ("workers", "people", "Workers"),
+    ("providers", "plug", "Model providers"),
+    ("research", "search", "Research"),
+    ("display", "monitor", "Display"),
+    ("publication", "newspaper", "Publication"),
+    ("publishing", "broadcast", "Publishing"),
+]
+
+# The nav down the Settings page's left: a click glides to its section, and scrolling lights the section in view.
+SETTINGS_NAV_JS = """<script>
+(() => {
+  const nav = document.querySelector(".set-nav");
+  if (!nav) return;
+  const links = [...nav.querySelectorAll("a")];
+  const secs = links.map(a => document.getElementById(a.hash.slice(1)));
+  let hold = 0;                                    // while a click glides there, scrolling past others lights nothing
+  function light(i) {
+    links.forEach((a, j) => { a.classList.toggle("on", j === i); a.toggleAttribute("aria-current", j === i); });
+    const a = links[i];
+    if (a && nav.scrollWidth > nav.clientWidth)    // the bar across the top on a narrow screen keeps it in view
+      nav.scrollTo({left: a.offsetLeft - (nav.clientWidth - a.offsetWidth) / 2, behavior: "smooth"});
+  }
+  function spy() {
+    if (Date.now() < hold) return;
+    const across = getComputedStyle(nav).flexDirection === "row";     // the bar across the top on a narrow screen
+    const line = Math.min(innerHeight * .3, 220) + (across ? nav.offsetHeight : 0);
+    let i = 0;
+    secs.forEach((s, j) => { if (s && s.getBoundingClientRect().top <= line) i = j; });
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) i = secs.length - 1;
+    light(i);
+  }
+  addEventListener("scroll", spy, {passive: true});          // seven boxes measured: cheap enough on every scroll
+  addEventListener("scrollend", () => { hold = 0; spy(); });
+  addEventListener("resize", spy);
+  nav.addEventListener("click", e => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    const i = links.indexOf(a), s = secs[i];
+    if (!s) return;
+    e.preventDefault();
+    hold = Date.now() + 1200;
+    light(i);
+    const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    s.scrollIntoView({behavior: calm ? "auto" : "smooth", block: "start"});
+    history.replaceState(history.state, "", a.hash);
+  });
+  spy();
+  addEventListener("DOMContentLoaded", spy, {once: true});   // after KEEP_SCROLL_JS puts the page back where it was
+  addEventListener("load", spy, {once: true});
+})();
+</script>"""
+
+def settings_section(anchor: str, body: str) -> str:
+    ico, title = next((i, t) for a, i, t in SETTINGS_SECTIONS if a == anchor)
+    return f'<section class="set" id="{anchor}"><h2>{icon(ico)}<span>{escape(_(title))}</span></h2>{body}</section>'
+
 def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
     models = llm.catalog(conn)
     sprites = script("researchers.js") if settings.animations() else ""
-    return f"""{err}<h1>{_("Settings")}</h1>
-{setup_section(conn)}
-{workers_section(conn, models)}
-{connection_section(conn)}
-{search_section()}
-{library_section(conn)}
-{heading("clock", _("Loop"))}
+    on = ' class="on" aria-current="true"'
+    nav = "".join(f'<a href="#{a}"{on if n == 0 else ""}>{icon(i)}<span>{escape(_(t))}</span></a>'
+                  for n, (a, i, t) in enumerate(SETTINGS_SECTIONS))
+    loop = f"""{part("clock", _("Loop"))}
 <form method="post" action="/settings/loop-every" class="inline">
   <label for="every" style="margin:0">{_("Rest when idle")}</label>
   <input type="number" id="every" name="every" value="{settings.loop_every():g}" min="1" step="1" style="width:5rem">
   <span class="hint">{_("minutes (applies on next start)")}</span>
   <button>{_("Save")}</button>
-</form>
-{heading("monitor", _("Display"))}
-{display_forms()}
-{board_style_form()}
-<form method="post" action="/settings/animations" class="actions">
+</form>"""
+    animations = f"""<form method="post" action="/settings/animations" class="actions display">
+  <h3>{icon("activity")}{_("Animations")}</h3>
+  <p class="hint">{_("Pixel researchers on active missions.")}</p>
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
-  {_("Animations")} <span class="hint">{_("pixel researchers on active missions")}</span></label>
+  {_("Animations")}</label>
   <noscript><p><button>{_("Save")}</button></p></noscript>
-</form>
-{avatar_link()}
-{publication_section()}
-{publishing_section()}
+</form>"""
+    sections = "".join([
+        settings_section("setup", setup_section(conn)),
+        settings_section("workers", workers_section(conn, models) + loop),
+        settings_section("providers", connection_section(conn)),
+        settings_section("research", search_section() + library_section(conn)),
+        settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
+        settings_section("publication", publication_section()),
+        settings_section("publishing", publishing_section()),
+    ])
+    return f"""{err}<h1>{_("Settings")}</h1>
+<div class="settings">
+<nav class="set-nav" aria-label="{escape(_("Settings sections"), quote=True)}">{nav}</nav>
+<div class="set-body">{sections}</div>
+</div>
+{SETTINGS_NAV_JS}
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
@@ -2404,7 +2578,7 @@ def setup_section(conn: dict) -> str:
                _("The loop can start. The rest helps it work.") if all(c.ok for c in found if c.blocks_loop) else
                _("The loop can't start until a model is connected."))
     cli = _("Same checks: {command}.").format(command="<code>python run.py doctor</code>")
-    return (f'{heading("compass", _("Setup"), anchor="setup")}<div class="actions"><p>{summary} {cli}</p>'
+    return (f'<div class="actions"><p>{summary} {cli}</p>'
             f'{note}<ul class="checks">{rows}</ul>{again}</div>')
 
 def search_section() -> str:
@@ -2419,7 +2593,7 @@ def search_section() -> str:
         state = (_("No key. Research can read pages but not search the web.") + " "
                  f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a free key from Brave")}</a>.')
     status = toolbox_status()
-    return (f'{heading("search", _("Web search"), anchor="search")}<div class="actions"><p>{state}</p>'
+    return (f'{part("search", _("Web search"), "search")}<div class="actions"><p>{state}</p>'
             f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
 
 def toolbox_status() -> str:
@@ -2431,8 +2605,7 @@ def toolbox_status() -> str:
 
 def publication_section() -> str:
     name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
-    return (f'{heading("newspaper", _("Publication"), anchor="publication")}'
-            f'<form method="post" action="/settings/publication" class="actions">'
+    return (f'<form method="post" action="/settings/publication" class="actions">'
             f'<p class="hint">{_("Name, tagline and About text for the published site and feeds. Saving redraws every page.")}</p>'
             f'<label for="pub-name">{_("Name")}</label><input type="text" id="pub-name" name="name" maxlength="{settings.NAME_MAX}" '
             f'value="{escape(name, quote=True)}" placeholder="{settings.PUBLICATION_DEFAULT}">'
@@ -2762,7 +2935,8 @@ async def mission(request: Request) -> Response:
         rows = "".join(f'<tr><td class="when">{escape(e["at"][:16].replace("T", " "))}</td>'
                        f'<td>{escape(_(LABELS.get(State(e["to_state"]), e["to_state"])))}</td>'
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
-        body.append(f'{heading("history", _("History"), cls="sec")}<table class="events">{rows}</table>')
+        body.append(f'{heading("history", _("History"), cls="sec")}<table class="events">{rows}</table>'
+                    f'<p><a class="steps-all" href="/log?m={quote(slug)}">{_("Step log")} &rarr;</a></p>')
     return page(m.topic, "\n".join(body), poll=True)
 
 async def preview(request: Request) -> Response:
@@ -3033,6 +3207,70 @@ async def chat_answer(request: Request) -> JSONResponse:
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
 
+LOG_PAGE = 200                             # steps per page of the full log
+
+def step_row(e: dict, topics: dict[str, str], live: bool = False) -> str:
+    """One row of the full log: when it ended, which agent, on what, on which worker, how long, how it ended."""
+    if live:
+        when = _("now")
+        took_ = _("{time} so far").format(time=f'<span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>')
+        out = f'<span class="out live">{_("working")}</span>'
+    else:
+        when = datetime.fromtimestamp(float(e["ended"])).strftime("%Y-%m-%d %H:%M:%S")
+        took_ = took(e["ended"] - e["since"])
+        kind = e.get("outcome", "done")
+        out = (f'<span class="out {kind}">{_(OUTCOME.get(kind, "done"))}</span>'
+               + (f' <span class="muted">{escape(e["why"])}</span>' if e.get("why") else ""))
+    task = (f'<a href="/m/{quote(e["slug"])}">{escape(topics.get(e["slug"], e["slug"]))}</a>' if e.get("slug")
+            else f'<span class="muted">{_(PAST.get(e["agent"], "all missions"))}</span>')
+    who = seat_name(e.get("worker", "")) or _("Desk")
+    return (f'<tr><td class="when">{when}</td><td><strong>{agent_name(e["agent"])}</strong></td><td>{task}</td>'
+            f'<td class="when">{escape(who)}</td><td class="took">{took_}</td><td>{out}</td></tr>')
+
+LOG_COLUMNS = ("Ended", "Step", "Mission", "Worker", "Took", "Outcome")
+
+async def log_page(request: Request) -> HTMLResponse:
+    """The full step log (activity.LOG): every agent step the loop has finished, newest first, with how long each
+    took and how it ended, the ones at work now on top. ?m=<slug> keeps one mission's; ?page= goes back in time."""
+    slug = request.query_params.get("m", "")
+    try:
+        page_no = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page_no = 1
+    topics = {m.slug: m.topic for m in store.all_missions()}
+    steps = activity.history()
+    live = running_now()
+    if slug:
+        steps, live = [e for e in steps if e.get("slug") == slug], [e for e in live if e.get("slug") == slug]
+    pages = max(1, -(-len(steps) // LOG_PAGE))
+    page_no = min(page_no, pages)
+    shown = steps[(page_no - 1) * LOG_PAGE: page_no * LOG_PAGE]
+    back = (f'<a class="back" href="/m/{quote(slug)}">&larr; {_("Back to the mission")}</a>' if slug
+            else f'<a class="back" href="/">&larr; {_("Back to missions")}</a>')
+    total = sum(e["ended"] - e["since"] for e in steps)
+    count = _n("{n} step", "{n} steps", len(steps)).format(n=len(steps))
+    if slug:
+        count = _("{steps} on {mission}").format(
+            steps=count, mission=f'<a href="/m/{quote(slug)}">{escape(topics.get(slug, slug))}</a>')
+    summary = _("{steps} · {time} in all · saved in {file}").format(
+        steps=count, time=took(total), file=f"<code>{escape(str(activity.LOG))}</code>")
+    body = [f'<p>{back}</p>', f'<h1>{_("Step log")}</h1>',
+            f'<p class="muted">{summary}'
+            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "") + "</p>"]
+    rows = [step_row(e, topics, live=True) for e in (live if page_no == 1 else [])]
+    rows += [step_row(e, topics) for e in shown]
+    if rows:
+        head = "".join(f'<td class="when">{_(h)}</td>' for h in LOG_COLUMNS)
+        body.append(f'<table class="events steps-log"><tr>{head}</tr>{"".join(rows)}</table>')
+    else:
+        body.append(f'<p class="muted">{_("No steps yet.")}</p>')
+    if pages > 1:
+        link = lambda n, label: f'<a class="btn" href="/log?{("m=" + quote(slug) + "&") if slug else ""}page={n}">{label}</a>'
+        body.append(f'<p>{link(page_no - 1, "&larr; " + _("Newer")) if page_no > 1 else ""} '
+                    f'<span class="muted">{_("Page {n} of {total}").format(n=page_no, total=pages)}</span> '
+                    f'{link(page_no + 1, _("Older") + " &rarr;") if page_no < pages else ""}</p>')
+    return page(_("Step log"), "".join(body), poll=True)
+
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
 
@@ -3163,25 +3401,30 @@ def board_style_panel(style: dict) -> str:
             f'aria-label="{own}"></label></div>'
             f'<a class="more" href="/settings#board">{_("Settings")}</a></div>')
 
+# A click on one of the Settings page's board choices sends that choice alone (`changed`), so a page showing an older
+# look (the gear on the board changed it in another tab, or the browser restored old ticks) never saves the rest back.
+BOARD_PICK = "this.form.changed.value = this.name; this.form.requestSubmit()"
+
 def board_style_form() -> str:
     """The same choices on the Settings page; each change saves at once."""
     style = settings.board_style()
     def choice(key: str, options: dict) -> str:
         return "".join(f'<label><input type="radio" name="{key}" value="{v}"{" checked" if style[key] == v else ""} '
-                       f'onchange="this.form.requestSubmit()">{escape(_(n))}</label>' for v, n in options.items())
+                       f'onchange="{BOARD_PICK}">{escape(_(n))}</label>' for v, n in options.items())
     colors = settings.BOARD_STRINGS[style["string"]]
     swatches = "".join(
         f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
-        f'{" checked" if style["color"] == c else ""} onchange="this.form.requestSubmit()"><span class="dab"></span>'
+        f'{" checked" if style["color"] == c else ""} onchange="{BOARD_PICK}"><span class="dab"></span>'
         f'{escape(_(n))}</label>' for n, c in colors.items())
     presets = {c for kind in settings.BOARD_STRINGS.values() for c in kind.values()}
     own = style["color"] not in presets
     swatches += (f'<label class="swatch own{" set" if own else ""}" style="--c:{style["color"]};--ink:{settings.ink_on(style["color"])}">'
                  f'<span class="dab"></span><input type="color" name="own" value="{style["color"]}" aria-label="{escape(_("Your own colour"), quote=True)}" '
                  f'onchange="this.form.querySelectorAll(\'input[name=color]\').forEach(r => r.checked = false); '
-                 f'this.form.requestSubmit()">{_("Your own")}</label>')
-    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board">
-  <h3>{ICON_BOARD}{_("Board")}</h3>
+                 f'this.form.changed.value = \'color\'; this.form.requestSubmit()">{_("Your own")}</label>')
+    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board" autocomplete="off">
+  <input type="hidden" name="changed" value="">
+  <h3>{icon("board")}{_("Board")}</h3>
   <p class="hint">{_("Surface, cards and string for the {board}. Same as the gear on the board.").format(board=f'<a href="/board">{_("board")}</a>')}</p>
   <div class="choice" role="radiogroup" aria-label="{_("Surface")}">{choice("surface", settings.BOARD_SURFACES)}</div>
   <p></p><div class="choice" role="radiogroup" aria-label="{_("Cards")}">{choice("cards", settings.BOARD_CARDS)}</div>
@@ -3210,6 +3453,8 @@ async def save_board_style(request: Request) -> Response:
     values = {k: form.get(k) for k in ("surface", "cards", "string", "color") if form.get(k)}
     if "color" not in values and form.get("own"):
         values["color"] = form.get("own")      # the colour picker: no preset is ticked
+    if form.get("changed") in ("surface", "cards", "string", "color"):
+        values = {k: v for k, v in values.items() if k == form.get("changed")}   # one click, one change
     if "string" in values and values["string"] != settings.board_style()["string"]:
         values.pop("color", None)              # a new kind brings its own first colour
     try:
@@ -3581,7 +3826,7 @@ def avatar_link() -> str:
     n, off = len(avatars.custom()), len(avatars.off())
     bits = [_n("{n} of your own", "{n} of your own", n) if n else "", _n("{n} staying home", "{n} staying home", off) if off else ""]
     now = " · ".join(b for b in bits if b) or _("built-in researchers only")
-    return f"""<div class="actions avatar-link">
+    return f"""<div class="actions display avatar-link">
   <h3>{icon("person")}{_("Avatars")}</h3>
   <p class="hint">{_("Build a researcher from pieces, or ask a model to draw one. Now: {now}.").format(now=escape(now))}</p>
   <p><a class="btn" href="/avatars">{_("Avatar studio")}</a>
@@ -4042,6 +4287,7 @@ app = Starlette(routes=[
     Route("/settings/custom-channel", add_custom_channel, methods=["POST"]),
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
+    Route("/log", log_page),
     Route("/board", board_page),
     Route("/board/move", board_move, methods=["POST"]),
     Route("/board/style", board_style_save, methods=["POST"]),

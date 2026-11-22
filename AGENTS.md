@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 687 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 695 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -484,6 +484,15 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   grows room there) and tilts with it; on the other styles it walks along the top, which stays level. Laser pulses and holograms
   flicker only while Animations are on. Board notes override the published site's `.note` and `.epic` styles,
   which share their class names.
+- Step log: `activity.py` appends every agent step that ends (the seat's next `begin`, or `clear`) to
+  `data/steps.jsonl` (`activity.LOG`, on this machine only, never trimmed): one JSON line with the seat, mission slug
+  (`""` for the Theorist and the finder), agent, start, end and outcome: `done`, or `failed`/`stopped` with why
+  (`activity.fail(e)` from the orchestrator's excepts, an `Interrupted` counting as stopped; `activity.outcome` for a
+  failed source or article check or a paused search; the first outcome given stands). Under the pipeline strip
+  (`ui.flow_status`, served in `/api/flow`'s `now`) the agents at work come first, then the last `RECENT_STEPS` (3)
+  finished steps, each "Agent · mission · took 4m 12s · 3m ago" (`activity.recent` reads only the log's end), then Full log, which
+  opens `/log` (`ui.log_page`): every step newest first, `LOG_PAGE` (200) a page, the ones at work on top, `?m=<slug>`
+  for one mission (a mission page's History links to it). Display-only, like the activity file.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -503,8 +512,10 @@ there is one card (`ui.queue_card`): how many articles are queued and for which 
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the model providers, the loop's rest between
-looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
+between looks for work, Model providers, Research (web search and the library), Display (appearance, chat colour, board,
+animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
+narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") (grey) that opens a three-step wizard in a dialog (topic, objective, then epic and short name; green), which posts to

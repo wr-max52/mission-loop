@@ -33,6 +33,8 @@ def keys() -> set[str]:
     out |= {text for _k, _kind, text in flowchart.FLOW} | {sub for _i, sub in flowchart.TILES.values()}
     out |= set(flowchart.REVIEW_SUB.values()) | {t for t, _tone in flowchart.HUMAN_STEPS.values()}
     out |= {s for pair in flowchart.AUTO_STEPS.values() for s in pair} | set(flowchart.CHECKS.values())
+    out |= set(ui.PAST.values()) | set(ui.OUTCOME.values()) | set(ui.LOG_COLUMNS) | {"done"}
+    out |= {title for _a, _i, title in ui.SETTINGS_SECTIONS}
     out |= {flowchart.RETRY, ui.STUB_RUN, "Local site", "Why it stopped", "Your feedback", "Check notes",
             "Brief ready", "Article ready", "Parked"}
     return out
