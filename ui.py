@@ -15,7 +15,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, FileResponse, Pl
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, store
-from agents import f916
+from agents import bluesky, f916
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 
@@ -309,7 +309,8 @@ def agent_strip(now: dict | None) -> str:
              else f'<span class="agent">{name}</span>'
              for key, name in activity.AGENTS.items()
              if key == working or (key != "contacts" or settings.OUTREACH)
-             and (key != "1f916" or agents.f916_enabled())]
+             and (key != "1f916" or agents.f916_enabled())
+             and (key != "bluesky" or agents.bluesky_enabled())]
     strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
     if now and not now["slug"]:            # the mission finder works for the desk, not one mission
         status = (f'<strong>{activity.AGENTS[working]}</strong> is looking for new missions'
@@ -358,6 +359,8 @@ def channel_names(m: Mission) -> str:
     if agents.f916_enabled() and "1f916" not in m.channels:
         slugs = [e["slug"] for e in orchestrator.queue(f916)]
         names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
+    if agents.bluesky_enabled() and "bluesky" not in m.channels:
+        names += " · Bluesky queued"
     return names
 
 def f916_status() -> str:
@@ -373,6 +376,19 @@ def f916_status() -> str:
     problem = state.get("note", "") if not state.get("spent_until") else ""
     line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong>, one article a day, newest first · '
             f"{queued} queued · {when}")
+    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
+def bluesky_status() -> str:
+    """One line on the Bluesky channel: who we post as, how many wait, and the last failure if any."""
+    if not agents.bluesky_enabled():
+        return ("Bluesky is off: set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env, "
+                "then check them with <code>python run.py check-bluesky</code>.")
+    queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
+    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>, about one article a pass, "
+            f"newest first · {queued} queued")
+    if not settings.SITE_URL:
+        line += ('<br><span class="hint">No MISSION_LOOP_SITE_URL, so posts link to the 1F916 copy when there '
+                 "is one and otherwise carry no link.</span>")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
 
 
@@ -457,7 +473,7 @@ async def home(request: Request) -> HTMLResponse:
         if ms:
             body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
             if title == "Published":
-                body.append(f'<p class="muted">{f916_status()}</p>')
+                body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
             body.append("".join(card(m, now, epics) for m in ms))
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
@@ -496,8 +512,9 @@ def actions_for(m: Mission) -> str:
                 f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
                 f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
                 f'</div><p class="hint">Publishing writes it to the local site (site/{escape(m.slug)}/)'
-                + (" and queues it for 1F916, which takes one post a day, newest first." if agents.f916_enabled()
-                   else ".") + "</p>"
+                + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled()
+                   else "")
+                + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".</p>"
                 + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings.")
                 + "</div>")
     if m.state == State.PARKED:
@@ -533,6 +550,11 @@ def channels_html(m: Mission) -> str:
         rows.append(f"<li>1F916: waiting, {place} in the queue (one post a day, newest first)</li>")
     if m.channel_errors.get("1f916"):
         rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
+                    "It stays queued behind the others.</li>")
+    if agents.bluesky_enabled() and "bluesky" not in m.channels:
+        rows.append("<li>Bluesky: waiting (about one post a pass, newest first)</li>")
+    if m.channel_errors.get("bluesky"):
+        rows.append(f'<li>Bluesky refused the last try: {escape(m.channel_errors["bluesky"])}. '
                     "It stays queued behind the others.</li>")
     return f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul>{"".join(rows)}</ul>'
 

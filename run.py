@@ -222,6 +222,8 @@ def _channel_summary(m) -> str:
     names = [orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)]
     if agents.f916_enabled() and "1f916" not in m.channels:
         names.append("1F916 queued")
+    if agents.bluesky_enabled() and "bluesky" not in m.channels:
+        names.append("Bluesky queued")
     return " published: " + ", ".join(names)
 
 @app.command()
@@ -235,6 +237,25 @@ def status():
         queued, until = len(orchestrator.queue(f916)), f916.spent_until()
         when = f"next post after {until:%m-%d %H:%M} UTC" if until and until > clock.now() else "can post now"
         print(f"1F916 as {f916.key()['handle']}: {queued} queued, {when}")
+    if agents.bluesky_enabled():
+        from agents import bluesky
+        note = bluesky.load_state().get("note", "")
+        print(f"Bluesky as {bluesky.handle()}: {len(orchestrator.queue(bluesky))} queued"
+              + (f" (last try failed: {note})" if note else ""))
+
+@app.command(name="check-bluesky")
+def check_bluesky():
+    """Log in to Bluesky with BLUESKY_HANDLE and BLUESKY_APP_PASSWORD from .env, without posting anything."""
+    from agents import bluesky
+    if not bluesky.enabled():
+        print("set BLUESKY_HANDLE and BLUESKY_APP_PASSWORD in .env first (an app password, not your account password)")
+        raise typer.Exit(1)
+    try:
+        who = bluesky.check_login()
+    except Exception as e:
+        print(f"Bluesky login failed: {type(e).__name__}: {e}")
+        raise typer.Exit(1) from None
+    print(f"logged in to Bluesky as {who}; published articles will be announced there, about one per pass")
 
 if __name__ == "__main__":
     app()

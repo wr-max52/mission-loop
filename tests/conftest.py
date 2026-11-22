@@ -1,9 +1,9 @@
 import httpx, pytest
 import agents, orchestrator, store
-from agents import f916, stubs
+from agents import bluesky, f916, stubs
 
 def _no_network(request):
-    raise AssertionError(f"a test tried to reach 1F916: {request.method} {request.url}")
+    raise AssertionError(f"a test tried to reach the network: {request.method} {request.url}")
 
 @pytest.fixture(autouse=True)
 def fresh(tmp_path, monkeypatch):
@@ -12,6 +12,9 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB", tmp_path / "data" / "loop.db")
     monkeypatch.setattr(orchestrator, "STOP_FLAG", tmp_path / "data" / "STOP")
     monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(bluesky, "TRANSPORT", httpx.MockTransport(_no_network))
+    for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):
+        monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
     store.init()
 
 @pytest.fixture

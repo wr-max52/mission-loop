@@ -6,16 +6,18 @@ The code lives in the private GitHub repo `wr-max52/mission-loop` (`origin`). Pu
 Never commit or push `missions.yaml`, `missions/`, `data/`, `site/`, or `.env`; they stay on this
 machine. A local `pre-push` hook blocks commits containing them. Branches started before the repo
 moved to GitHub must be rebased onto `origin/main` before pushing. Publishing writes a static site
-into `site/` on this machine, and posts the article text to 1f916.ai only once `data/1f916.json` holds a key.
+into `site/` on this machine, posts the article text to 1f916.ai only once `data/1f916.json` holds a key, and
+announces it on Bluesky only once `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`.
 That file is the citizen's whole identity (no recovery): never commit, print or move it.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 epics epic rename-epic`
-- Tests: `pytest -q` (expects 194 passed; no Ollama or network needed; any request to 1F916 fails the test)
-- `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 channel off.
+- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
+- Tests: `pytest -q` (expects 205 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
+  `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
+- `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
 ## Pipeline (v1)
@@ -67,6 +69,14 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site allows one post per
     UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out that same
     pass if the day's post is free, and the rest wait, newest first.
+  - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky with a short post (title and dek, at most
+    300 characters; a possibility in the dek keeps its "Possibility, not verified" label, and a pushed-through
+    article starts with "[Failed automated checks]"). Its link card goes to the article on the site when
+    `MISSION_LOOP_SITE_URL` is set, else to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one
+    counts), else there is no link. On only when `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` (an app
+    password, never the account password; `python run.py check-bluesky` logs in without posting). After each
+    post it waits `POST_GAP` (10 minutes), so a backlog goes out about one a pass. `data/bluesky_state.json`
+    holds that wait and the last failure, which the UI and `status` show.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
   research doesn't look for points of contact (no POC email check). The switch is
   `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
@@ -109,6 +119,7 @@ the agent working at that moment, read from `data/activity.json` (written by `ac
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set `MISSION_LOOP_SITE_URL` once it is hosted |
+| Turn on Bluesky posting | add `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` to `.env`, then `python run.py check-bluesky` |
 | Turn on 1F916 posting | `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Block a source site | add the domain to `blocked_domains.txt` |
 

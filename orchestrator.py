@@ -3,7 +3,7 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
-from agents import f916, publisher
+from agents import bluesky, f916, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ChannelPost, epic_title, slugify)
@@ -258,7 +258,7 @@ def find_new_missions(now) -> int:
 
 # ---------- publishing channels beyond the local site ----------
 
-CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME}
+CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME, bluesky.KEY: bluesky.NAME}
 
 def channels(m: Mission) -> dict[str, ChannelPost]:
     """Everywhere this mission was published. Missions published before channels were recorded
