@@ -16,7 +16,7 @@ from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, store
-from agents import f916, publisher
+from agents import bluesky, f916, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
 
@@ -47,6 +47,8 @@ MESSAGES = {
     "epic_renamed": "Epic renamed. Published pages show the new name.",
     "site_url_saved": "Site address saved. The feeds use full links now.",
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
+    "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from the next pass.",
+    "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "joined": "Joined 1F916. Published articles post there from the next pass, one a day, newest first.",
 }
 ERRORS = {
@@ -60,6 +62,7 @@ ERRORS = {
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different, approved epic to move them to.",
     "site_url": "The site address must be a full http:// or https:// address, or empty.",
+    "bluesky": "Bluesky needs both a handle and an app password.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
 }
 
@@ -319,7 +322,8 @@ def agent_strip(now: dict | None) -> str:
              else f'<span class="agent">{name}</span>'
              for key, name in activity.AGENTS.items()
              if key == working or (key != "contacts" or settings.OUTREACH)
-             and (key != "1f916" or agents.f916_enabled())]
+             and (key != "1f916" or agents.f916_enabled())
+             and (key != "bluesky" or agents.bluesky_enabled())]
     strip = '<span class="arrow" aria-hidden="true">›</span>'.join(chips)
     if now and not now["slug"]:            # the mission finder works for the desk, not one mission
         status = (f'<strong>{activity.AGENTS[working]}</strong> is looking for new missions'
@@ -368,6 +372,8 @@ def channel_names(m: Mission) -> str:
     if agents.f916_enabled() and "1f916" not in m.channels:
         slugs = [e["slug"] for e in orchestrator.queue(f916)]
         names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
+    if agents.bluesky_enabled() and "bluesky" not in m.channels:
+        names += " · Bluesky queued"
     return names
 
 def f916_status() -> str:
@@ -383,6 +389,20 @@ def f916_status() -> str:
     problem = state.get("note", "") if not state.get("spent_until") else ""
     line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong>, one article a day, newest first · '
             f"{queued} queued · {when}")
+    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
+def bluesky_status() -> str:
+    """One line on the Bluesky channel: who we post as, how many wait, and the last failure if any."""
+    if not agents.bluesky_enabled():
+        return ('Bluesky is off. Add your handle and an app password on the <a href="/settings">Settings</a> page, '
+                "or set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env and run "
+                "<code>python run.py check-bluesky</code>.")
+    queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
+    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>, about one article a pass, "
+            f"newest first · {queued} queued")
+    if not settings.site_url():
+        line += ('<br><span class="hint">No site address, so posts link to the 1F916 copy when there '
+                 "is one and otherwise carry no link.</span>")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
 
 
@@ -414,6 +434,24 @@ Its secret key is saved to <code>data/1f916.json</code> on this machine only; th
   <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="e.g. loop-desk">
   <p><button>Join 1F916</button></p>
 </form>"""
+    if agents.bluesky_enabled():
+        forget = ("""<form method="post" action="/settings/bluesky" class="actions"><input type="hidden" name="forget" value="1">
+  <p><button>Disconnect Bluesky</button></p></form>""" if bluesky.saved_credentials() else
+                  '<p class="hint">Set in .env; remove BLUESKY_HANDLE and BLUESKY_APP_PASSWORD there to turn it off.</p>')
+        bluesky_row = f"<p>{bluesky_status()}</p>{forget}"
+    elif os.environ.get("MISSION_LOOP_STUBS") == "1":
+        bluesky_row = "<p>Bluesky is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
+    else:
+        bluesky_row = """<p>Off. Each published article gets a short post (title and dek) linking to the full text.
+Use an app password from Bluesky's Settings &gt; Privacy and security &gt; App passwords, never your account password.
+It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this machine only.</p>
+<form method="post" action="/settings/bluesky" class="actions">
+  <label for="bsky_handle" style="margin-top:0">Handle <span class="hint">e.g. yourname.bsky.social</span></label>
+  <input type="text" id="bsky_handle" name="handle" required maxlength="253" autocomplete="username" placeholder="yourname.bsky.social">
+  <label for="bsky_password">App password</label>
+  <input type="password" id="bsky_password" name="app_password" required maxlength="64" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
+  <p><button>Check and turn on Bluesky</button></p>
+</form>"""
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     return f"""{err}<h1>Settings</h1>
 <h2 class="group">Feed</h2>
@@ -427,7 +465,8 @@ Its secret key is saved to <code>data/1f916.json</code> on this machine only; th
 </form>
 <h2 class="group">Channels</h2>
 <h3>Local site and feeds</h3><p>Always on.</p>
-<h3>1F916</h3>{f916_row}"""
+<h3>1F916</h3>{f916_row}
+<h3>Bluesky</h3>{bluesky_row}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
     return page("Settings", settings_body(request))
@@ -458,6 +497,26 @@ async def join_1f916(request: Request) -> Response:
     if loop_running():
         wake()
     return go("/settings", done="joined")
+
+async def save_bluesky(request: Request) -> Response:
+    """Log in with the handle and app password first; only credentials Bluesky accepts are saved."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("forget"):
+        bluesky.forget_credentials()
+        return go("/settings", done="bluesky_off")
+    handle, password = str(form.get("handle") or "")[:253], str(form.get("app_password") or "")[:64]
+    if not (handle.strip() and password.strip()):
+        return go("/settings", error="bluesky")
+    try:
+        await run_in_threadpool(bluesky.check_login, handle, password)
+    except Exception as e:                 # wrong password, rate limit, network: nothing is saved
+        return page("Settings", settings_body(request, f"Bluesky did not accept that login: {e}"))
+    bluesky.save_credentials(handle, password)
+    if loop_running():
+        wake()
+    return go("/settings", done="bluesky_on")
 
 
 # ---------- epics ----------
@@ -541,7 +600,7 @@ async def home(request: Request) -> HTMLResponse:
         if ms:
             body.append(f'<h2 class="group">{title} ({len(ms)})</h2>')
             if title == "Published":
-                body.append(f'<p class="muted">{f916_status()}</p>')
+                body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
             body.append("".join(card(m, now, epics) for m in ms))
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
@@ -580,8 +639,9 @@ def actions_for(m: Mission) -> str:
                 f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
                 f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
                 f'</div><p class="hint">Publishing writes it to the local site (site/{escape(m.slug)}/)'
-                + (" and queues it for 1F916, which takes one post a day, newest first." if agents.f916_enabled()
-                   else ".") + "</p>"
+                + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled()
+                   else "")
+                + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".</p>"
                 + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings.")
                 + "</div>")
     if m.state == State.PARKED:
@@ -617,6 +677,11 @@ def channels_html(m: Mission) -> str:
         rows.append(f"<li>1F916: waiting, {place} in the queue (one post a day, newest first)</li>")
     if m.channel_errors.get("1f916"):
         rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
+                    "It stays queued behind the others.</li>")
+    if agents.bluesky_enabled() and "bluesky" not in m.channels:
+        rows.append("<li>Bluesky: waiting (about one post a pass, newest first)</li>")
+    if m.channel_errors.get("bluesky"):
+        rows.append(f'<li>Bluesky refused the last try: {escape(m.channel_errors["bluesky"])}. '
                     "It stays queued behind the others.</li>")
     return f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul>{"".join(rows)}</ul>'
 
@@ -857,6 +922,7 @@ app = Starlette(routes=[
     Route("/settings", settings_page),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
+    Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
