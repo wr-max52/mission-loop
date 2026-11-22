@@ -168,6 +168,10 @@ def mission_status(slug: str) -> str:
         lines.append(f"Research attempts: {m.attempts} of {m.max_attempts}")
     if m.state == State.WRITING or m.write_attempts:
         lines.append(f"Writing attempts: {m.write_attempts} of {m.max_attempts}")
+    if m.checked_article and m.state == State.WRITING:
+        lines.append("The article passed its check; the Research Assistant rates it next")
+    if m.article_rating and m.state in (State.ARTICLE_READY, State.DONE):
+        lines.append("Rating: " + " ".join(m.article_rating.notes().split()))
     e = _on(m.slug, _working())
     if e:
         lines.append(f"Working on it now: {activity.AGENTS[e['agent']]}{_worker(e)}, for {_ago(time.time() - e['since'])}")

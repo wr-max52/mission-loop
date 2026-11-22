@@ -20,7 +20,8 @@ from starlette.staticfiles import StaticFiles
 import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
-from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
+from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
+                       RATING_FACTORS, RATING_FAIL_AT, RATING_SCALE)
 from render import CSS, brief_html, epic_pill
 from icons import icon, PATHS as ICON_PATHS, CSS as ICON_CSS
 import flowchart
@@ -209,7 +210,8 @@ def next_step(m: Mission) -> str:
     if m.state == State.BRIEF_READY and not m.approved:
         return "Read the brief, then approve it or send it back."
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        return "Read the article, then publish it or send it back."
+        rated = f"{m.article_rating.summary()}. " if m.article_rating else ""
+        return rated + "Read the article, then publish it or send it back."
     if m.state == State.PARKED:
         stage = "writing" if orchestrator.parked_while_writing(m) else "research"
         then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
@@ -227,6 +229,8 @@ def next_step(m: Mission) -> str:
         try_ = m.attempts if same else m.attempts + 1
         return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
+        if m.checked_article:
+            return f"Rating the article that passed its check on attempt {m.write_attempts} of {m.max_attempts}."
         done = (f" {len(m.article_draft.sections)} of {len(m.article_draft.plan.sections)} sections written."
                 if m.article_draft else "")
         return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}.{done}"
@@ -447,6 +451,8 @@ ul.checks { list-style:none; padding:0; margin:.5rem 0; display:grid; gap:.45rem
 ul.checks li { display:flex; gap:.55rem; align-items:flex-start; }
 .actions .buttons { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-start; }
 .actions details { margin-top:.8rem; }
+.rating { margin:.4rem 0 1rem; } .rating ul { list-style:none; padding:0; margin:.4rem 0 0; }
+.rating li { margin:.35rem 0; } .rating .score { font-variant-numeric:tabular-nums; font-weight:600; margin-right:.3rem; }
 pre.notes { white-space:pre-wrap; background:var(--quote); padding:.8rem 1rem; border-radius:8px;
             font-size:.85rem; line-height:1.5; }
 .doc { font: 17px/1.6 Georgia, "Iowan Old Style", serif; }
@@ -952,7 +958,8 @@ def flow_state() -> dict:
     now = [e for e in running_now() if strip_step(e["agent"]) in shown]
     missions = store.all_missions()
     parked = [m for m in missions if m.state == State.PARKED]
-    writing = sum(orchestrator.parked_while_writing(m) for m in parked)
+    writing = [m for m in parked if orchestrator.parked_while_writing(m)]
+    rated = sum(bool(m.rejected_article and m.rejected_article.rating) for m in writing)
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
@@ -960,7 +967,8 @@ def flow_state() -> dict:
         "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
-        "parked": {"source_check": len(parked) - writing, "article_check": writing},
+        "parked": {"source_check": len(parked) - len(writing), "article_check": len(writing) - rated,
+                   "rating_check": rated},
         "states": {m.slug: m.state.value for m in missions},
         "now": flow_status(now, running, {m.slug: m.topic for m in missions}),
     }
@@ -2198,6 +2206,23 @@ def epic_datalist() -> str:
 
 ASK_ACTION = {"review": "Read the brief", "publish": "Read the article", "parked": "See why it stopped"}
 
+def rating_line(r: ArticleRating) -> str:
+    """One line for a review card: "Rated 24/30 by the Research Assistant (claim and logic 8, intrigue 8, sources 8)."."""
+    if r.error:
+        return f"Not rated: {r.error}"
+    return (f"{r.summary()} by the Research Assistant (claim and logic {r.logic}, intrigue {r.intrigue}, "
+            f"sources {r.sources}).")
+
+def rating_html(r: ArticleRating) -> str:
+    """The rating on a mission page: the total, then each factor's score and the rater's reason."""
+    if r.error:
+        return f'<div class="rating"><p class="muted">{escape(r.summary())}. It went to your review unrated.</p></div>'
+    rows = "".join(f'<li><span class="score">{getattr(r, key)}/{RATING_SCALE}</span><strong>{escape(name)}</strong>'
+                   f'{": " + escape(getattr(r, key + "_why")) if getattr(r, key + "_why").strip() else ""}</li>'
+                   for key, name in RATING_FACTORS.items())
+    return (f'<div class="rating"><p><strong>{escape(r.summary())}</strong> by the Research Assistant; '
+            f'{RATING_FAIL_AT} or less goes back to the writer.</p><ul>{rows}</ul></div>')
+
 def ask(color: str, title: str, badge: str, body: str, actions: str, link: str = "") -> str:
     """A decision waiting on the human, the same for a brief, an article, a parked mission or a proposed epic:
     the finger, what it is, a colored badge, what to know, and the buttons that decide it."""
@@ -2738,7 +2763,8 @@ def actions_for(m: Mission) -> str:
         where = (f"Publishing writes it to the local site (site/{escape(m.slug)}/)"
                  + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled() else "")
                  + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".")
-        return ask("publish", "Publish the article, or send it back", "Article ready", f'<p class="hint">{where}</p>',
+        rated = f'<p class="hint">{escape(rating_line(m.article_rating))}</p>' if m.article_rating else ""
+        return ask("publish", "Publish the article, or send it back", "Article ready", f'<p class="hint">{where}</p>{rated}',
                    f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
                    f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
                    + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings."))
@@ -2830,6 +2856,7 @@ async def mission(request: Request) -> Response:
     if m.validator_notes:
         title = "Why it was parked" if m.state == State.PARKED else \
                 "Feedback being worked on" if m.validator_notes.startswith("Human reviewer feedback") else \
+                "Why the last draft was sent back" if m.rejected_article and m.rejected_article.rating else \
                 "Last check's notes"
         name = "alert" if m.state == State.PARKED or not title.startswith("Feedback") else "message"
         body.append(f'{heading(name, title, cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
@@ -2843,6 +2870,8 @@ async def mission(request: Request) -> Response:
     brief, article = _brief(slug), _article(slug)
     checked = not m.unchecked_brief
     preview = Path("missions") / slug / "preview.html"
+    if m.article_rating and m.state in (State.ARTICLE_READY, State.DONE):
+        body.append(f'{heading("scale", "Rating", cls="sec")}{rating_html(m.article_rating)}')
     if article and preview.exists() and m.state in (State.ARTICLE_READY, State.DONE, State.WRITING):
         body.append(f'{heading("newspaper", "Article", cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
     if brief and m.state == State.BRIEF_READY:
@@ -2855,7 +2884,8 @@ async def mission(request: Request) -> Response:
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
     rejected = Path("missions") / slug / "article.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.WRITING):
-        body.append(f'<details><summary>{icon("cross")}Last article that failed its check</summary>'
+        what = "was sent back by its rating" if m.rejected_article and m.rejected_article.rating else "failed its check"
+        body.append(f'<details><summary>{icon("cross")}Last article that {what}</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
 
     events = store.events(slug)

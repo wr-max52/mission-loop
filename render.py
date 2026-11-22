@@ -434,6 +434,10 @@ AGENT_NOTES = [
     ("Article writer", "Principal Investigator",
      "Writes the article from the approved brief in plain words: the claim up top, a short story, the evidence, "
      "the other side, then the fine print, labeling each possibility \u201cPossibility, not verified\u201d."),
+    ("Article rater", "Research Assistant",
+     "Reads each article that passed its check and scores it 1 to 10 on the strength of its claim and logic, how "
+     "gripping it is, and how credible its sources are. A total of 20 or less out of 30 sends it back to the writer "
+     "with the reasons, before a person ever reads it."),
     ("Publisher", "code, no model",
      "Writes the article to this site, updates the feeds and passes it on to the other places it appears."),
 ]

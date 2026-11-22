@@ -28,6 +28,8 @@ FLOW = [
     ("brief_review", "human", "Review brief"),
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
+    ("article_rating", "agent", "Rating"), # the Research Assistant rates the checked article (agents/rater.py)
+    ("rating_check", "check", "check"),    # code: a total of 20 or less goes back to the writer
     ("article_review", "human", "Review article"),
     ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
 ]
@@ -35,6 +37,7 @@ TILES = {   # key -> (icon, the line under its name on the strip)
     "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
     "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
+    "article_rating": ("scale", "rates the article"),
     "publisher": ("broadcast", "site and channels"),
 }
 REVIEW_SUB = {"epic_review": "you approve", "brief_review": "you approve", "article_review": "you publish"}
@@ -60,6 +63,9 @@ CHECKS = {   # every code check on the strip: what it holds the step before it t
                     "websites, at least one fact and a counterpoint. " + RETRY,
     "article_check": "Article check: code, no model. Every paragraph cited to a checked source in the approved brief, "
                      "quotes copied from those sources, no outside links, the opposing view cited. " + RETRY,
+    "rating_check": "Rating check: code. The Research Assistant scores the claim and its logic, the intrigue and the "
+                    "sources' credibility, 1 to 10 each; a total of 20 or less sends the article back to the writer "
+                    "with the reasons. " + RETRY,
 }
 
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:

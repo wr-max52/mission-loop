@@ -351,6 +351,8 @@ def show(slug: str):
     print(doc.read_text() if doc.exists() else f"nothing to show yet ({m.state.value})")
     if m.state.value == "ARTICLE_READY":
         print(f"\nPreview in a browser: open {folder / 'preview.html'}")
+    if m.article_rating and m.state.value in ("ARTICLE_READY", "DONE"):
+        print("\nRating by the Research Assistant:\n" + m.article_rating.notes())
     if m.validator_notes:
         print("\nLast validator / reviewer notes:\n" + m.validator_notes)
     if m.unchecked_brief:

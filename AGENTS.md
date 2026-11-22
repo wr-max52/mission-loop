@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 683 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 691 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -80,9 +80,9 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 ```
 (Theorist: evolves the inspiration line, may propose epics, 1 mission and 1 combine, links missions; then the finder)
 QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
-          (validator,     (human:        (skipped while       (article     (human:
-           3 attempts)     approve)       outreach is off)     check, 3     review)
-                                                                                                                              attempts)
+          (validator,     (human:        (skipped while       (article check, (human:
+           3 attempts)     approve)       outreach is off)     then rating;    review)
+                                                               3 attempts)
 QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mission; out of the flow)
 ```
 
@@ -270,6 +270,21 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   or source pick is read (`ResearchBrief._short_ids`, `SourcePick._short_ids`, so saved briefs are fixed
   too), and each written section has a bracketed citation of a brief source's URL turned into its id
   (`contracts.cite_by_id`) before it is checked; any other URL still fails.
+- Article rating: `agents/rater.py` (`agents.rate_article`), the one judgement the code check can't make. An article
+  that passes the article check is kept on the mission (`Mission.checked_article`), which stays WRITING with role
+  "assistant" (`orchestrator.role`), so the Research Assistant rates it as its own task (`orchestrator._rate`) while
+  the Principal Investigator moves on. One structured call on the small model, no tools: it reads the article and the
+  brief's sources it cites (site, title, quote, stance) and scores 1 to 10 (`contracts.RATING_SCALE`), each after its
+  reason (`RatingReply`, clamped by code): `logic` (the strength of the claim and its logic), `intrigue` and `sources`
+  (their credibility). Code decides (`ArticleRating.passed`): a total of `RATING_FAIL_AT` (20) or less out of 30 fails
+  the writing attempt like a failed check (`orchestrator._article_failed`): the notes are the rating
+  (`ArticleRating.notes`), `RejectedArticle.rating` marks it, the draft is dropped so the writer starts from a fresh
+  plan, and its prompt shows the last article with the editor's reasons (`writer._notes`); after 3 attempts the
+  mission parks (counted at the rating's check on the strip) and may still be pushed through. A passing rating goes to
+  review with the article (`Mission.article_rating`: the review card, the mission page's Rating section, the home
+  card, `run.py show`, the chat's `mission_status`). A rater that crashes sends the article to review unrated
+  (`ArticleRating.error`, "Not rated: ..."): the code check passed, so nothing is held back for want of an opinion. A
+  stop keeps `checked_article`, so the rating runs when the loop starts again. It is never shown on the published site.
 - Every model call goes through `agents/llm.py`, which keeps it bounded (cloud models go on from there to
   `agents/providers.py`; the numbers below are Ollama's, see Model providers for theirs). Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
@@ -526,7 +541,8 @@ lanes at each human review. Lane 0 runs left to right from the top left (the The
 square end on the right; lane 1 comes back right to left one level lower to the next review on the left; and so on,
 each review spanning the two lanes it joins, so the snake turns through it; the last lane (Publish alone, one step
 whatever the channels) ends bottom left. Agents are tiles with an icon and a line saying what they do (`flowchart.TILES`),
-each code check a narrow shield tile right after the agent it checks (with a red count of missions parked there),
+each code check a narrow shield tile right after the agent it checks (the article rating is an agent tile, Rating,
+on the Research Assistant, after the article check, with its own check for the 20-or-less rule) (with a red count of missions parked there),
 and each review shows how many missions wait on you. Researchers on the strip stand on their own step's row
 (`FlowStage.row`). Every code check is on it (`flowchart.CHECKS`, whose
 titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
