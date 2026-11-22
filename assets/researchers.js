@@ -84,56 +84,67 @@ const memory = {
 
 // ---------- the cast ----------
 
-const INK = "#1d1b22", MOUTH = "#7a3434";
+const INK = "#1d1b22", MOUTH = "#7a3434", WHITE = "#ffffff", BLUSH = "#ff8f9e";
 const SKIN = ["#ffe1c6", "#f5cba3", "#e8b38a", "#d49a6a", "#b97c4e", "#9a6038", "#7a4628", "#58321d"];
 const BOOKS = ["#b33939", "#227093", "#218c74", "#cc8e35", "#6d214f", "#40407a"];
 const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", "#a3a3a3"];
+const IRIS = ["#3b2a20", "#2f3f63", "#35502f", "#4a2f1d"];
 
-// Each character keeps their look (outfit, hair, headwear, signature prop); height, build and some
-// colors vary per visit. `fav` boosts the actions they're known for; everything else can still happen.
+// Each character keeps their look (outfit, hair, headwear, signature prop) and their attitude (`brow` and
+// `mouth` are their resting expression, `quirk` their own little habit); height, build and some colors vary
+// per visit. `fav` boosts the actions they're known for; everything else can still happen.
 // `worker` is whose crew they're in: "assistant" (young, the small model) or "pi" (tenured, the big model).
 const ROSTER = {
-  aris:   { worker: "pi", name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "mustache",
-            brows: true, outfit: "labcoat", shirt: ["#5b7fa6", "#6c8fb8"], pants: ["#3a3a40"], shoes: ["#6b3e26"],
-            prop: "tablet", fav: { read: 2, citation: 2.5, notes: 1.5 } },
+  aris:   { worker: "pi", name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "walrus",
+            bushy: true, brow: "skeptic", outfit: "labcoat", shirt: ["#5b7fa6", "#6c8fb8"], bow: ["#a83232", "#2d6a4f", "#6a4c93"],
+            pants: ["#3a3a40"], shoes: ["#6b3e26"], prop: "tablet", fav: { read: 2, citation: 2.5, notes: 1.5 } },
   aisha:  { worker: "pi", name: "Aisha", skin: [5, 6, 4, 3], head: "hijab", hijab: ["#1f3a5f", "#2d2d4a", "#4a2240", "#1e4d4a"],
-            outfit: "abaya", top: ["#a9cbe8", "#c4b5e0", "#b5d8c6"], pants: ["#2c3e57"], shoes: ["#2b2b30"],
+            lash: true, outfit: "abaya", top: ["#a9cbe8", "#c4b5e0", "#b5d8c6"], pants: ["#2c3e57"], shoes: ["#2b2b30"],
             prop: "tablet", fav: { notes: 2.5, search: 1.5, typing: 1.5 } },
-  ben:    { worker: "assistant", name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short",
-            outfit: "sweater", top: ["#7d8691", "#5f7f6b", "#8a6f5a"], pants: ["#c8b48a", "#b5a27a"],
+  ben:    { worker: "assistant", name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short", ahoge: true,
+            outfit: "sweater", top: ["#7d8691", "#5f7f6b", "#8a6f5a"], pants: ["#c8b48a", "#b5a27a"], brow: "worry",
             shoes: ["#6b3e26"], pack: ["#6b4a2e", "#3d5a80"], prop: null, fav: { stack: 3, telescope: 1.5, eureka: 1.5 } },
-  mei:    { worker: "assistant", name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "glasses",
-            outfit: "labcoat", shirt: ["#6f8fb3", "#8aa3c2"], pants: ["#2c3340"], shoes: ["#2b2b30"],
-            prop: "laptop", fav: { typing: 3, read: 1.5, scroll: 1.5 } },
+  mei:    { worker: "assistant", name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "round", lash: true,
+            frame: ["#c0392b", "#3d5a80", "#6a4c93"], outfit: "labcoat", shirt: ["#6f8fb3", "#8aa3c2"], pants: ["#2c3340"],
+            shoes: ["#2b2b30"], prop: "laptop", fav: { typing: 3, read: 1.5, scroll: 1.5 } },
   sam:    { worker: "assistant", name: "Sam", skin: [2, 3, 4], hair: ["#1d1d1d"], style: "short", head: "cap", cap: ["#2f3640", "#3d3d55", "#7a2e3b"],
-            outfit: "hoodie", top: ["#7a7f87", "#5c6370", "#6b5b7b"], pants: ["#4a78b5", "#3c5a99"], shoes: ["#e8e8e8"],
+            lids: true, outfit: "hoodie", top: ["#7a7f87", "#5c6370", "#6b5b7b"], pants: ["#4a78b5", "#3c5a99"], shoes: ["#e8e8e8"],
             prop: "phone", fav: { typing: 2.5, confused: 1.5, citation: 1.5 } },
-  evelyn: { worker: "pi", name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly",
-            outfit: "cardigan", top: ["#8a5a3c", "#6e5a8a", "#4f6e5a"], shirt: ["#efe6d6"], legs: "skirt",
+  evelyn: { worker: "pi", name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly", face: "halfmoon",
+            lash: true, outfit: "cardigan", top: ["#8a5a3c", "#6e5a8a", "#4f6e5a"], shirt: ["#efe6d6"], legs: "skirt",
             skirt: ["#2f3640", "#3a2f40"], pants: ["#d8b89a"], shoes: ["#6b3e26"], prop: "book",
             fav: { read: 3, coffee: 2, sleep: 1.5 } },
-  david:  { worker: "pi", name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit",
+  david:  { worker: "pi", name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit", brow: "stern", mouth: "smirk",
             top: ["#22346b", "#2b2e38", "#3b3f48"], tie: ["#e8e8e8", "#c0392b", "#d4a017"], shoes: ["#2b2b30"],
             prop: ["briefcase", "tablet"], fav: { citation: 2, papers: 2, notes: 1.5 } },
-  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", outfit: "overalls",
-            shirt: ["#b5473a", "#5f7f6b", "#e8e4da", "#8a6f9e"], pants: ["#3f5f8a", "#4a6f9e"], shoes: ["#6b3e26"], prop: null,
-            fav: { dig: 3.5, search: 1.5, telescope: 1 } },
+  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", outfit: "overalls", rolled: true,
+            pencil: true, grin: true, shirt: ["#b5473a", "#5f7f6b", "#e8e4da", "#8a6f9e"], pants: ["#3f5f8a", "#4a6f9e"],
+            shoes: ["#6b3e26"], prop: null, fav: { dig: 3.5, search: 1.5, telescope: 1 } },
   hanna:  { worker: "assistant", name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
-            beanie: ["#5d6b55", "#7a4a4a", "#45556b"], outfit: "jacket", top: ["#566152", "#4a5568", "#6b5a45"],
-            pants: ["#4a6f9e"], shoes: ["#e8e8e8"], pack: ["#3a3f45", "#5a3f2e"], prop: "laptop",
-            fav: { typing: 2, telescope: 1.5, scroll: 1.5 } },
-  kenji:  { worker: "pi", name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "glasses", outfit: "labcoat",
-            shirt: ["#5a7fa6", "#4f6d8a"], pants: ["#2f3640"], shoes: ["#2b2b30"], prop: "camera",
+            lash: true, beanie: ["#5d6b55", "#7a4a4a", "#45556b"], pom: ["#f4efe6", "#e8c39e"], outfit: "jacket",
+            top: ["#566152", "#4a5568", "#6b5a45"], pants: ["#4a6f9e"], shoes: ["#e8e8e8"], pack: ["#3a3f45", "#5a3f2e"],
+            prop: "laptop", fav: { typing: 2, telescope: 1.5, scroll: 1.5 } },
+  kenji:  { worker: "pi", name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "browline", outfit: "labcoat",
+            tie: ["#2b2e38", "#7a2e3b"], shirt: ["#5a7fa6", "#4f6d8a"], pants: ["#2f3640"], shoes: ["#2b2b30"], prop: "camera",
             fav: { search: 2.5, telescope: 2, eureka: 1.5 } },
   quill:  { worker: "pi", name: "Det. Quill", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: NATURAL_HAIR, style: "short", head: "deerstalker",
-            outfit: "trench", top: ["#b8925a", "#a07c4c"], pants: ["#3a3a40"], shoes: ["#5d4037"], prop: "magnifier",
-            facial: ["mustache", null], fav: { search: 4, confused: 1.5 } },
+            brow: "skeptic", mouth: "smirk", outfit: "trench", top: ["#b8925a", "#a07c4c"], pants: ["#3a3a40"], shoes: ["#5d4037"],
+            prop: "magnifier", facial: ["mustache", null], fav: { search: 4, confused: 1.5 } },
   pip:    { worker: "assistant", name: "Intern Pip", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: ["#c9572d", "#e1c27f", "#17110e"], style: "spiky",
-            head: "propeller", outfit: "tshirt", top: ["#e84393", "#0abde3", "#f39c12", "#27ae60"], pants: ["#556b2f", "#34495e"],
-            shoes: ["#c0392b", "#e8e8e8"], prop: "mug", fav: { papers: 2.5, coffee: 2.5, stack: 1.5 } },
+            head: "propeller", freckles: true, grin: true, mouth: "smile", outfit: "tshirt", top: ["#e84393", "#0abde3", "#f39c12", "#27ae60"],
+            pants: ["#556b2f", "#34495e"], shoes: ["#c0392b", "#e8e8e8"], prop: "mug", fav: { papers: 2.5, coffee: 2.5, stack: 1.5 } },
 };
-const CAST = Object.keys(ROSTER);
-const crewOf = worker => CAST.filter(k => !worker || ROSTER[k].worker === worker);
+const CAST = Object.keys(ROSTER);                // built-ins, then any custom sprites registered (see SPRITES.md)
+const BUILT_IN = new Set(CAST);
+// A page can add sprites and switch any off before loading this script:
+// window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec, ... }, off: ["pip", ...] }.
+const SPRITE_CONFIG = window.RESEARCHER_SPRITES || {};
+const OFF = new Set(Array.isArray(SPRITE_CONFIG.off) ? SPRITE_CONFIG.off : []);
+const enabled = () => CAST.filter(k => !OFF.has(k));
+const crewOf = worker => {                        // a crew never ends up empty: switching all of it off is ignored
+  const all = CAST.filter(k => !worker || ROSTER[k].worker === worker), on = all.filter(k => !OFF.has(k));
+  return on.length ? on : all;
+};
 
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
@@ -141,9 +152,12 @@ function makeLook(kind, seed) {
   const a = { kind, seed, name: t.name, fav: t.fav || {} };
   a.skin = SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)];
   a.skinD = shade(a.skin, 0.82);
-  a.hair = one(t.hair) || "#17110e"; a.hairD = shade(a.hair, 0.72); a.hairL = shade(a.hair, 1.25);
+  a.hair = one(t.hair) || "#17110e"; a.hairD = shade(a.hair, 0.72); a.hairL = shade(a.hair, 1.28);
   a.style = t.style || "short"; a.head = t.head || null; a.face = t.face || null; a.facial = one(t.facial) || null;
-  a.brows = !!t.brows;
+  a.eye = pick(r, IRIS); a.lash = !!t.lash; a.lids = !!t.lids; a.bushy = !!t.bushy; a.ahoge = !!t.ahoge;
+  a.brow = t.brow || "flat"; a.mouth = t.mouth || "none"; a.grin = !!t.grin;
+  a.browC = a.bushy ? a.hair : shade(a.hair, 0.6);
+  a.freckles = !!t.freckles; a.pencil = !!t.pencil; a.frame = one(t.frame) || INK;
   a.outfit = t.outfit;
   a.top = one(t.top) || "#7d8691"; a.topD = shade(a.top, 0.78);
   a.shirt = one(t.shirt) || "#e8e4da"; a.shirtD = shade(a.shirt, 0.82);
@@ -152,27 +166,35 @@ function makeLook(kind, seed) {
   a.shoes = one(t.shoes) || "#2b2b30"; a.shoesD = shade(a.shoes, 0.75);
   a.legsStyle = t.legs || "pants"; a.skirt = one(t.skirt) || "#2f3640";
   a.pack = one(t.pack) || null;
-  a.tie = one(t.tie) || null;
-  a.hijab = one(t.hijab) || "#1f3a5f"; a.cap = one(t.cap) || "#2f3640"; a.beanie = one(t.beanie) || "#5d6b55";
+  a.tie = one(t.tie) || null; a.bow = one(t.bow) || null;
+  a.hijab = one(t.hijab) || "#1f3a5f"; a.hijabD = shade(a.hijab, 0.72); a.hijabL = shade(a.hijab, 1.45);
+  a.cap = one(t.cap) || "#2f3640"; a.beanie = one(t.beanie) || "#5d6b55"; a.pom = one(t.pom) || "#f4efe6";
   a.prop = one(t.prop) || null;
   a.sleeve = { labcoat: a.coat, suit: a.top, hoodie: a.top, sweater: a.top, cardigan: a.top, jacket: a.top,
                abaya: a.top, trench: a.top, vest: a.shirt, overalls: a.shirt, tshirt: a.top }[a.outfit] || a.top;
   a.sleeveD = shade(a.sleeve, 0.78);
-  a.short = a.outfit === "tshirt";            // short sleeves
-  a.legs = 11 + Math.floor(r() * 7);          // 11..17 px: short to lanky
+  a.rolled = !!t.rolled;
+  a.short = a.outfit === "tshirt" || a.rolled; // bare forearms
+  a.legs = 12 + Math.floor(r() * 7);          // 12..18 px: short to lanky
   a.torso = 11 + Math.floor(r() * 3);         // 11..13
   a.width = pick(r, [11, 12, 12, 13]);
-  a.speed = 12 + a.legs * 0.9 + r() * 4;      // px per second: an amble, 22..31
+  a.speed = 12 + a.legs * 0.9 + r() * 4;      // px per second: an amble, 23..32
   a.book = pick(r, BOOKS);
+  a.phase = r() * 7;                          // so glasses glint and wisps sway out of step
+  a.base = t.base || kind;                    // a custom sprite keeps its starting sprite's quirk unless it has its own
+  a.maps = t.maps || null; a.propMap = t.propMap || null; a.quirk = t.quirk || null;
+  if (a.propMap) a.prop = "custom";
   return a;
 }
 
 // ---------- drawing ----------
 
 // P(x, y, w, h, color): one rectangle of pixels. x runs toward the way the researcher faces, y runs up
-// from the floor. Mirroring for left-facing happens here, so every part is drawn facing right.
+// from the floor. Mirroring for left-facing happens here, so every part is drawn facing right. Nothing is
+// drawn below the floor: a sitting researcher's coat folds onto it instead of sinking through.
 function painter(g, ox, oy, face) {
   return (x, y, w, h, c) => {
+    if (y < 0) { h += y; y = 0; }
     if (!c || w <= 0 || h <= 0) return;
     g.fillStyle = c;
     g.fillRect(ox + (face > 0 ? x : -(x + w - 1)), oy - y - h + 1, w, h);
@@ -189,10 +211,12 @@ function limb(P, x0, y0, x1, y1, w, c, ink = true) {
   for (const [x, y] of pts) P(x - o, y - o, w, w, c);
 }
 
-function drawLeg(P, a, cx, off, lift, L, color) {
-  const lf = lift ? 2 : 0, foot = cx - 1 + off;
-  limb(P, cx, L - 2, cx + off, lf + 4, 4, color);
-  box(P, foot, lf + 1, 5, 2, color === a.pantsD ? a.shoesD : a.shoes);
+function drawLeg(P, a, cx, off, lift, L, back) {
+  const lf = lift ? 2 : 0, foot = cx - 1 + off, sc = back ? a.shoesD : a.shoes;
+  limb(P, cx, L - 2, cx + off, lf + 4, 4, back ? a.pantsD : a.pants);
+  box(P, foot, lf + 1, 5, 2, sc);
+  P(foot, lf + 1, 5, 1, shade(sc, 0.72));                 // sole
+  P(foot + 3, lf + 2, 1, 1, shade(sc, 1.4));              // a shine on the toe
 }
 
 function drawArm(P, a, spec, g, back) {
@@ -206,13 +230,15 @@ function drawArm(P, a, spec, g, back) {
     case "low":     elbow = [ax + 1, sy - 5]; hand = [ax + 6 + v, sy - 10]; break;
     case "up":      elbow = [ax + 3 * d, sy + 5]; hand = [ax + (4 + v) * d, g.top + 1]; break;
     case "head":    elbow = [ax + 5, sy + 6]; hand = [ax + 1, g.top - 1 + v]; break;
-    case "mouth":   elbow = [ax + 1, sy - 5]; hand = [ax + 3, g.head + 2]; break;
+    case "mouth":   elbow = [ax + 1, sy - 5]; hand = [ax + 3 + v, g.head + 2]; break;
+    case "face":    elbow = [ax + 2, sy - 4]; hand = [ax + 3 + v, g.head + 6]; break;   // a hand up at the glasses
     default:        elbow = [ax + Math.round(v / 2), sy - 6]; hand = [ax + v, sy - a.torso + 3];
   }
   const sleeve = back ? a.sleeveD : a.sleeve, skin = back ? a.skinD : a.skin;
   limb(P, ax, sy, elbow[0], elbow[1], 3, sleeve);
   limb(P, elbow[0], elbow[1], hand[0], hand[1], 3, a.short ? skin : sleeve);
-  if (!a.short) P(hand[0] - 1, hand[1] - 1, 3, 1, shade(sleeve, 0.85)); // cuff
+  if (a.rolled) P(elbow[0] - 1, elbow[1] - 1, 3, 3, shade(sleeve, 1.14));   // the rolled-up cuff
+  else if (!a.short) P(hand[0] - 1, hand[1] - 1, 3, 1, shade(sleeve, 0.85)); // cuff
   box(P, hand[0] - 1, hand[1] - 1, 3, 3, skin);
   return hand;
 }
@@ -220,15 +246,18 @@ function drawArm(P, a, spec, g, back) {
 function drawTorso(P, a, g) {
   const { tl, tr, hip, sh } = g, W = tr - tl + 1, T = sh - hip + 1;
   const plain = (c, cd) => { box(P, tl, hip, W, T, c); P(tl, hip, 2, T, cd); };
+  const strap = () => { if (a.pack) P(tr - 3, hip + 2, 1, T - 2, shade(a.pack, 0.85)); };   // the backpack strap over the shoulder
   switch (a.outfit) {
     case "labcoat":
       P(tl - 1, hip - 6, W + 2, T + 7, INK);
       P(tl, hip - 5, W, T + 5, a.coat); P(tl, hip - 5, 2, T + 5, a.coatD);
       P(0, hip - 5, 1, 6, INK);                                   // coat tails part
       P(-1, hip + 2, 3, T - 4, a.shirt); P(-2, sh - 2, 5, 3, a.shirt);
-      if (a.tie) P(0, hip + 3, 1, T - 4, a.tie);
+      if (a.tie) { P(0, hip + 3, 1, T - 4, a.tie); P(-1, sh - 2, 3, 1, a.tie); }
       P(-2, hip + 2, 1, T - 4, a.coatD); P(2, hip + 2, 1, T - 4, a.coatD);
-      P(tr - 4, hip + 2, 3, 1, a.coatD); P(tr - 3, hip + 3, 1, 2, "#2e6fd8");
+      P(-3, sh - 1, 1, 2, a.coatD); P(3, sh - 1, 1, 2, a.coatD);  // collar points
+      P(tr - 4, hip + 2, 3, 1, a.coatD); P(tr - 3, hip + 3, 1, 2, "#2e6fd8"); P(tr - 2, hip + 3, 1, 1, "#e03131");   // pens in the pocket
+      if (a.bow) { P(-3, sh - 2, 2, 3, a.bow); P(2, sh - 2, 2, 3, a.bow); P(-1, sh - 1, 3, 1, shade(a.bow, 0.75)); P(-3, sh, 1, 1, shade(a.bow, 1.3)); }
       break;
     case "suit":
       P(tl - 1, hip - 3, W + 2, T + 4, INK);
@@ -236,16 +265,21 @@ function drawTorso(P, a, g) {
       P(-1, sh - 5, 3, 6, "#f2f2f2"); P(-2, sh - 1, 5, 2, "#f2f2f2");
       P(0, sh - 6, 1, 6, a.tie || "#c0392b"); P(-1, sh - 1, 3, 1, a.tie || "#c0392b");
       P(-2, sh - 6, 1, 5, a.topD); P(2, sh - 6, 1, 5, a.topD); P(1, hip + 2, 1, 1, a.topD); P(1, hip + 5, 1, 1, a.topD);
+      P(-3, sh - 3, 1, 2, shade(a.top, 1.25)); P(3, sh - 3, 1, 2, shade(a.top, 1.25));   // lapel edges catch the light
+      P(tr - 3, sh - 3, 2, 1, a.tie === "#e8e8e8" ? "#c0392b" : "#f2f2f2");                // pocket square
       break;
     case "hoodie":
       plain(a.top, a.topD);
       P(-3, hip + 1, 7, 3, a.topD); P(-2, hip + 2, 5, 1, shade(a.top, 0.7));
-      P(-1, sh - 4, 1, 4, "#eeeeee"); P(2, sh - 4, 1, 4, "#eeeeee"); P(tl, hip, W, 1, a.topD);
+      P(-1, sh - 5, 1, 5, "#eeeeee"); P(2, sh - 4, 1, 4, "#eeeeee"); P(-1, sh - 6, 1, 1, "#c8ccd2"); P(2, sh - 5, 1, 1, "#c8ccd2");
+      P(tl, hip, W, 1, a.topD);
       break;
     case "cardigan":
       box(P, tl, hip - 1, W, T + 1, a.top); P(tl, hip - 1, 2, T + 1, a.topD);
       P(-1, hip + 1, 3, T - 1, a.shirt); P(-2, sh - 1, 5, 2, a.shirt);
       P(2, hip + 2, 1, 1, a.topD); P(2, hip + 5, 1, 1, a.topD); P(2, hip + 8, 1, 1, a.topD);
+      P(tr - 3, hip + 1, 3, 2, a.topD);                            // a pocket
+      P(-2, sh - 3, 1, 1, "#d4a017"); P(-3, sh - 3, 1, 1, "#e9c46a");   // a little brooch
       break;
     case "vest":
       plain(a.shirt, a.shirtD);
@@ -258,17 +292,22 @@ function drawTorso(P, a, g) {
       P(tl + 1, hip, W - 2, bib, a.pants); P(tl + 1, hip, 2, bib, a.pantsD);
       P(-3, hip + bib, 2, 5, a.pants); P(2, hip + bib, 2, 5, a.pants);
       P(-3, hip + bib - 1, 1, 1, "#d8b36a"); P(3, hip + bib - 1, 1, 1, "#d8b36a");   // brass buttons
-      P(-1, hip + 2, 3, 2, a.pantsD);                                                // bib pocket
+      P(-1, hip + 2, 3, 2, a.pantsD); P(0, hip + 3, 1, 1, "#e8c050");               // bib pocket and its rivet
+      P(-1, sh, 3, 1, a.shirtD);                                                     // collar
       break;
     }
     case "jacket":
       plain(a.top, a.topD);
-      P(0, hip, 1, T, a.topD); P(-2, sh - 1, 5, 2, a.topD); P(tr - 4, hip + 2, 3, 1, a.topD);
+      P(0, hip, 1, T, "#b9bec6"); P(0, sh - 3, 1, 1, "#e9ecef");                  // zip and its pull
+      P(-2, sh - 1, 5, 2, a.topD); P(tr - 4, hip + 2, 3, 1, a.topD);
+      strap();
       break;
     case "abaya": {
       P(tl - 2, 1, W + 4, sh, INK);
       P(tl, 2, W, sh - 1, a.top); P(tl - 1, 2, W + 2, 4, a.top);
       P(tl, 2, 2, sh - 1, a.topD); P(1, 2, 1, sh - 4, a.topD);
+      P(tl - 1, 3, W + 2, 1, a.topD); P(tl - 1, 4, W + 2, 1, shade(a.top, 1.12));   // a trim band at the hem
+      for (let x = tl + 1; x < tr; x += 3) P(x, 4, 1, 1, a.topD);                   // and its stitching
       break;
     }
     case "trench":
@@ -276,15 +315,21 @@ function drawTorso(P, a, g) {
       P(tl, hip - 6, W, T + 6, a.top); P(tl, hip - 6, 2, T + 6, a.topD);
       P(tl, hip + 1, W, 1, "#5a4026"); P(1, hip + 1, 1, 1, "#d8b36a");
       P(-2, sh - 4, 1, 4, a.topD); P(2, sh - 4, 1, 4, a.topD); P(-1, sh - 3, 3, 4, a.shirt);
-      P(2, hip + 4, 1, 1, a.topD); P(2, hip + 7, 1, 1, a.topD);
+      P(2, hip + 4, 1, 1, a.topD); P(2, hip + 7, 1, 1, a.topD); P(-2, hip + 4, 1, 1, a.topD); P(-2, hip + 7, 1, 1, a.topD);
+      P(-4, sh - 1, 2, 3, a.topD); P(2, sh - 1, 2, 3, a.topD);   // collar turned up
       break;
     case "tshirt":
       plain(a.top, a.topD);
-      P(0, hip + 4, 3, 3, "#ffffff"); P(1, hip + 5, 1, 1, a.top); P(-1, sh, 3, 1, a.skinD);
+      P(-1, sh, 3, 1, a.skinD); P(-2, sh, 1, 1, a.topD); P(2, sh, 1, 1, a.topD);
+      P(1, hip + 8, 1, 1, "#ffe066"); P(0, hip + 7, 2, 1, "#ffe066"); P(-1, hip + 6, 2, 1, "#ffe066"); P(-1, hip + 5, 1, 1, "#ffe066");   // a lightning bolt
       break;
-    default:                                                       // sweater
+    default:                                                       // sweater over a collared shirt
       plain(a.top, a.topD);
-      P(-2, sh, 5, 1, a.topD); P(-1, sh, 3, 1, a.skinD); P(tl, hip, W, 1, a.topD);
+      P(tl + 2, sh - 4, W - 2, 1, shade(a.top, 1.22));           // a stripe across the chest
+      P(-2, sh, 5, 1, a.topD); P(-1, sh, 3, 1, a.skinD);
+      P(-2, sh - 1, 1, 1, "#f2f2f2"); P(2, sh - 1, 1, 1, "#f2f2f2");   // collar points
+      P(tl, hip, W, 1, a.topD);
+      strap();
   }
 }
 
@@ -292,127 +337,274 @@ function drawBack(P, a, g) {                                      // things worn
   if (a.pack) {
     box(P, g.tl - 4, g.hip + 1, 5, g.sh - g.hip - 2, a.pack);
     P(g.tl - 4, g.hip + 3, 5, 1, shade(a.pack, 0.75));
+    P(g.tl - 3, g.sh - 4, 3, 1, shade(a.pack, 1.25));             // the top flap catches the light
+    P(g.tl - 2, g.hip + 2, 1, 1, "#d8b36a");                       // a buckle
   }
 }
 
+// The head is a 12x12 rounded block (the silhouette outline included) on a short neck. Faces follow manga
+// shorthand: two-pixel eyes with a catchlight, small mouths, brows that do the acting.
 function drawHead(P, a, g, p, t) {
   const y = g.head;
-  // behind the face
-  if (a.head === "hijab") {
-    P(-7, g.sh - 2, 14, 6, INK); P(-6, g.sh - 1, 12, 4, a.hijab);   // drape over the shoulders
-    P(-6, y - 2, 13, 15, INK); P(-5, y - 1, 11, 13, a.hijab); P(-4, y + 12, 9, 1, a.hijab);
+  let eyes = p.eyes || "open", mouth = p.mouth || a.mouth;
+  if (eyes === "open" && a.lids) eyes = "down";                  // a cool half-lidded look
+  if (eyes === "closed" && (mouth === "smile" || p.blush)) eyes = "happy";
+  if (mouth === "smile" && a.grin) mouth = "grin";
+  drawHairBack(P, a, g, y, t, p);
+  drawMaps(P, a, g, "behindHead", t);
+  if (a.outfit === "hoodie") P(-6, g.sh + 1, 7, 3, a.topD);     // the hood bunched behind the neck
+  P(-1, g.sh + 1, 3, 1, a.skinD);                                 // neck
+  if (a.head === "hijab") drawHijab(P, a, y);
+  else {
+    P(-4, y + 2, 10, 8, a.skin); P(-3, y + 10, 8, 1, a.skin); P(-2, y + 1, 7, 1, a.skin);
   }
-  if (a.outfit === "hoodie") { P(-6, g.sh + 1, 8, 4, INK); P(-5, g.sh + 1, 6, 3, a.topD); }
-  if (a.style === "bigcurly" && a.head !== "hijab") {
-    P(-8, y + 2, 16, 11, INK); P(-7, y + 3, 14, 9, a.hair); P(-6, y + 12, 12, 2, a.hair); P(-5, y + 14, 3, 1, INK);
-    P(-6, y + 1, 3, 2, a.hair);
-  }
-  if (a.style === "long" && a.head !== "hijab") { P(-6, y - 5, 5, 15, INK); P(-5, y - 4, 3, 13, a.hair); }
-  if (a.style === "bob") { P(-6, y + 1, 4, 11, INK); P(-5, y + 2, 3, 9, a.hair); }
-  // neck and face
-  P(-1, g.sh + 1, 3, 1, a.skinD);
-  if (a.head === "hijab") {
-    P(-1, y + 1, 7, 9, a.skin); P(0, y, 5, 1, a.skin); P(-2, y + 1, 1, 9, a.hijab); P(-1, y + 10, 7, 1, a.hijab);
-  } else {
-    P(-5, y, 11, 11, INK);
-    P(-4, y + 1, 10, 9, a.skin); P(-3, y, 8, 1, a.skin); P(-3, y + 10, 8, 1, a.skin);
-    P(-3, y + 4, 2, 3, a.skinD); P(-3, y + 5, 1, 1, shade(a.skin, 0.7));      // ear
-  }
-  // face: eyes, nose, mouth
-  const eyes = p.eyes || "open";
-  if (eyes === "closed") { P(0, y + 5, 2, 1, INK); P(3, y + 5, 2, 1, INK); }
-  else if (eyes === "down") { P(1, y + 5, 1, 1, INK); P(4, y + 5, 1, 1, INK); }
-  else if (eyes === "wide") { P(1, y + 5, 1, 3, INK); P(4, y + 5, 1, 3, INK); }
-  else if (eyes === "up") { P(1, y + 6, 1, 2, INK); P(4, y + 6, 1, 2, INK); }
-  else { P(1, y + 5, 1, 2, INK); P(4, y + 5, 1, 2, INK); }
-  P(3, y + 3, 2, 1, a.skinD);
-  if (p.blush) { P(0, y + 3, 1, 1, "#ff8a8a"); P(5, y + 3, 1, 1, "#ff8a8a"); }
-  if (p.soot) { P(-1, y + 2, 2, 1, "#5c5f66"); P(3, y + 6, 2, 1, "#5c5f66"); P(-2, y + 7, 1, 1, "#5c5f66"); P(5, y + 1, 1, 1, "#5c5f66"); }
-  const mouth = p.mouth || "none";
-  if (mouth === "smile") { P(2, y + 1, 3, 1, MOUTH); P(1, y + 2, 1, 1, MOUTH); P(5, y + 2, 1, 1, MOUTH); }
-  else if (mouth === "o") P(2, y + 1, 2, 2, MOUTH);
-  else if (mouth === "flat") P(2, y + 2, 3, 1, MOUTH);
-  else P(2, y + 2, 2, 1, shade(a.skin, 0.7));
-  if (a.brows && eyes !== "closed") { P(0, y + 8, 2, 1, a.hairD); P(4, y + 8, 2, 1, a.hairD); }
-  if (a.facial === "mustache") { P(1, y + 3, 5, 1, a.hair); P(0, y + 2, 1, 1, a.hair); }
-  if (a.facial === "beard") { P(-2, y, 8, 3, a.hair); if (mouth === "o") P(2, y + 1, 2, 2, MOUTH); }
-  if (a.head !== "hijab") drawHair(P, a, y);
-  if (a.face === "glasses") {
-    for (const ex of [1, 4]) {                     // round frames with a glint of lens beside each eye
-      P(ex - 1, y + 4, 4, 1, INK); P(ex - 1, y + 7, 4, 1, INK); P(ex - 1, y + 5, 1, 2, INK); P(ex + 2, y + 5, 1, 2, INK);
-      P(ex + 1, y + 5, 1, 2, "#dff1ff");
-    }
-    P(-2, y + 6, 2, 1, INK);
-  }
-  drawHeadwear(P, a, y, t);
+  drawFace(P, a, y, eyes, mouth, p);
+  if (a.head !== "hijab") drawHair(P, a, y, t);
+  if (a.head !== "hijab" && a.style !== "bob") { P(-3, y + 4, 2, 3, a.skin); P(-3, y + 4, 1, 3, a.skinD); P(-2, y + 5, 1, 1, shade(a.skin, 0.7)); }   // ear
+  drawBrows(P, a, y, eyes, mouth, p);
+  drawGlasses(P, a, y, eyes, p, t);
+  drawHeadwear(P, a, y, p, t);
+  drawMaps(P, a, g, "head", t);
 }
 
-function drawHair(P, a, y) {
+function drawFace(P, a, y, eyes, mouth, p) {
+  for (const front of [false, true]) {
+    const ex = front ? 3 : 0;
+    switch (eyes) {
+      case "closed": P(ex, y + 5, 2, 1, INK); break;
+      case "happy": { const x0 = front ? 3 : -1; P(x0, y + 5, 1, 1, INK); P(x0 + 1, y + 6, 1, 1, INK); P(x0 + 2, y + 5, 1, 1, INK); break; }
+      case "down": P(ex, y + 5, 2, 1, INK); P(ex, y + 4, 2, 1, a.eye); break;
+      case "wide": P(ex, y + 7, 2, 1, INK); P(ex, y + 4, 2, 3, a.eye); P(ex, y + 6, 1, 1, WHITE); P(ex + 1, y + 4, 1, 1, WHITE); break;
+      case "up": P(ex, y + 7, 2, 1, INK); P(ex, y + 5, 2, 2, a.eye); P(ex + 1, y + 6, 1, 1, WHITE); break;
+      default: P(ex, y + 6, 2, 1, INK); P(ex, y + 4, 2, 2, a.eye); P(ex, y + 5, 1, 1, WHITE);
+    }
+    if (a.lash && (eyes === "open" || eyes === "wide" || eyes === "up"))   // a lash flick at the outer corner
+      P(front ? ex + 2 : ex - 1, y + (eyes === "open" ? 6 : 7), 1, 1, INK);
+  }
+  if (p.blush) { P(-2, y + 3, 2, 1, BLUSH); P(5, y + 3, 1, 1, BLUSH); }
+  if (a.freckles) { const f = shade(a.skin, 0.7); P(-1, y + 3, 1, 1, f); P(1, y + 3, 1, 1, f); P(4, y + 3, 1, 1, f); }
+  if (p.soot) { const s = "#5c5f66"; P(-1, y + 2, 2, 1, s); P(3, y + 7, 2, 1, s); P(-3, y + 8, 1, 1, s); P(5, y + 2, 1, 1, s); P(1, y + 9, 1, 1, s); }
+  const lip = shade(a.skin, 0.62);
+  switch (mouth) {
+    case "smile": P(2, y + 3, 1, 1, MOUTH); P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, MOUTH); break;
+    case "grin": P(2, y + 2, 4, 1, MOUTH); P(3, y + 1, 2, 1, MOUTH); P(4, y + 2, 1, 1, WHITE); break;   // open, with a fang
+    case "o": P(3, y + 1, 2, 2, MOUTH); break;
+    case "flat": P(2, y + 2, 3, 1, MOUTH); break;
+    case "smirk": P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, MOUTH); break;
+    default: P(3, y + 2, 2, 1, lip);
+  }
+  const c = a.hair;
+  if (a.facial === "walrus") { P(1, y + 3, 5, 1, c); P(1, y + 2, 1, 1, c); P(5, y + 2, 1, 1, c); P(2, y + 3, 2, 1, a.hairL); }
+  if (a.facial === "mustache") { P(2, y + 3, 4, 1, c); P(1, y + 2, 1, 1, c); P(6, y + 4, 1, 1, c); P(5, y + 3, 1, 1, a.hairD); }
+}
+
+// Brows act: raised in surprise, knitted in doubt, one up for a skeptic. Drawn over the bangs, as manga does.
+function drawBrows(P, a, y, eyes, mouth, p) {
+  const kind = p.brow || (eyes === "wide" || eyes === "up" ? "raise" : mouth === "flat" ? "worry" : a.brow);
+  const c = a.browC, h = 1, back = a.bushy ? -1 : 0, w = a.bushy ? 3 : 2;
+  const B = (x, yy, ww = w) => P(x, y + yy, ww, h, c);
+  switch (kind) {
+    case "raise": B(back, 9); B(3, 9); break;
+    case "stern": B(back, 9, w - 1); P(1, y + 8, 1, h, c); P(3, y + 8, 1, h, c); B(4, 9, w - 1); break;
+    case "worry": B(back, 8, w - 1); P(1, y + 9, 1, h, c); P(3, y + 9, 1, h, c); B(4, 8, w - 1); break;
+    case "skeptic": B(back, 8); B(3, 9); P(5, y + 8, 1, 1, c); break;
+    default: B(back, 8); B(3, 8);
+  }
+}
+
+function drawGlasses(P, a, y, eyes, p, t) {
+  if (!a.face) return;
+  const shine = p.glint || (t + a.phase) % 7.3 < 0.22;           // now and then the lenses catch the light
+  const lens = (ex, rows) => {
+    if (!(shine || p.screen)) return;
+    P(ex, y + rows[0], 2, rows[1], p.screen ? "#bfe9ff" : "#eef8ff");
+    P(ex + 1, y + rows[0] + rows[1] - 1, 1, 1, WHITE); P(ex, y + rows[0], 1, 1, WHITE);
+  };
+  if (a.face === "round") {                                       // thin round frames
+    const f = a.frame;
+    for (const ex of [0, 3]) { lens(ex, [4, 3]); P(ex, y + 3, 2, 1, f); P(ex - 1, y + 4, 1, 2, f); P(ex + 2, y + 4, 1, 2, f); }
+    P(-2, y + 5, 1, 1, f);
+  } else if (a.face === "browline") {                             // a heavy top bar, thin wire below
+    for (const ex of [0, 3]) { lens(ex, [4, 3]); P(ex, y + 3, 2, 1, "#8d939b"); }
+    P(-1, y + 7, 7, 1, INK); P(-2, y + 6, 1, 1, INK);
+  } else if (a.face === "halfmoon") {                             // half-moon readers, low on the nose, on a chain
+    const gold = "#b8902a";
+    for (const ex of [0, 3]) P(ex, y + 3, 2, 1, gold);
+    P(2, y + 4, 1, 1, gold); P(-1, y + 4, 1, 1, gold);
+    P(-2, y + 4, 1, 1, gold); P(-3, y + 3, 1, 1, gold); P(-3, y + 1, 1, 1, gold); P(-4, y - 1, 1, 1, gold);
+  }
+}
+
+function drawHairBack(P, a, g, y, t, p) {                        // hair and cloth that hang behind the head
+  const c = a.hair, d = a.hairD;
+  if (a.head === "hijab") {
+    P(-7, y - 3, 13, 4, a.hijab); P(-7, y - 3, 3, 4, a.hijabD); P(1, y - 4, 4, 1, a.hijab);   // the drape over the shoulders
+    return;
+  }
+  switch (a.style) {
+    case "bigcurly":
+      P(-8, y + 3, 5, 9, c); P(-9, y + 5, 1, 5, c); P(-7, y + 2, 3, 1, c);
+      for (const [x, yy] of [[-7, 4], [-8, 7], [-6, 6], [-7, 9], [-5, 3], [-8, 10]]) P(x, y + yy, 1, 1, d);
+      break;
+    case "long": {
+      const sway = (p.legF || 0) !== 0 ? Math.sign(p.legF) : Math.round(Math.sin(t * 2.1 + a.phase) * 0.6);
+      P(-6, y - 1, 3, 10, c); P(-6 + sway, y - 4, 3, 3, c); P(-5 + sway, y - 5, 2, 1, c);
+      P(-4, y - 1, 1, 9, d); P(-6, y + 2, 1, 4, a.hairL);
+      break;
+    }
+    case "bob":
+      P(-6, y + 1, 3, 10, c); P(-5, y, 2, 1, c); P(-4, y + 1, 1, 8, d);
+      break;
+  }
+}
+
+function drawHijab(P, a, y) {
+  const h = a.hijab, hd = a.hijabD;
+  P(-6, y + 1, 12, 10, h); P(-5, y + 11, 10, 1, h); P(-3, y + 12, 6, 1, h); P(-7, y + 3, 1, 6, h);
+  P(-2, y, 7, 1, h);                                             // wrapped under the chin
+  P(-7, y + 3, 2, 7, hd); P(-6, y + 2, 1, 1, hd); P(-2, y + 2, 1, 7, hd);   // folds
+  P(-4, y + 11, 4, 1, a.hijabL); P(-5, y + 10, 1, 1, a.hijabL);     // light on the crown
+  P(-1, y + 2, 6, 7, a.skin); P(0, y + 1, 5, 1, a.skin); P(0, y + 9, 5, 1, a.skin);   // the face
+  P(-1, y + 9, 1, 1, shade(h, 1.6)); P(0, y + 10, 5, 1, shade(h, 1.6));   // the underscarf's edge at the brow
+  P(-2, y + 1, 1, 1, "#e9c46a");                                  // a pin
+}
+
+function drawHair(P, a, y, t) {
   const c = a.hair, d = a.hairD, l = a.hairL;
   switch (a.style) {
-    case "receding":
-      P(-5, y + 4, 3, 6, INK); P(-4, y + 5, 2, 5, c); P(-4, y + 10, 4, 1, c); P(-3, y + 11, 3, 1, INK);
+    case "receding": {                                            // grey tufts at the sides, a shine on top, three loyal hairs
+      P(-5, y + 4, 2, 6, c); P(-6, y + 6, 1, 3, c); P(-3, y + 7, 1, 2, c);
+      P(-5, y + 4, 1, 5, d); P(-6, y + 8, 1, 1, l);
+      P(0, y + 10, 2, 1, shade(a.skin, 1.3));
+      const k = Math.sin(t * 3 + a.phase) > 0.4 ? 1 : 0;
+      P(0, y + 11, 1, 1, INK); P(k, y + 12, 1, 1, INK); P(2, y + 11, 1, 1, INK); P(2 + k, y + 12, 1, 1, INK);
       break;
-    case "bob":
-      P(-5, y + 8, 11, 4, INK); P(-4, y + 9, 10, 2, c); P(-3, y + 11, 8, 1, c); P(0, y + 8, 6, 1, c);
-      P(5, y + 3, 1, 6, c); P(-1, y + 10, 3, 1, l);
+    }
+    case "bob":                                                   // a glossy bob with blunt bangs
+      P(-5, y + 7, 12, 5, c); P(-4, y + 12, 10, 1, c); P(6, y + 3, 1, 4, c); P(-5, y + 4, 1, 3, c);
+      P(-5, y + 7, 1, 5, d); P(-3, y + 7, 9, 1, d);
+      P(-3, y + 10, 2, 1, l); P(0, y + 10, 2, 1, l); P(3, y + 10, 1, 1, l);
       break;
-    case "bigcurly":
-      P(-4, y + 9, 10, 2, c); P(-2, y + 11, 2, 1, d); P(2, y + 12, 2, 1, d); P(-5, y + 7, 1, 1, d); P(5, y + 9, 1, 1, d);
+    case "bigcurly":                                              // a cloud of curls and a bun with a pencil in it
+      P(-6, y + 8, 12, 4, c); P(-5, y + 12, 10, 2, c); P(5, y + 6, 2, 3, c); P(-6, y + 7, 2, 1, c);
+      P(-2, y + 14, 4, 2, c); P(-1, y + 16, 2, 1, c);
+      for (const [x, yy] of [[-4, 9], [-1, 10], [2, 9], [4, 11], [-3, 12], [1, 13], [-5, 11], [5, 7], [-1, 15]]) P(x, y + yy, 1, 1, d);
+      for (const [x, yy] of [[-2, 12], [1, 11], [3, 12], [0, 15]]) P(x, y + yy, 1, 1, l);
+      P(2, y + 16, 1, 1, "#f2c94c"); P(3, y + 17, 1, 1, "#f2c94c"); P(4, y + 18, 1, 1, "#e8838a"); P(-3, y + 14, 1, 1, "#444");
       break;
-    case "long":
-      P(-5, y + 8, 11, 4, INK); P(-4, y + 9, 10, 2, c); P(-3, y + 11, 8, 1, c); P(-4, y + 4, 2, 5, c); P(4, y + 8, 2, 1, c);
+    case "long":                                                  // under a beanie: bangs and a lock by the cheek
+      P(-3, y + 8, 9, 2, c); P(-5, y + 4, 2, 6, c); P(6, y + 4, 1, 5, c);
+      P(0, y + 7, 1, 1, c); P(3, y + 7, 2, 1, c);
+      P(-5, y + 4, 1, 5, d); P(1, y + 9, 2, 1, l);
       break;
-    case "crop":
-      P(-5, y + 8, 11, 4, INK); P(-4, y + 9, 10, 2, c); P(-3, y + 11, 8, 1, c); P(-4, y + 6, 1, 3, c);
+    case "crop":                                                  // tight crop, faded sides, a sharp part
+      P(-5, y + 9, 11, 2, c); P(-4, y + 11, 9, 1, c); P(5, y + 8, 1, 1, c);
+      P(-5, y + 5, 2, 4, d); P(-3, y + 7, 1, 2, d);
+      P(-2, y + 10, 3, 1, l); P(1, y + 11, 1, 1, shade(a.skin, 0.8));
       break;
-    case "neat":
-      P(-5, y + 8, 11, 5, INK); P(-4, y + 9, 10, 3, c); P(-3, y + 12, 8, 1, c); P(-4, y + 5, 2, 4, c);
-      P(2, y + 8, 4, 1, c); P(0, y + 11, 1, 1, l);
+    case "neat":                                                  // a side part swept forward
+      P(-5, y + 8, 12, 3, c); P(-4, y + 11, 10, 1, c); P(-2, y + 12, 7, 1, c); P(6, y + 10, 1, 2, c);
+      P(3, y + 7, 3, 1, c); P(-5, y + 5, 2, 3, c);
+      P(-5, y + 5, 1, 5, d); P(-2, y + 10, 1, 1, d); P(-1, y + 11, 1, 1, d);
+      P(1, y + 11, 3, 1, l); P(5, y + 10, 1, 1, l);
       break;
-    case "spiky":
-      P(-5, y + 8, 11, 4, INK); P(-4, y + 9, 10, 2, c); P(-4, y + 5, 2, 4, c);
-      for (const [x, h] of [[-4, 2], [-2, 3], [0, 2], [2, 3], [4, 2]]) { P(x - 1, y + 11, 3, h + 1, INK); P(x, y + 11, 1, h, c); }
+    case "spiky":                                                 // under a cap: spikes poke out all round
+      P(-5, y + 7, 11, 3, c); P(-6, y + 5, 1, 4, c); P(-7, y + 6, 1, 1, c); P(-7, y + 8, 1, 1, c);
+      P(-1, y + 6, 1, 1, c); P(2, y + 6, 1, 1, c); P(5, y + 6, 1, 1, c);
+      P(-5, y + 7, 1, 2, d); P(0, y + 8, 2, 1, l);
       break;
-    default:                                                       // short
-      P(-5, y + 8, 11, 4, INK); P(-4, y + 9, 10, 2, c); P(-3, y + 11, 8, 1, c); P(-4, y + 5, 2, 4, c);
-      P(2, y + 8, 3, 1, c); P(-1, y + 10, 3, 1, l);
+    default: {                                                    // short, with a fringe
+      P(-5, y + 8, 11, 3, c); P(-4, y + 11, 10, 1, c); P(-3, y + 12, 7, 1, c); P(6, y + 9, 1, 2, c);
+      P(-5, y + 4, 2, 4, c); P(-3, y + 6, 1, 2, c);
+      P(-1, y + 7, 1, 1, c); P(2, y + 7, 2, 1, c); P(5, y + 7, 1, 1, c);
+      P(-5, y + 4, 1, 6, d); P(-2, y + 11, 3, 1, l); P(2, y + 11, 1, 1, l);
+      if (a.ahoge) {                                              // the one strand that never lies down
+        const k = Math.sin(t * 2.6 + a.phase) > 0.2 ? 1 : 0;
+        P(0, y + 13, 1, 1, INK); P(k, y + 14, 1, 1, INK); P(1 + k, y + 15, 1, 1, INK);
+      }
+      if (a.pencil) { P(-7, y + 8, 1, 1, "#e8838a"); P(-6, y + 8, 3, 1, "#f2c94c"); }   // tucked behind the ear
+    }
   }
 }
 
-function drawHeadwear(P, a, y, t) {
+function drawHeadwear(P, a, y, p, t) {
   switch (a.head) {
-    case "cap":
-      box(P, -4, y + 9, 10, 3, a.cap); P(-3, y + 12, 8, 1, a.cap); P(-3, y + 13, 8, 1, INK);
-      box(P, 5, y + 9, 4, 1, shade(a.cap, 0.75)); P(0, y + 10, 3, 1, "#d8dde3");
+    case "cap": {                                                 // a cap, worn backwards
+      const c = a.cap, cd = shade(c, 0.72);
+      P(-5, y + 9, 11, 3, c); P(-4, y + 12, 9, 1, c);
+      P(-9, y + 9, 4, 1, cd); P(-6, y + 10, 1, 1, cd);
+      P(0, y + 12, 1, 1, cd); P(-1, y + 10, 1, 2, cd);
+      P(3, y + 9, 2, 1, a.hair); P(2, y + 9, 1, 1, "#d8dde3");    // hair through the strap gap
+      P(-4, y + 11, 2, 1, shade(c, 1.3));
       break;
-    case "beanie":
-      box(P, -5, y + 8, 11, 2, shade(a.beanie, 0.8)); box(P, -4, y + 10, 10, 3, a.beanie);
-      P(-3, y + 13, 8, 1, a.beanie); P(-3, y + 14, 8, 1, INK);
-      for (let x = -3; x < 6; x += 2) P(x, y + 8, 1, 2, shade(a.beanie, 0.65));
+    }
+    case "beanie": {                                              // a ribbed beanie with a pom-pom that bounces
+      const b = a.beanie, cuff = shade(b, 0.82);
+      P(-5, y + 9, 11, 2, cuff);
+      for (let x = -4; x < 6; x += 2) P(x, y + 9, 1, 2, shade(b, 0.66));
+      P(-5, y + 11, 11, 1, b); P(-4, y + 12, 10, 1, b); P(-3, y + 13, 8, 1, b);
+      P(-3, y + 11, 3, 1, shade(b, 1.25));
+      const py = y + 14 - (p.bob ? 1 : 0);
+      P(-1, py, 5, 2, a.pom); P(0, py + 2, 3, 1, a.pom); P(0, py + 2, 1, 1, shade(a.pom, 1.12)); P(3, py, 1, 1, shade(a.pom, 0.8));
       break;
+    }
     case "hardhat":
       box(P, -6, y + 9, 13, 1, "#e0a800"); box(P, -4, y + 10, 10, 3, "#ffd23f"); P(-3, y + 13, 8, 1, "#ffd23f");
-      P(-3, y + 14, 8, 1, INK); P(0, y + 10, 1, 4, "#e0a800"); P(-3, y + 12, 2, 1, "#fff2a8");
+      P(0, y + 10, 1, 4, "#e0a800"); P(-3, y + 12, 2, 1, "#fff2a8");
       break;
-    case "deerstalker":
-      box(P, -5, y + 9, 11, 4, "#a67c52"); box(P, -8, y + 9, 3, 1, "#8a6440"); box(P, 6, y + 9, 3, 1, "#8a6440");
-      for (const [x, yy] of [[-3, 10], [0, 11], [3, 10], [-1, 12], [2, 12]]) P(x, y + yy, 1, 1, "#7d5a39");
-      P(0, y + 13, 1, 1, INK);
+    case "deerstalker": {                                         // checked tweed, a peak each way, flaps tied on top
+      const tw = "#a67c52", td = "#7d5a39";
+      P(-5, y + 9, 11, 4, tw); P(-4, y + 13, 9, 1, tw);
+      for (let yy = 10; yy <= 13; yy++) for (let x = -4 + (yy % 2); x < 5; x += 2) P(x, y + yy, 1, 1, td);
+      P(6, y + 9, 3, 1, td); P(-8, y + 9, 3, 1, td);
+      P(-3, y + 10, 3, 2, "#8a6440");                             // the flap folded up
+      P(-1, y + 14, 1, 1, INK); P(1, y + 14, 1, 1, INK); P(0, y + 14, 1, 1, td);
       break;
-    case "propeller": {
-      box(P, -4, y + 9, 10, 2, "#e74c3c"); P(-3, y + 11, 8, 1, "#3498db"); P(-3, y + 12, 8, 1, INK);
-      P(0, y + 12, 1, 2, "#555"); P(0, y + 14, 1, 1, "#f1c40f");
-      const f = Math.floor(t * 14) % 3, w = [9, 5, 1][f];
-      box(P, 1 - Math.ceil(w / 2), y + 15, w, 1, "#f1c40f");
+    }
+    case "propeller": {                                           // a beanie in four colors and a spinning propeller
+      P(-5, y + 9, 3, 3, "#e74c3c"); P(-2, y + 9, 3, 4, "#f1c40f"); P(1, y + 9, 3, 4, "#3498db"); P(4, y + 9, 2, 3, "#2ecc71");
+      P(-4, y + 12, 2, 1, "#e74c3c"); P(4, y + 12, 1, 1, "#2ecc71");
+      P(-3, y + 11, 1, 1, "#ff8a7a");
+      P(0, y + 13, 1, 2, "#555"); P(0, y + 15, 1, 1, "#f1c40f");
+      const moving = (p.legF || 0) !== 0 || (p.legB || 0) !== 0;
+      const f = Math.floor(t * 9 * (p.spin || (moving ? 2.2 : 1))) % 4, w = [9, 5, 1, 5][f];
+      if (w > 1) { box(P, 1 - Math.ceil(w / 2), y + 16, Math.floor(w / 2), 1, "#e74c3c"); box(P, 1, y + 16, Math.ceil(w / 2), 1, "#3498db"); }
+      else box(P, 0, y + 16, 1, 1, "#f1c40f");
       break;
     }
   }
 }
 
-function crownOf(a) {
-  return 11 + ({ cap: 3, beanie: 4, hardhat: 4, deerstalker: 3, propeller: 6 }[a.head]
-    || ({ bigcurly: 4, spiky: 4, neat: 2 }[a.style] || 1));
+// ---------- custom sprite parts: pixel maps pinned to an anchor (see SPRITES.md) ----------
+
+// Letters a map can use without defining them: they take this visit's colors, so a custom sprite varies like the rest.
+const SLOTS = { s: "skin", S: "skinD", h: "hair", H: "hairD", l: "hairL", t: "top", T: "topD", c: "shirt", p: "pants",
+                P: "pantsD", o: "shoes", k: null, w: null };
+function slotColor(a, ch, pal) {
+  if (pal && pal[ch]) return pal[ch];
+  if (ch === "k") return INK;
+  if (ch === "w") return WHITE;
+  return a[SLOTS[ch]] || INK;
+}
+function mapRows(m, t) { return m.frames ? m.frames[Math.floor(t * (m.fps || 4)) % m.frames.length] : m.rows; }
+function paintMap(P, a, rows, x0, y0, pal) {      // (x0, y0) is the map's bottom-left pixel
+  const h = rows.length;
+  for (let i = 0; i < h; i++)
+    for (let j = 0; j < rows[i].length; j++) {
+      const ch = rows[i][j];
+      if (ch !== ".") P(x0 + j, y0 + h - 1 - i, 1, 1, slotColor(a, ch, pal));
+    }
+}
+// Head layers hang from the head's base row, body layers from the hips, so a map moves with every pose for free.
+function drawMaps(P, a, g, layer, t) {
+  if (!a.maps) return;
+  for (const m of a.maps) if (m.layer === layer)
+    paintMap(P, a, mapRows(m, t), m.at[0], (layer === "head" || layer === "behindHead" ? g.head : g.hip) + m.at[1], m.pal);
+}
+
+function crownOf(a) {                             // the top of the hair or hat, above the head's base row
+  return { cap: 13, beanie: 17, hardhat: 14, deerstalker: 15, propeller: 17 }[a.head]
+    || { bigcurly: 17, receding: 13, crop: 12 }[a.style] || 13;
 }
 
 // Draws the whole researcher; returns where the hands and head ended up so props can attach.
@@ -421,20 +613,23 @@ function drawBody(P, a, p, t) {
   const bob = p.bob || 0, hip = L + bob, sh = hip + a.torso - 1;
   const tl = -Math.ceil(a.width / 2), tr = tl + a.width - 1;
   const g = { L, tl, tr, hip, sh, head: sh + 2 - (p.nod ? 1 : 0) };
-  g.top = g.head + 10;
+  g.top = g.head + 11;
   g.crown = g.head + crownOf(a);
   g.handB = drawArm(P, a, p.armB, g, true);
   drawBack(P, a, g);
-  const legC = a.legsStyle === "skirt" ? a.pants : a.pants;
-  if (p.sit) {
+  drawMaps(P, a, g, "back", t);
+  if (p.sit) {                                    // on the floor, knees up a little
+    const kx = Math.round(a.legs * 0.55), fx = Math.round(a.legs * 0.85);
     box(P, tl + 1, 1, 6, 4, a.pantsD);
-    limb(P, 0, 3, a.legs, 3, 4, legC); box(P, a.legs + 1, 1, 3, 5, a.shoes);
+    limb(P, kx, 6, fx, 3, 4, a.pants); limb(P, 0, 3, kx, 6, 4, a.pants);
+    box(P, fx - 1, 1, 5, 2, a.shoes); P(fx - 1, 1, 5, 1, shade(a.shoes, 0.72));
   } else {
-    drawLeg(P, a, -3, p.legB || 0, p.liftB, L, a.pantsD);
-    drawLeg(P, a, 1, p.legF || 0, p.liftF, L, legC);
+    drawLeg(P, a, -3, p.legB || 0, p.liftB, L, true);
+    drawLeg(P, a, 1, p.legF || 0, p.liftF, L, false);
   }
-  if (a.legsStyle === "skirt" && !p.sit) { P(tl, hip - 7, a.width, 8, INK); P(tl + 1, hip - 6, a.width - 2, 6, a.skirt); P(tl + 1, hip - 6, a.width - 2, 1, shade(a.skirt, 1.2)); }
+  if (a.legsStyle === "skirt" && !p.sit) { P(tl, hip - 7, a.width, 8, INK); P(tl + 1, hip - 6, a.width - 2, 6, a.skirt); P(tl + 1, hip - 6, a.width - 2, 1, shade(a.skirt, 1.2)); P(tl + 1, hip - 1, 2, 1, shade(a.skirt, 0.8)); }
   drawTorso(P, a, g);
+  drawMaps(P, a, g, "body", t);
   drawHead(P, a, g, p, t);
   g.handF = drawArm(P, a, p.armF, g, false);
   return g;
@@ -459,6 +654,10 @@ const PROPS = {
     limb(P, hx + 1, hy - 1, hx + 3, hy - 3, 2, "#6d4c41");
     P(hx + 3, hy - 10, 7, 7, INK); P(hx + 4, hy - 9, 5, 5, glint ? "#ffffff" : "#bfe9ff"); P(hx + 5, hy - 6, 1, 1, "#ffffff");
   },
+  magnifierUp(P, a, hx, hy) {                   // carried at the ready, lens up
+    limb(P, hx + 1, hy + 1, hx + 2, hy + 3, 2, "#6d4c41");
+    P(hx + 1, hy + 4, 7, 7, INK); P(hx + 2, hy + 5, 5, 5, "#bfe9ff"); P(hx + 3, hy + 8, 1, 1, "#ffffff"); P(hx + 2, hy + 5, 5, 1, "#9fd3f2");
+  },
   mug(P, a, hx, hy) {
     box(P, hx - 1, hy - 2, 5, 5, "#f7f7f7"); P(hx - 1, hy, 5, 1, "#e84393"); P(hx - 1, hy + 2, 5, 1, "#6b3e26");
     P(hx - 3, hy - 1, 2, 3, INK); P(hx - 2, hy, 1, 1, "#f7f7f7");
@@ -481,10 +680,16 @@ function propSpyglass(P, g, ext) {
   if (n > 1) box(P, 18, y, 5, 3, "#e8c050");
   if (n > 2) P(23, y, 1, 3, "#9fd8ff");
 }
-function propLapLaptop(P, x, glow) { box(P, x, 6, 10, 2, "#a3a9b1"); box(P, x + 10, 8, 2, 8, "#5f6368"); P(x + 9, 8, 1, 8, glow ? "#c8f3ff" : "#7fd0ff"); }
-function propScroll(P, x, len) {
-  if (len > 1) { box(P, x, 1, len, 2, "#f6efd6"); for (let i = 3; i < len - 3; i += 4) P(x + i, 2, 2, 1, "#b8a77a"); }
-  box(P, x + len, 1, 4, 4, "#e2d2a0");
+function propLapLaptop(P, x, glow) {               // on the knees, the screen tipped back toward them
+  box(P, x, 8, 10, 2, "#a3a9b1"); P(x + 1, 9, 8, 1, "#c7ccd2");
+  limb(P, x + 10, 9, x + 12, 17, 2, "#5f6368"); P(x + 10, 11, 1, 5, glow ? "#c8f3ff" : "#7fd0ff");
+}
+function propScroll(P, x, hy, len) {               // hangs from the hand to the floor, then rolls away along it
+  if (len > 1) {
+    box(P, x, 1, 3, hy - 2, "#f6efd6"); for (let i = 3; i < hy - 4; i += 3) P(x + 1, i, 1, 1, "#b8a77a");
+    box(P, x, 1, len, 2, "#f6efd6"); for (let i = 5; i < len - 3; i += 4) P(x + i, 2, 2, 1, "#b8a77a");
+  }
+  box(P, x + len, 1, 4, 4, "#e2d2a0"); P(x + len + 1, 3, 2, 1, "#c9b67e");
 }
 function propStack(P, hx, hy, n, wob, colors) {
   for (let i = 0; i < n; i++) {
@@ -508,8 +713,9 @@ const ICONS = {
   bang: ["kkk", "kek", "kek", "kek", "kek", "kkk", "...", "kkk", "kek", "kkk"],
   heart: [".kk.kk.", "kppkppk", "kpppppk", ".kpppk.", "..kpk..", "...k..."],
   note: ["...kk.", "...kqk", "...k.k", "...k..", ".kkk..", "kqqk..", "kqqk..", ".kk..."],
+  check: ["......kk", ".....kmk", "kk..kmk.", "kmkkmk..", ".kmmk...", "..kk...."],
 };
-const ICON_COLORS = { k: INK, y: "#ffe066", w: "#ffffff", g: "#9aa0a6", q: "#5fa8ff", e: "#ff5a5a", p: "#ff6b9a" };
+const ICON_COLORS = { k: INK, y: "#ffe066", w: "#ffffff", g: "#9aa0a6", q: "#5fa8ff", e: "#ff5a5a", p: "#ff6b9a", m: "#51cf66" };
 function drawIcon(ctx, map, x, y, s = 2) {
   for (let r = 0; r < map.length; r++)
     for (let c = 0; c < map[r].length; c++) {
@@ -1223,7 +1429,7 @@ const ACTIONS = {
       if (s.t > 1.4 && !s.said) { s.said = true; r.quip("scroll"); }
       if (s.t >= s.dur) s.done = true;
       return stand({ armF: ["forward", 0], armB: ["forward", 1], eyes: "down", nod: 1,
-                     props: (P, g) => { box(P, g.handF[0] - 1, g.handF[1] - 2, 3, 6, "#e2d2a0"); propScroll(P, g.handF[0] + 2, Math.round(out * 34)); } });
+                     props: (P, g) => { propScroll(P, g.handF[0], g.handF[1], Math.round(out * 34)); box(P, g.handF[0] - 1, g.handF[1] - 2, 5, 3, "#e2d2a0"); } });
     },
   },
   stack: {
@@ -1592,7 +1798,7 @@ const ACTIONS = {
           for (let i = 0; i < 3; i++) {
             const t = s.t * 1.6 + i / 3, ph = t % 1, fwd = Math.floor(t) % 2 === 0;
             const [x0, y0] = fwd ? g.handB : g.handF, [x1, y1] = fwd ? g.handF : g.handB;
-            box(P, Math.round(x0 + (x1 - x0) * ph) - 1, Math.round(Math.max(y0, y1) + 2 + Math.sin(ph * Math.PI) * 16), 3, 2, s.colors[i]);
+            box(P, Math.round(x0 + (x1 - x0) * ph) - 1, Math.round(Math.max(y0, y1) + 2 + Math.sin(ph * Math.PI) * 21), 3, 2, s.colors[i]);
           }
         },
       });
@@ -1697,6 +1903,13 @@ const ACTIONS = {
       return stand({ eyes: s.t < 1.3 ? "closed" : "open", armF: ["up", 0], armB: ["up", 0], mouth: "o" });
     },
   },
+  quirk: {
+    init(r) { const q = quirkOf(r.a); return { q, dur: q ? q.dur : 0 }; },
+    run(r, s, dt) {
+      if (!s.q || s.t >= s.dur) { r.y = 0; s.done = true; return stand({ carry: true }); }
+      return s.q.run(r, s, dt);
+    },
+  },
   wave: {
     init(r) { r.quip("wave"); if (r.rand() < 0.35) r.icon("heart", 1.2); return { dur: 1.5 }; },
     run(r, s) {
@@ -1704,6 +1917,118 @@ const ACTIONS = {
       return stand({ armF: ["up", Math.floor(s.t * 6) % 2 ? 2 : 0], mouth: "smile", blush: true });
     },
   },
+};
+
+
+// Each character's own habit, done now and then between bits: their attitude in a couple of seconds.
+const GUM = "#ff8fc7";
+const glasses = line => ({ dur: 1.9, run(r, s) {   // push the glasses up the nose; the lenses flash
+  if (s.t > 0.7 && !s.said) { s.said = true; if (line && r.rand() < 0.3) r.say(pick(r.rand, line)); }
+  return stand({ armF: s.t < 0.9 ? ["face", 0] : ["swing", 0], glint: s.t > 0.45 && s.t < 1.3, mouth: "smirk", carry: s.t >= 0.9 });
+} });
+// A custom sprite's quirk is data: keyframes of the same pose words every bit uses (SPRITES.md). Each key holds
+// until the next one; its icon or sparkle fires once as it is reached.
+const KEY_POSE = ["armF", "armB", "eyes", "mouth", "brow", "blush", "glint", "crouch", "nod"];
+function scriptQuirk(q) {
+  return { dur: q.dur, run(r, s) {
+    let k = q.keys[0];
+    s.fired = s.fired || new Set();
+    q.keys.forEach((key, i) => {
+      if (key.t > s.t) return;
+      k = key;
+      if (s.fired.has(i)) return;
+      s.fired.add(i);
+      if (key.icon) r.icon(key.icon, 1);
+      if (key.sparkle) r.stage.sparkle(r.x, r.headTop, 4);
+    });
+    if (q.say && !s.said && s.t >= (q.sayAt ?? 0.6)) { s.said = true; if (r.rand() < 0.5) r.say(pick(r.rand, q.say)); }
+    r.y = k.hop || 0;
+    const pose = { carry: !k.armF };
+    for (const f of KEY_POSE) if (k[f] !== undefined) pose[f] = k[f];
+    if (k.liftF) pose.liftF = 1;
+    if (k.liftB) pose.liftB = 1;
+    return stand(pose);
+  } };
+}
+const quirkOf = a => QUIRKS[a.kind] || (a.quirk ? scriptQuirk(a.quirk) : QUIRKS[a.base]) || null;
+const QUIRKS = {
+  aris: { dur: 2.8, run(r, s) {                    // strokes the mustache, one eyebrow up
+    if (s.t > 0.8 && !s.said) { s.said = true; if (r.rand() < 0.35) r.say(pick(r.rand, ["Hmm.", "Curious.", "Indeed..."])); }
+    return stand({ armF: ["mouth", Math.floor(s.t * 3) % 2], brow: "skeptic", eyes: s.t < 1.4 ? "down" : "open" });
+  } },
+  aisha: { dur: 3, run(r, s) {                     // ticks something off on the tablet
+    if (s.t > 1.9 && !s.done1) { s.done1 = true; r.icon("check", 1); }
+    const tap = Math.floor(s.t * 5) % 2;
+    return stand({ armF: ["forward", 0], armB: ["forward", 4 + (s.t < 1.9 ? tap : 0)], eyes: s.t < 1.9 ? "down" : "closed",
+                   mouth: s.t < 1.9 ? "none" : "smile", props: (P, g) => { PROPS.tablet(P, r.a, g.handF[0], g.handF[1]); if (s.t < 1.9) propPencil(P, g.handB[0], g.handB[1] + tap); } });
+  } },
+  ben: { dur: 2.6, run(r, s) {                     // can't stand still: two bounces and a thumbs up
+    const hop = s.t < 1.2 ? Math.abs(Math.sin(s.t / 0.6 * Math.PI)) : 0;
+    r.y = hop * 4;
+    if (s.t > 1.3 && !s.up) { s.up = true; r.stage.sparkle(ahead(r, 8), r.headTop - 8, 3); }
+    if (s.t < 1.2) return stand({ liftF: hop > 0.2, liftB: hop > 0.2, eyes: "wide", mouth: "smile" });
+    return stand({ armF: ["forward", -3], eyes: "closed", mouth: "smile", blush: true,
+                   props: (P, g) => { P(g.handF[0], g.handF[1] + 2, 1, 2, r.a.skin); } });
+  } },
+  mei: glasses(null),
+  kenji: glasses(["Interesting.", "As expected.", "Precisely."]),
+  sam: { dur: 4.4, run(r, s) {                     // a bubblegum bubble, bigger, bigger... pop
+    const pop = 2.8, rr = s.t < 0.5 ? 0 : Math.min(4, (s.t - 0.5) * 1.9);
+    if (s.t >= pop && !s.popped) {
+      s.popped = true; r.icon("bang", 0.6);
+      for (let i = 0; i < 7; i++) r.stage.add({ kind: "px", c: GUM, x: ahead(r, 9), y: r.headTop - 10, vx: (Math.random() - 0.5) * 40, vy: Math.random() * 30, g: 90, life: 0.6, fade: true });
+    }
+    if (s.t < pop) return stand({ carry: true, eyes: "down", mouth: "o", props: rr < 1 ? null : (P, g) => {
+      const R = Math.round(rr), cx = 5 + R, cy = g.head + 2;
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (dx * dx + dy * dy <= R * R + R) P(cx + dx, cy + dy, 1, 1, GUM);
+      P(cx + Math.max(1, R - 2), cy + Math.max(1, R - 2), 1, 1, WHITE);
+    } });
+    return stand({ carry: true, eyes: s.t < pop + 0.8 ? "wide" : "down", mouth: s.t < pop + 0.8 ? "o" : "smirk", blush: s.t < pop + 0.8,
+                   props: s.t < pop + 0.8 ? (P, g) => { P(3, g.head + 2, 3, 1, GUM); P(6, g.head + 3, 1, 1, GUM); } : null });
+  } },
+  evelyn: { dur: 2.6, run(r, s) {                  // peers over her reading glasses
+    if (s.t > 0.8 && !s.said) { s.said = true; if (r.rand() < 0.3) r.say(pick(r.rand, ["Hmm?", "Says who, dear?", "Go on..."])); }
+    return stand({ armF: s.t < 0.7 ? ["face", -1] : ["swing", 0], eyes: "up", brow: "raise", mouth: "smirk", carry: s.t >= 0.7 });
+  } },
+  david: { dur: 2.8, run(r, s) {                   // checks his watch and taps a foot
+    if (s.t > 1.2 && !s.said) { s.said = true; if (r.rand() < 0.3) r.say(pick(r.rand, ["Time is money.", "Running late.", "Tick tock."])); }
+    return stand({ armF: ["high", -3], eyes: "down", brow: "stern", mouth: "flat", liftF: s.t > 1 && Math.floor(s.t * 4) % 2 ? 1 : 0,
+                   props: (P, g) => { P(g.handF[0] - 2, g.handF[1] - 2, 2, 2, "#d4a017"); P(g.handF[0] - 2, g.handF[1] - 1, 1, 1, "#fff3bf"); } });
+  } },
+  javier: { dur: 2.2, run(r, s) {                  // wipes his brow: phew
+    if (s.t > 0.9 && !s.drop) {
+      s.drop = true; r.stage.add({ kind: "px", c: "#74c0fc", x: ahead(r, 4), y: r.headTop - 6, vx: -r.face * 22, vy: 26, g: 120, floor: true, life: 0.9, fade: true });
+      if (r.rand() < 0.35) r.say(pick(r.rand, ["Phew!", "Hard work!", "Almost there!"]));
+    }
+    return stand({ armF: s.t < 1.1 ? ["head", Math.floor(s.t * 6) % 2] : ["swing", 0], eyes: "closed", mouth: "smile" });
+  } },
+  hanna: { dur: 2.6, run(r, s) {                   // a big stretch and a yawn
+    const up = s.t < 1.7;
+    return stand({ armF: up ? ["up", 0] : ["swing", 0], armB: up ? ["up", 0] : ["swing", 0], eyes: "closed", mouth: up ? "o" : "smile",
+                   liftF: up && s.t > 0.4 ? 1 : 0, liftB: up && s.t > 0.4 ? 1 : 0 });
+  } },
+  quill: { dur: 3.2, run(r, s) {                   // the magnifying glass up to one eye: a giant eye
+    if (s.t > 1 && !s.said) { s.said = true; if (r.rand() < 0.35) r.say(pick(r.rand, ["Elementary.", "Most suspicious.", "I see..."])); }
+    const scan = Math.round(Math.sin(s.t * 2.2));
+    return stand({ armF: ["mouth", 1], brow: "skeptic", mouth: "smirk", props: (P, g) => {
+      const cx = g.handF[0] + 1, cy = g.head + 6 + scan;
+      limb(P, g.handF[0], g.handF[1], cx, cy - 4, 2, "#6d4c41");
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= 13) P(cx + dx, cy + dy, 1, 1, "#d8f1ff"); else if (d2 <= 20) P(cx + dx, cy + dy, 1, 1, INK);
+      }
+      P(cx - 2, cy + 2, 4, 1, INK); P(cx - 2, cy - 1, 4, 3, r.a.eye); P(cx - 2, cy + 1, 2, 1, WHITE); P(cx + 1, cy - 1, 1, 1, WHITE);
+    } });
+  } },
+  pip: { dur: 3.2, run(r, s) {                     // the propeller works! for a second or so
+    const lift = s.t < 0.4 ? 0 : s.t < 2.4 ? Math.min(1, (s.t - 0.4) / 0.6) : Math.max(0, 1 - (s.t - 2.4) / 0.25);
+    r.y = lift * (7 + Math.sin(s.t * 9) * 1.5);
+    if (s.t > 0.6 && !s.said) { s.said = true; if (r.rand() < 0.4) r.say(pick(r.rand, ["Wheee!", "Look, no hands!", "Intern power!"])); }
+    if (s.t > 2.65 && !s.landed) { s.landed = true; r.y = 0; r.stage.dust(r.x, 4); }
+    const flap = Math.floor(s.t * 8) % 2;
+    return stand({ spin: 4, armF: lift > 0 ? ["forward", flap * 2 - 2] : ["swing", 0], armB: lift > 0 ? ["forward", 2 - flap * 2] : ["swing", 0],
+                   liftF: lift > 0 ? flap : 0, liftB: lift > 0 ? 1 - flap : 0, eyes: s.landed ? "closed" : "wide", mouth: s.landed ? "smile" : "o" });
+  } },
 };
 
 // How likely each bit is, by mood. Every table mixes real work with the little things that happen around it.
@@ -1780,21 +2105,28 @@ function closer(c) {
 
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
-const BAG = "researcher:bag";
+// Nobody is ever on the page twice at once: `busy` is everyone out now (walking off included). The latest
+// few arrivals (RECENT) are skipped too while anyone else can come, so nobody walks straight back in.
+const BAG = "researcher:bag", RECENT = "researcher:recent";
 function nextCharacter(busy, worker, favor = 1) {   // worker: that crew (share `favor`, else the other); none: anyone
   if (worker && Math.random() >= favor) {        // now and then, a visitor from the other crew
     const others = [...new Set(CAST.map(k => ROSTER[k].worker))].filter(w => w !== worker);
     if (others.length) worker = pick(Math.random, others);
   }
   const key = BAG + (worker ? ":" + worker : ""), crew = crewOf(worker);
+  const recent = memory.get(RECENT) || [], free = k => !busy.has(k), fresh = k => free(k) && !recent.includes(k);
   let bag = (memory.get(key) || []).filter(k => crew.includes(k));
-  if (!bag.length) bag = shuffle(crew);
-  let i = bag.findIndex(k => !busy.has(k));      // skip anyone already on stage elsewhere
-  if (i < 0) i = 0;
-  const [kind] = bag.splice(i, 1);
+  if (!bag.some(free)) bag = shuffle(crew);      // the rest of the bag is all out: deal the crew again
+  let i = bag.findIndex(fresh);
+  if (i < 0) i = bag.findIndex(free);
+  let kind;
+  if (i >= 0) [kind] = bag.splice(i, 1);
+  else kind = shuffle(enabled()).find(fresh) || shuffle(enabled()).find(free) || bag.shift() || crew[0];   // the whole crew is out: borrow
   memory.set(key, bag);
+  memory.set(RECENT, [kind].concat(recent.filter(k => k !== kind)).slice(0, 3));
   return kind;
 }
+const onStage = () => new Set(stages.concat(guides).flatMap(s => s.cast().map(r => r.a.kind).concat(s.want ? [s.want.kind] : [])));
 
 // ---------- a researcher ----------
 
@@ -1840,6 +2172,7 @@ class Researcher {
     if (after !== "walk" && after !== "stack" && this.rand() < (this.mood === "crew" ? 0.12 : 0.3)) return this.begin("walk");
     const table = Object.assign({}, MOODS[this.mood] || MOODS.busy);
     for (const k in this.a.fav) if (k in table || this.mood !== "crew") table[k] = (table[k] || 0.5) * this.a.fav[k];
+    table.quirk = (table.quirk || 0) + (this.mood === "crew" ? 1.6 : 0.8);   // everyone's own habit
     delete table[after];
     if (this.mood !== "crew") delete table.idle;   // the rest already was the idle bit (a crew may stand on)
     this.begin(weighted(this.rand, table));
@@ -1879,16 +2212,46 @@ class Researcher {
     const prop = this.a.prop;
     if (pose.carry && prop && !pose.props) {      // keep holding the signature prop
       pose = Object.assign({}, pose);
-      if (CARRY[prop]) pose.armF = CARRY[prop];
-      pose.props = (P, g) => PROPS[prop](P, this.a, g.handF[0], g.handF[1]);
+      const pm = this.a.propMap, clock = this.clock;
+      if (pm) {                                   // a custom sprite's own prop, pinned to the hand
+        pose.armF = [pm.arm || "forward", 0];
+        pose.props = (P, g) => paintMap(P, this.a, mapRows(pm, clock), g.handF[0] + pm.at[0], g.handF[1] + pm.at[1], pm.pal);
+      } else {
+        if (CARRY[prop]) pose.armF = CARRY[prop];
+        const draw = PROPS[prop === "magnifier" ? "magnifierUp" : prop];
+        pose.props = (P, g) => draw(P, this.a, g.handF[0], g.handF[1]);
+      }
     }
     if (this.soot > 0) { this.soot -= dt; pose = Object.assign({}, pose, { soot: true }); }   // after a lab mishap
+    const b = this.bubble;                       // chatter while a bubble is up, unless the bit has its own mouth
+    if (b && b.t < Math.min(1.8, b.dur * 0.6) && !pose.mouth && pose.eyes !== "closed")
+      pose = Object.assign({}, pose, { mouth: Math.floor(b.t * 7) % 3 === 1 ? "o" : "none" });
     this.pose = pose;
     if (this.act === act && act.done && !this.gone) this.chooseNext();
   }
 }
 
 // ---------- stages: a canvas laid over a card or the pipeline strip ----------
+
+// A one-pixel dark outline around the silhouette, like hand-drawn sprites: every empty pixel next to a colored
+// one goes dark, unless the part there already has its own dark edge, so no edge is ever drawn twice as thick.
+const INK_RGB = [0x1d, 0x1b, 0x22];
+let mask = null;
+function outline(off, comp) {
+  const img = off.getImageData(0, 0, OFF_W, OFF_H), d = img.data, n = OFF_W * OFF_H;
+  if (!mask) mask = new Uint8Array(n);
+  for (let i = 0, o = 0; i < n; i++, o += 4)
+    mask[i] = !d[o + 3] ? 0 : d[o] === INK_RGB[0] && d[o + 1] === INK_RGB[1] && d[o + 2] === INK_RGB[2] ? 1 : 2;
+  for (let yy = 0, i = 0; yy < OFF_H; yy++)
+    for (let xx = 0; xx < OFF_W; xx++, i++) {
+      if (mask[i]) continue;
+      if ((xx > 0 && mask[i - 1] === 2) || (xx < OFF_W - 1 && mask[i + 1] === 2) ||
+          (yy > 0 && mask[i - OFF_W] === 2) || (yy < OFF_H - 1 && mask[i + OFF_W] === 2)) {
+        const o = i * 4; d[o] = INK_RGB[0]; d[o + 1] = INK_RGB[1]; d[o + 2] = INK_RGB[2]; d[o + 3] = 255;
+      }
+    }
+  comp.putImageData(img, 0, 0);
+}
 
 const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;   // the offscreen sprite canvas and the feet's place in it
 const stages = [];
@@ -1906,7 +2269,7 @@ class Stage {
     host.appendChild(this.canvas);
     host.classList.add("lab-host");              // keeps the card's stage room while a visitor walks off an idle card
     this.ctx = this.canvas.getContext("2d");
-    this.off = this.layer(); this.ink = this.layer(); this.comp = this.layer();
+    this.off = this.layer(); this.comp = this.layer();
     this.fx = []; this.marks = [];
     this.layout();
     this.ro = "ResizeObserver" in window ? new ResizeObserver(() => this.layout()) : null;
@@ -1915,7 +2278,7 @@ class Stage {
     host.addEventListener("mouseenter", this.poke);
     this.schedule();
   }
-  layer() { const c = document.createElement("canvas"); c.width = OFF_W; c.height = OFF_H; return c.getContext("2d"); }
+  layer() { const c = document.createElement("canvas"); c.width = OFF_W; c.height = OFF_H; return c.getContext("2d", { willReadFrequently: true }); }
   // The page swapped in a fresh copy of this stage's card: move the canvas and whoever is on it across.
   adopt(host) {
     if (this.ro) { this.ro.unobserve(this.host); this.ro.observe(host); }
@@ -1979,6 +2342,7 @@ class Stage {
     let rec = memory.get(this.key);
     if (rec && (!(rec.life <= LIFE_MAX) || !ROSTER[rec.kind])) rec = null;
     if (rec && rec.kind && this.worker && rec.worker !== this.worker) rec = null;   // the step changed hands
+    if (rec && rec.kind && onStage().has(rec.kind)) rec = null;                       // already out on another stage
     const out = stages.filter(s => s !== this && s.resident).length;
     if (rec && t < rec.born + rec.life - 1 && out < MAX_ON_STAGE) this.spawn(rec, true);
     else if (rec && rec.next && t < rec.next) this.nextAt = rec.next;
@@ -1986,8 +2350,7 @@ class Stage {
   }
   spawn(rec, resume) {
     if (!rec) {
-      const busy = new Set(stages.filter(s => s !== this && s.resident).map(s => s.resident.a.kind));
-      rec = { kind: nextCharacter(busy, this.worker, FAVOR), seed: Math.floor(Math.random() * 2 ** 31), born: now(), worker: this.worker,
+      rec = { kind: nextCharacter(onStage(), this.worker, FAVOR), seed: Math.floor(Math.random() * 2 ** 31), born: now(), worker: this.worker,
               life: between(Math.random, LIFE_MIN, LIFE_MAX) };
       memory.set(this.key, rec);
     }
@@ -2063,14 +2426,14 @@ class Stage {
     for (const r of cast) this.drawOverlay(ctx, r);
   }
   drawResearcher(ctx, r) {
-    const { off, ink, comp } = this, p = r.pose;
+    const { off, comp } = this, p = r.pose;
     off.clearRect(0, 0, OFF_W, OFF_H);
     const paint = painter(off, OX, OY, r.face);
     let peak = 0;
     const P = (x, y, w, h, c) => { if (c && w > 0 && h > 0 && y + h > peak) peak = y + h; paint(x, y, w, h, c); };
     const g = drawBody(P, r.a, p, r.clock);
     if (r.flower) {                              // tucked behind an ear: a little cross of petals
-      const fx = -6, fy = g.head + 9;
+      const fx = -5, fy = g.head + 7;
       P(fx + 1, fy, 1, 3, r.flower); P(fx, fy + 1, 3, 1, r.flower);
       P(fx + 1, fy + 1, 1, 1, r.flower === "#ffd43b" ? "#e8590c" : "#ffd43b");
     }
@@ -2080,16 +2443,15 @@ class Stage {
     }
     r.headTop = g.crown + 2 + Math.round(r.y);
     r.topY = peak + 1 + Math.round(r.y);                        // the highest pixel, props and raised arms included
-    // a one-pixel dark outline around the whole silhouette, like the hand-drawn sprites
-    ink.globalCompositeOperation = "source-over";
-    ink.clearRect(0, 0, OFF_W, OFF_H); ink.drawImage(off.canvas, 0, 0);
-    ink.globalCompositeOperation = "source-in"; ink.fillStyle = INK; ink.fillRect(0, 0, OFF_W, OFF_H);
-    comp.clearRect(0, 0, OFF_W, OFF_H);
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) comp.drawImage(ink.canvas, dx, dy);
-    comp.drawImage(off.canvas, 0, 0);
+    outline(off, comp);
     const x = Math.round(r.x), y = r.stage.ground - Math.round(r.y);   // a flow slot has its own row's floor
     ctx.save();
     ctx.globalAlpha = clamp(r.alpha, 0, 1);
+    if (r.tilt < 0.5) {                          // a soft shadow on the floor, smaller the higher they jump
+      const sw = Math.max(4, (p.sit ? 18 : 12) - Math.round(r.y / 3)), gy = r.stage.ground + 1, sx = x + (p.sit ? r.face * 4 : 0);
+      ctx.fillStyle = "rgba(20,18,30,.14)";
+      ctx.fillRect(sx - (sw >> 1), gy, sw, 1); ctx.fillRect(sx - (sw >> 1) + 2, gy + 1, sw - 4, 1);
+    }
     ctx.translate(x, y + 1);
     if (r.tilt) { ctx.translate(0, -Math.round(r.tilt * 8)); ctx.rotate(r.face * r.tilt * Math.PI / 2); }
     if (r.squash !== 1) ctx.scale(1, r.squash);
@@ -2229,15 +2591,15 @@ class FlowStage extends Stage {
     for (const e of this.lit()) {
       const rec = saved[e.worker];
       this.crew[e.worker] = this.slot(e.step, e.slug, now() + 0.4);
-      if (rec && rec.step === e.step && rec.slug === e.slug && ROSTER[rec.kind] && fits(rec.kind, e.worker)) this.spawn(e.worker, rec, true);
+      if (rec && rec.step === e.step && rec.slug === e.slug && ROSTER[rec.kind] && fits(rec.kind, e.worker) && !onStage().has(rec.kind))
+        this.spawn(e.worker, rec, true);
     }
   }
   spawn(worker, rec, resume) {
     const c = this.crew[worker];
     if (!c) return;
     if (!rec) {
-      const busy = new Set(stages.flatMap(s => s.cast()).map(r => r.a.kind));
-      rec = { kind: nextCharacter(busy, crewKey(worker)), seed: Math.floor(Math.random() * 2 ** 31) };
+      rec = { kind: nextCharacter(onStage(), crewKey(worker)), seed: Math.floor(Math.random() * 2 ** 31) };
     }
     c.rec = Object.assign({}, rec, { step: c.step, slug: c.slug });
     c.r = new Researcher(c.slot, c.rec, resume ? rec : null);
@@ -2370,6 +2732,7 @@ class Guide extends Stage {
       return;
     }
     this.want = { kind, seed, line, at: now() + (r ? 0.8 : 0.2) };
+    for (const s of stages) if (s.kind === "card" && s.resident && s.resident.a.kind === kind && !s.resident.leaving) s.resident.leave();
   }
   update(dt) {
     if (this.want && now() >= this.want.at) {
@@ -2485,12 +2848,205 @@ function start() {
   requestAnimationFrame(frame);
 }
 
+// ---------- sprite specs: check, register, render (the rules are in SPRITES.md) ----------
+
+// Everything a sprite spec may name. A spec is data only: a starting sprite plus overrides from these lists,
+// colors, pinned pixel maps and keyframes. Nothing in it runs as code, so a model can write one safely.
+const PARTS = {
+  worker: ["assistant", "pi"],
+  style: ["short", "receding", "bob", "bigcurly", "long", "crop", "neat", "spiky"],
+  head: [null, "hijab", "cap", "beanie", "hardhat", "deerstalker", "propeller"],
+  outfit: ["labcoat", "suit", "hoodie", "sweater", "cardigan", "vest", "overalls", "jacket", "abaya", "trench", "tshirt"],
+  face: [null, "round", "browline", "halfmoon"],
+  facial: [null, "walrus", "mustache"],
+  legs: ["pants", "skirt"],
+  prop: [null, "tablet", "laptop", "phone", "book", "briefcase", "camera", "magnifier", "mug"],
+  brow: ["flat", "raise", "stern", "worry", "skeptic"],
+  mouth: ["none", "smile", "grin", "o", "flat", "smirk"],
+  eyes: ["open", "closed", "happy", "down", "wide", "up"],
+  arm: ["swing", "forward", "high", "low", "up", "head", "mouth", "face"],
+  layer: ["back", "body", "behindHead", "head"],
+  icon: Object.keys(ICONS),
+};
+const COLOR_KEYS = ["hair", "top", "shirt", "pants", "shoes", "pack", "tie", "bow", "hijab", "cap", "beanie", "pom", "skirt", "frame"];
+const FLAG_KEYS = ["lash", "lids", "bushy", "ahoge", "grin", "freckles", "pencil", "rolled"];
+const ENUM_KEYS = ["worker", "style", "head", "outfit", "face", "facial", "legs", "brow", "mouth"];
+const SPEC_KEYS = new Set(["base", "name", "skin", "prop", "fav", "maps", "propMap", "quirk", ...COLOR_KEYS, ...FLAG_KEYS, ...ENUM_KEYS]);
+const FAV_ACTIONS = () => Object.keys(ACTIONS).filter(k => !["spawn", "despawn", "farewell", "chase", "walk", "rest", "quirk"].includes(k));
+// Where a map may reach from its anchor, as [left, bottom, right, top] in pixels (x toward the face, y up).
+// One size only: these boxes keep every sprite inside the body the animations were drawn for.
+const MAP_BOX = { head: [-9, -3, 10, 22], behindHead: [-9, -3, 10, 22], body: [-12, -9, 10, 16], back: [-12, -9, 10, 16] };
+const PROP_BOX = [-6, -10, 12, 12];
+const FACE_BOX = [0, 1, 5, 7];                    // eyes, brows-to-mouth: drawn by code so faces can act; maps stay off
+const SPRITE_KEY = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+function checkMap(m, where, box, errors, face) {
+  if (!m || typeof m !== "object") return errors.push(`${where}: should be an object`);
+  const frames = m.frames || (m.rows ? [m.rows] : null);
+  if (!Array.isArray(frames) || !frames.length || frames.length > 4) return errors.push(`${where}: needs rows, or 1 to 4 frames of rows`);
+  if (m.frames && m.rows) errors.push(`${where}: give rows or frames, not both`);
+  if (m.fps !== undefined && !(Number.isFinite(m.fps) && m.fps >= 1 && m.fps <= 12)) errors.push(`${where}.fps: 1 to 12`);
+  if (!Array.isArray(m.at) || m.at.length !== 2 || !m.at.every(Number.isInteger)) return errors.push(`${where}.at: [x, y] whole numbers`);
+  const pal = m.pal || {};
+  if (typeof pal !== "object" || Array.isArray(pal)) return errors.push(`${where}.pal: letters to #rrggbb colors`);
+  for (const [ch, c] of Object.entries(pal)) {
+    if (!/^[A-Za-z0-9]$/.test(ch) || ch in SLOTS) errors.push(`${where}.pal: "${ch}" can't be defined (one letter or digit, not a color slot: ${Object.keys(SLOTS).join(" ")})`);
+    if (!HEX.test(c)) errors.push(`${where}.pal.${ch}: "${c}" is not #rrggbb`);
+  }
+  frames.forEach((rows, f) => {
+    const at = m.frames ? `${where}.frames[${f}]` : `${where}.rows`;
+    if (!Array.isArray(rows) || !rows.length || rows.length > 24 || !rows.every(r => typeof r === "string"))
+      return errors.push(`${at}: 1 to 24 strings`);
+    const w = rows[0].length;
+    if (!w || w > 24 || rows.some(r => r.length !== w)) return errors.push(`${at}: every row the same width, 1 to 24`);
+    rows.forEach((row, i) => [...row].forEach((ch, j) => {
+      if (ch === ".") return;
+      if (!(ch in SLOTS) && !(ch in pal)) return errors.push(`${at}[${i}]: "${ch}" isn't in pal or a color slot`);
+      const x = m.at[0] + j, y = m.at[1] + rows.length - 1 - i;
+      if (x < box[0] || x > box[2] || y < box[1] || y > box[3]) errors.push(`${at}[${i}]: pixel (${x}, ${y}) is outside [${box}]`);
+      else if (face && x >= FACE_BOX[0] && x <= FACE_BOX[2] && y >= FACE_BOX[1] && y <= FACE_BOX[3])
+        errors.push(`${at}[${i}]: pixel (${x}, ${y}) covers the face; eyes, mouth and brows are drawn by code`);
+    }));
+  });
+}
+
+function checkQuirk(q, errors) {
+  if (!q || typeof q !== "object") return errors.push("quirk: should be an object");
+  if (!(Number.isFinite(q.dur) && q.dur >= 0.5 && q.dur <= 6)) errors.push("quirk.dur: 0.5 to 6 seconds");
+  if (!Array.isArray(q.keys) || !q.keys.length || q.keys.length > 12) return errors.push("quirk.keys: 1 to 12 keyframes");
+  if (q.say !== undefined && !(Array.isArray(q.say) && q.say.length <= 5 && q.say.every(t => typeof t === "string" && t.length >= 1 && t.length <= 40)))
+    errors.push("quirk.say: up to 5 lines of 1 to 40 characters");
+  if (q.sayAt !== undefined && !(Number.isFinite(q.sayAt) && q.sayAt >= 0 && q.sayAt <= q.dur)) errors.push("quirk.sayAt: within dur");
+  const known = new Set(["t", "hop", "liftF", "liftB", "icon", "sparkle", ...KEY_POSE]);
+  let last = -1;
+  q.keys.forEach((k, i) => {
+    const at = `quirk.keys[${i}]`;
+    if (!k || typeof k !== "object") return errors.push(`${at}: should be an object`);
+    for (const f of Object.keys(k)) if (!known.has(f)) errors.push(`${at}.${f}: unknown (use ${[...known].join(", ")})`);
+    if (!(Number.isFinite(k.t) && k.t >= 0 && k.t <= q.dur)) errors.push(`${at}.t: 0 to dur`);
+    else if (k.t < last) errors.push(`${at}.t: keys go in time order`);
+    else last = k.t;
+    for (const f of ["armF", "armB"]) if (k[f] !== undefined && !(Array.isArray(k[f]) && PARTS.arm.includes(k[f][0]) && Number.isInteger(k[f][1] ?? 0) && Math.abs(k[f][1] ?? 0) <= 4))
+      errors.push(`${at}.${f}: [mode, nudge] with mode one of ${PARTS.arm.join(", ")} and nudge -4 to 4`);
+    for (const f of ["eyes", "mouth", "brow", "icon"]) if (k[f] !== undefined && !PARTS[f].includes(k[f])) errors.push(`${at}.${f}: one of ${PARTS[f].join(", ")}`);
+    for (const f of ["blush", "glint", "sparkle", "liftF", "liftB", "nod"]) if (k[f] !== undefined && typeof k[f] !== "boolean") errors.push(`${at}.${f}: true or false`);
+    if (k.hop !== undefined && !(Number.isFinite(k.hop) && k.hop >= 0 && k.hop <= 10)) errors.push(`${at}.hop: 0 to 10 pixels`);
+    if (k.crouch !== undefined && !(Number.isInteger(k.crouch) && k.crouch >= 0 && k.crouch <= 3)) errors.push(`${at}.crouch: 0 to 3`);
+  });
+}
+
+// Checks a spec against the rules and returns { ok, errors, sprite }: sprite is the spec laid over its starting
+// sprite, ready for registerSprite or renderSprite. Errors say what to change, so a model can fix its own spec.
+function validateSprite(spec) {
+  const errors = [];
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return { ok: false, errors: ["a sprite spec is a JSON object"] };
+  for (const k of Object.keys(spec)) if (!SPEC_KEYS.has(k)) errors.push(`${k}: not a sprite field (see SPRITES.md)`);
+  if (!BUILT_IN.has(spec.base)) errors.push(`base: start from one of ${[...BUILT_IN].join(", ")}`);
+  if (typeof spec.name !== "string" || !/^[\p{L}\p{N} .'\-]{1,24}$/u.test(spec.name)) errors.push("name: 1 to 24 letters, digits, spaces, . ' -");
+  for (const k of ENUM_KEYS) {                    // facial may be a list too: one is picked per visit
+    const v = k === "facial" && Array.isArray(spec[k]) ? spec[k] : [spec[k]];
+    if (k in spec && !(v.length && v.every(x => PARTS[k].includes(x)))) errors.push(`${k}: one of ${PARTS[k].map(String).join(", ")}`);
+  }
+  for (const k of FLAG_KEYS) if (k in spec && typeof spec[k] !== "boolean") errors.push(`${k}: true or false`);
+  for (const k of COLOR_KEYS) if (k in spec) {
+    const v = Array.isArray(spec[k]) ? spec[k] : [spec[k]];
+    if (!v.length || v.length > 8 || !v.every(c => HEX.test(c))) errors.push(`${k}: a #rrggbb color or a list of up to 8 (one is picked per visit)`);
+  }
+  if ("skin" in spec && !(Array.isArray(spec.skin) && spec.skin.length && spec.skin.every(i => Number.isInteger(i) && i >= 0 && i < SKIN.length)))
+    errors.push(`skin: a list of tones 0 to ${SKIN.length - 1}`);
+  if ("prop" in spec) {
+    const v = Array.isArray(spec.prop) ? spec.prop : [spec.prop];
+    if (!v.length || !v.every(x => PARTS.prop.includes(x))) errors.push(`prop: one of ${PARTS.prop.map(String).join(", ")}, or a list`);
+  }
+  if ("fav" in spec) {
+    const acts = FAV_ACTIONS();
+    if (!spec.fav || typeof spec.fav !== "object") errors.push("fav: action names to weights");
+    else for (const [k, w] of Object.entries(spec.fav)) {
+      if (!acts.includes(k)) errors.push(`fav.${k}: not an action (${acts.join(", ")})`);
+      if (!(Number.isFinite(w) && w >= 0 && w <= 5)) errors.push(`fav.${k}: a weight 0 to 5`);
+    }
+  }
+  if ("maps" in spec) {
+    if (!Array.isArray(spec.maps) || spec.maps.length > 8) errors.push("maps: a list of up to 8");
+    else spec.maps.forEach((m, i) => {
+      if (!m || !PARTS.layer.includes(m.layer)) return errors.push(`maps[${i}].layer: one of ${PARTS.layer.join(", ")}`);
+      for (const f of Object.keys(m)) if (!["layer", "at", "rows", "frames", "fps", "pal"].includes(f)) errors.push(`maps[${i}].${f}: unknown`);
+      checkMap(m, `maps[${i}]`, MAP_BOX[m.layer], errors, m.layer === "head");
+    });
+  }
+  if ("propMap" in spec) {
+    const m = spec.propMap;
+    if (m && m.arm !== undefined && !PARTS.arm.includes(m.arm)) errors.push(`propMap.arm: one of ${PARTS.arm.join(", ")}`);
+    if (m) for (const f of Object.keys(m)) if (!["arm", "at", "rows", "frames", "fps", "pal"].includes(f)) errors.push(`propMap.${f}: unknown`);
+    checkMap(m, "propMap", PROP_BOX, errors, false);
+  }
+  if ("quirk" in spec) checkQuirk(spec.quirk, errors);
+  if (errors.length) return { ok: false, errors };
+  const sprite = Object.assign({}, ROSTER[spec.base], JSON.parse(JSON.stringify(spec)));
+  return { ok: true, errors: [], sprite };
+}
+
+// Adds a checked sprite to the cast under `key` (custom-sprite-1, or any name: lowercase, digits, dashes).
+// It joins its worker's crew straight away; built-in names can't be replaced.
+function registerSprite(key, spec) {
+  if (!SPRITE_KEY.test(String(key))) return { ok: false, errors: ["key: lowercase letters, digits and dashes, up to 32"] };
+  if (BUILT_IN.has(key)) return { ok: false, errors: [`key: ${key} is a built-in sprite`] };
+  const v = validateSprite(spec);
+  if (!v.ok) return v;
+  ROSTER[key] = v.sprite;
+  if (!CAST.includes(key)) CAST.push(key);
+  return v;
+}
+function setSpriteEnabled(key, on) { if (on) OFF.delete(key); else OFF.add(key); }
+
+// Draws one still of a sprite (a key, or a spec to preview without registering it) into a canvas, feet at the
+// bottom middle. opts: scale (whole number, default 1), action (default "rest"), t (seconds into it), seed, face
+// (1 right, -1 left), width/height (sprite pixels, default 44 x 60). Returns { ok, errors }.
+function renderSprite(canvas, sprite, opts = {}) {
+  let kind = sprite, temp = false;
+  if (typeof sprite !== "string") {
+    const v = validateSprite(sprite);
+    if (!v.ok) return v;
+    kind = "__preview"; temp = true; ROSTER[kind] = v.sprite;
+  }
+  if (!ROSTER[kind]) return { ok: false, errors: [`no sprite called ${kind}`] };
+  const action = opts.action || "rest";
+  if (!ACTIONS[action]) { if (temp) delete ROSTER[kind]; return { ok: false, errors: [`no action called ${action}`] }; }
+  const W = opts.width || 44, H = opts.height || 60, k = Math.max(1, Math.round(opts.scale || 1));
+  const st = Object.create(Stage.prototype);
+  Object.assign(st, { kind: "card", mood: "busy", fx: [], marks: [], W, H, cssW: W, cssH: H, ground: H - 4, dpr: 1 });
+  st.off = st.layer(); st.comp = st.layer(); st.range = () => [-999, 999]; st.talking = () => false;
+  try {
+    const r = new Researcher(st, { kind, seed: opts.seed ?? 7 }, { x: W / 2, face: opts.face || 1 });
+    r.say = r.quip = r.line = () => {};
+    r.begin(action);
+    if (action === "rest") { r.act.tx = null; r.act.turn = -1; }
+    for (let t = 0; t < (opts.t ?? 0.5) && r.act.name === action; t += 1 / 60) { r.update(1 / 60); r.x = W / 2; }
+    if (!r.pose) r.update(0);
+    const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+    st.drawResearcher(tmp.getContext("2d"), r);
+    canvas.width = W * k; canvas.height = H * k;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmp, 0, 0, W * k, H * k);
+  } finally { if (temp) delete ROSTER[kind]; }
+  return { ok: true, errors: [] };
+}
+
+for (const [key, spec] of Object.entries(SPRITE_CONFIG.add || {})) {   // sprites the page asked for
+  const v = registerSprite(key, spec);
+  if (!v.ok) console.warn(`researchers: sprite ${key} skipped:`, v.errors.join("; "));
+}
+
 function boot() {
   addEventListener("pagehide", () => stages.forEach(s => s.save()));
   document.addEventListener("flowchange", e => { const f = stages.find(s => s.kind === "flow"); if (f) f.change(e.detail); });
   document.addEventListener("chatguide", e => guides.forEach(g => g.show(e.detail)));
   rescan();
 }
-window.Researchers = { stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS };   // handy from the console
+window.Researchers = { stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS,
+  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
