@@ -5,7 +5,7 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import hashlib, json, os, re, subprocess, sys, threading, time
+import asyncio, concurrent.futures, hashlib, json, os, re, subprocess, sys, threading, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -384,9 +384,11 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
               display:flex; flex-direction:column; gap:.6rem; padding:1rem; background:var(--bg);
               border-right:1px solid var(--rule); box-shadow:4px 0 18px rgba(0,0,0,.12); }
 .chat-panel[hidden] { display:none; }
-.chat-panel header { display:flex; justify-content:space-between; align-items:center; }
-.chat-panel header strong { font:700 1.2rem Georgia, serif; }
-.chat-panel header button { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
+.chat-panel header { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+.chat-panel header strong { font:700 1.2rem Georgia, serif; white-space:nowrap; }
+.chat-panel header span { display:flex; gap:.3rem; flex:none; }
+.chat-panel header button { padding:.2rem .5rem; font-size:.85rem; line-height:1.3; }
+.chat-panel header #chat-close { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
 .chat-panel .model { display:flex; gap:.5rem; align-items:center; margin:0; }
 .chat-panel .model select { flex:1; min-width:0; }
 .chat-panel .hint { margin:0; }
@@ -598,7 +600,7 @@ def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     script = f"""<script>
 let sig = "{signature()}";
 async function check() {{
-  const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
+  const busy = [...document.querySelectorAll("textarea:not(#chat-q), input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
             ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)
             || document.body.classList.contains("chat-open");
   if (busy || document.hidden) return;
@@ -1895,8 +1897,9 @@ def themed_preview(html: str) -> str:
     return html.replace("</head>", override + "</head>", 1) if "</head>" in html else override + html
 
 # ---------- Researcher Chat: ask what the loop is doing, or look something up on the web ----------
-# A bubble on every page opens a panel over the left third. The conversation is kept in this browser tab
-# (sessionStorage) so the page's own refreshes don't wipe it; the assistant itself remembers nothing.
+# A bubble on every page opens a panel over the left third. The conversation, the unsent draft and a question still
+# being answered are kept in this browser tab (sessionStorage), so moving between pages or closing the panel loses
+# nothing; Clear starts over and Copy puts the conversation on the clipboard. The assistant itself remembers nothing.
 # It needs only Ollama, not the loop: its loop tools read what the loop leaves on disk.
 # With animations on, a pixel researcher for the picked model walks in at the top of the panel (assets/researchers.js,
 # the "chatguide" event): a worker's own model brings that worker's crew, any other model by its size.
@@ -1912,6 +1915,7 @@ CHAT_JS = """<script>
   const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false, crews = {};
+  const copyBtn = document.getElementById("chat-copy");
 
   // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
   // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
@@ -1982,27 +1986,68 @@ CHAT_JS = """<script>
     bubbleBtn.setAttribute("aria-expanded", open); store("chat-open", open);
     if (open) { loadModels(); box.focus(); log.scrollTop = log.scrollHeight; }
   }
+  // The question goes into the history as soon as it is sent, and the answer it waits for is remembered by id, so
+  // a page that navigates away mid-answer hands it to the next page (/chat/answer) instead of losing both.
+  function save() { history = history.slice(-20); store("chat-history", history); }
+  async function wait(pending, request) {
+    box.disabled = true;
+    const note = show("assistant", "Looking…", "", "wait");
+    let answer, model = pending.model;
+    try {
+      const r = await request();
+      const data = await r.json();
+      answer = data.lost ? "That answer was lost when the UI restarted. Ask again?" : data.answer;
+    } catch (e) {
+      if (leaving) return;                     // the page is going; the next one picks it up
+      answer = "Researcher Chat didn't answer. Is the UI still running?";
+    }
+    note.remove();
+    if ((store("chat-pending") || {}).id !== pending.id) return;      // cleared while it was thinking
+    show("assistant", answer, model);
+    history.push({role: "assistant", content: answer, model}); save(); store("chat-pending", null);
+    box.disabled = false; if (!panel.hidden) box.focus();
+  }
   async function ask(question) {
     question = question.trim();
     if (!question || box.disabled) return;
     setOpen(true); suggest.hidden = true;
-    const model = pickModel.value;
-    show("user", question); box.value = ""; box.disabled = true;
-    const wait = show("assistant", "Looking…", "", "wait");
-    let answer;
-    try {
-      const r = await fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({question, model, history: history.slice(-4).map(({role, content}) => ({role, content}))})});
-      answer = (await r.json()).answer;
-    } catch (e) { answer = "Researcher Chat didn't answer. Is the UI still running?"; }
-    wait.remove(); show("assistant", answer, model);
-    history.push({role: "user", content: question}, {role: "assistant", content: answer, model});
-    history = history.slice(-20); store("chat-history", history);
-    box.disabled = false; box.focus();
+    const model = pickModel.value, id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const past = history.slice(-4).map(({role, content}) => ({role, content}));
+    show("user", question); box.value = ""; store("chat-draft", "");
+    history.push({role: "user", content: question}); save();
+    const pending = {id, model}; store("chat-pending", pending);
+    await wait(pending, () => fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question, model, id, history: past})}));
   }
+  function transcript() {
+    return history.map(h => h.role === "user" ? `You: ${h.content}`
+                                              : `Researcher Chat${h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
+  }
+  async function copy() {
+    const text = transcript(), was = "Copy";
+    let ok = !!text;
+    if (ok) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {                                    // older browsers: copy from a hidden textarea instead
+        const t = document.createElement("textarea"); t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+        document.body.appendChild(t); t.select();
+        try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+        t.remove();
+      }
+    }
+    copyBtn.textContent = !text ? "Nothing yet" : ok ? "Copied" : "Copy failed";
+    clearTimeout(copy.timer); copy.timer = setTimeout(() => { copyBtn.textContent = was; }, 1500);
+  }
+  let leaving = false;
+  addEventListener("pagehide", () => { leaving = true; });
   bubbleBtn.addEventListener("click", () => setOpen(panel.hidden));
   document.getElementById("chat-close").addEventListener("click", () => setOpen(false));
-  document.getElementById("chat-clear").addEventListener("click", () => { history = []; store("chat-history", history); redraw(); });
+  document.getElementById("chat-clear").addEventListener("click", () => {
+    history = []; save(); store("chat-pending", null); store("chat-draft", "");
+    box.value = ""; box.disabled = false; redraw(); box.focus();
+  });
+  copyBtn.addEventListener("click", copy);
+  box.addEventListener("input", () => store("chat-draft", box.value));
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !panel.hidden) setOpen(false); });
   pickModel.addEventListener("change", () => { try { localStorage.setItem("chat-model", pickModel.value); } catch (e) {} guide(); });
   form.addEventListener("submit", e => { e.preventDefault(); ask(box.value); });
@@ -2011,7 +2056,10 @@ CHAT_JS = """<script>
   // one listener for every "Ask the assistant" button, so ones swapped in by a page refresh work too
   document.addEventListener("click", e => { const b = e.target.closest("[data-ask]"); if (b) ask(b.dataset.ask); });
   redraw();
+  box.value = store("chat-draft") || "";
   if (store("chat-open")) setOpen(true);
+  const pending = store("chat-pending");
+  if (pending && pending.id) wait(pending, () => fetch(`/chat/answer?id=${encodeURIComponent(pending.id)}`));
 })();
 </script>"""
 
@@ -2022,7 +2070,8 @@ def chat_widget() -> str:
     return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Researcher Chat" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
 <aside id="chat-panel" class="chat-panel" aria-label="Researcher Chat" hidden>{guide}
-<header><strong>Researcher Chat</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
+<header><strong>Researcher Chat</strong><span><button type="button" id="chat-copy" title="Copy the conversation">Copy</button>
+ <button type="button" id="chat-clear" title="Start over">Clear</button>
  <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
 <label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
 <p class="hint" id="chat-hint">It reads what the loop is doing, searches the web, can add a mission or move one to an epic, and works with the loop off.</p>
@@ -2051,6 +2100,23 @@ def chat_crew(model: str) -> dict:
     from agents.assistant import crew
     return {"crew": crew(model), "family": model.split(":")[0]}
 
+# Answers the page is waiting for, by the id the page gave its question, so one survives the page navigating away
+# mid-answer: the next page picks it up from /chat/answer. This UI process only, the last few, never on disk.
+CHAT_JOBS: dict[str, concurrent.futures.Future] = {}
+CHAT_JOBS_KEPT = 20
+_chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat")
+
+def _answer(question: str, history: list, model: str | None) -> str:
+    try:
+        return agents.chat(question, history, model)
+    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
+        return f"I couldn't answer just now ({type(e).__name__}: {str(e)[:200]}). Is Ollama running?"
+
+def _keep_job(job_id: str, job: concurrent.futures.Future) -> None:
+    CHAT_JOBS[job_id] = job
+    for old in [k for k, f in CHAT_JOBS.items() if f.done()][:max(0, len(CHAT_JOBS) - CHAT_JOBS_KEPT)]:
+        CHAT_JOBS.pop(old, None)
+
 async def chat_ask(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -2058,14 +2124,22 @@ async def chat_ask(request: Request) -> Response:
         data = await request.json()
         question, history = str(data.get("question") or ""), data.get("history") or []
         model = str(data.get("model") or "")[:100] or None
+        job_id = str(data.get("id") or "")[:64]
         history = history if isinstance(history, list) else []
     except (ValueError, AttributeError):
         return JSONResponse({"answer": "That question didn't arrive in one piece. Try again."}, status_code=400)
-    try:
-        answer = await run_in_threadpool(agents.chat, question, [h for h in history if isinstance(h, dict)], model)
-    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
-        answer = f"I couldn't answer just now ({type(e).__name__}: {str(e)[:200]}). Is Ollama running?"
-    return JSONResponse({"answer": answer})
+    job = _chat_pool.submit(_answer, question, [h for h in history if isinstance(h, dict)], model)
+    if job_id:
+        _keep_job(job_id, job)
+    # shielded, so a page that navigates away doesn't cancel the answer the next page will pick up
+    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
+
+async def chat_answer(request: Request) -> JSONResponse:
+    """The answer to a question an earlier page asked, waiting for it if it is still being worked out."""
+    job = CHAT_JOBS.get(request.query_params.get("id", ""))
+    if job is None:
+        return JSONResponse({"lost": True}, status_code=404)
+    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
@@ -2261,6 +2335,7 @@ app = Starlette(routes=[
     Route("/settings", settings_page),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),
+    Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
