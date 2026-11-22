@@ -1,10 +1,13 @@
-"""Thin wrapper over the Ollama client so tests can replace one function."""
-import asyncio, os, time
+"""Thin wrapper over the Ollama client so tests can replace one function. Every call goes to the configured
+LLM connection (settings.ollama_host) with the configured models (settings.model_for); none are written here."""
+import asyncio, time
 import ollama
-import stopping, trail
+import settings, stopping, trail
 
-MODEL = os.environ.get("MISSION_LOOP_MODEL", "qwen3.8:27b")
-SEARCH_MODEL = os.environ.get("MISSION_LOOP_SEARCH_MODEL", "bonsai-2:4b")   # research tool loops only
+def model_for(role: str) -> str:
+    """The model for a role's steps: "assistant" (search and read) or "pi" (write). See settings.WORKERS."""
+    return settings.model_for(role)
+
 CONTEXT = 32768                            # tokens the model sees: prompt and reply together
 OPTIONS = {"num_ctx": CONTEXT, "temperature": 0.2}
 REPLY_TOKENS = 8192                        # longest structured reply (a brief is about 4k tokens)
@@ -63,21 +66,21 @@ def _as_dict(m) -> dict:
     return m if isinstance(m, dict) else m.model_dump(exclude_none=True)
 
 async def chat(messages, tools=None, format=None, model=None, stoppable=True) -> ollama.Message:
-    """One model call. Structured outputs (format set) are streamed so that, if stop is pressed, what
-    was written before the grace ran out isn't lost: it comes back on Cut. A tool turn in flight when
-    stop is pressed gets the shorter turn grace, so the write-out still has time. A reply that hits
-    its token cap or REPLY_TIME_LIMIT raises Overrun with what it had written.
-    stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP can
-    outlive a stopped loop."""
-    client = ollama.AsyncClient()          # new client per call: safe across asyncio.run() loops
+    """One model call, on the Principal Investigator's model unless `model` names another. Structured outputs
+    (format set) are streamed so that, if stop is pressed, what was written before the grace ran out isn't
+    lost: it comes back on Cut. A tool turn in flight when stop is pressed gets the shorter turn grace, so the
+    write-out still has time. A reply that hits its token cap or REPLY_TIME_LIMIT raises Overrun with what it
+    had written. stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP
+    can outlive a stopped loop."""
+    client = ollama.AsyncClient(host=settings.ollama_host())   # new client per call: safe across asyncio.run() loops
     if not stoppable:
-        return (await client.chat(model=model or MODEL, messages=messages, tools=tools, format=format,
+        return (await client.chat(model=model or model_for("pi"), messages=messages, tools=tools, format=format,
                                   options=OPTIONS, keep_alive="24h")).message
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 
     async def call():
-        kw = dict(model=model or MODEL, messages=fit(messages, reply_tokens), tools=tools, format=format,
+        kw = dict(model=model or model_for("pi"), messages=fit(messages, reply_tokens), tools=tools, format=format,
                   options={**OPTIONS, "num_predict": reply_tokens}, keep_alive="24h")
         if format is None:
             response = await client.chat(**kw)
@@ -112,14 +115,37 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True) ->
             except BaseException:
                 pass
 
-def ready() -> tuple[bool, str]:
-    """Is Ollama up with both models pulled? Checked before each pass so a stopped Ollama app
-    doesn't burn every queued mission's attempts and park them all."""
+def connection(timeout: float = 2) -> dict:
+    """What the Ollama connection offers: {"host", "ok", "error", "models": [{"name", "size"}], "loaded": {name: size}}.
+    Never raises, so the Settings page renders with Ollama closed."""
+    host = settings.ollama_host()
+    out = {"host": host, "ok": False, "error": "", "models": [], "loaded": {}}
     try:
-        names = {m.model for m in ollama.list().models}
+        client = ollama.Client(host=host, timeout=timeout)
+        out["models"] = sorted(({"name": m.model, "size": m.size or 0} for m in client.list().models),
+                               key=lambda m: m["name"])
+        out["loaded"] = {m.model: m.size or 0 for m in client.ps().models}
+        out["ok"] = True
     except Exception as e:
-        return False, f"Ollama is not reachable ({type(e).__name__}); start the Ollama app"
-    for model in (MODEL, SEARCH_MODEL):
+        out["error"] = type(e).__name__
+    return out
+
+def ready() -> tuple[bool, str]:
+    """Is Ollama up with every working model pulled? Checked before each pass so a stopped Ollama app
+    doesn't burn every queued mission's attempts and park them all."""
+    missing = settings.missing_models()
+    if missing:
+        who = " and ".join(f"the {settings.WORKERS[w]}" for w in missing)
+        return False, f"no model chosen for {who}; pick one on the Settings page (or set it in .env)"
+    host = settings.ollama_host()
+    try:
+        names = {m.model for m in ollama.Client(host=host, timeout=10).list().models}
+    except Exception as e:
+        return False, f"Ollama is not reachable at {host} ({type(e).__name__}); start the Ollama app"
+    working = [w for w in settings.WORKERS if settings.worker_on(w)]
+    for w in working:
+        model = settings.worker_model(w)
         if model not in names:
-            return False, f"model {model} is not pulled; run: ollama pull {model}"
-    return True, f"{MODEL} + {SEARCH_MODEL}"
+            return False, f"model {model} ({settings.WORKERS[w]}) is not pulled; run: ollama pull {model}"
+    return True, " + ".join(f"{settings.worker_model(w)} ({settings.WORKERS[w]})" for w in working) \
+        + (", in parallel" if len(working) > 1 else "")

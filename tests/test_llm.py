@@ -44,7 +44,7 @@ class FakeClient:
 
 def use(monkeypatch, **kw):
     FakeClient.sent = []
-    monkeypatch.setattr(llm.ollama, "AsyncClient", lambda: FakeClient(**kw))
+    monkeypatch.setattr(llm.ollama, "AsyncClient", lambda host=None: FakeClient(**kw))
 
 def chunk(text, done_reason=None):
     return ChatResponse(message=Message(role="assistant", content=text),

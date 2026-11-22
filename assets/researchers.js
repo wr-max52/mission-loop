@@ -3,7 +3,10 @@
  * random schedule: the first visitor turns up after a random wait, walks in from a side, stays 15-30
  * seconds doing comic researcher things, walks off, and after a random 10-20 second gap the next one comes.
  * Never more than two are on the page at once; stages that have waited longest go first. Visitors are
- * drawn from a shuffled roster, so every character gets a turn before anyone repeats.
+ * drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every character
+ * belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones to the
+ * Principal Investigator), and a stage tagged with data-worker only gets visitors from that worker's crew.
+ * On the Settings page each worker's card has its whole crew standing about (a "crew" stage).
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -65,47 +68,49 @@ const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c
 
 // Each character keeps their look (outfit, hair, headwear, signature prop); height, build and some
 // colors vary per visit. `fav` boosts the actions they're known for; everything else can still happen.
+// `worker` is whose crew they're in: "assistant" (young, the small model) or "pi" (tenured, the big model).
 const ROSTER = {
-  aris:   { name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "mustache",
+  aris:   { worker: "pi", name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "mustache",
             brows: true, outfit: "labcoat", shirt: ["#5b7fa6", "#6c8fb8"], pants: ["#3a3a40"], shoes: ["#6b3e26"],
             prop: "tablet", fav: { read: 2, citation: 2.5, notes: 1.5 } },
-  aisha:  { name: "Aisha", skin: [5, 6, 4, 3], head: "hijab", hijab: ["#1f3a5f", "#2d2d4a", "#4a2240", "#1e4d4a"],
+  aisha:  { worker: "pi", name: "Aisha", skin: [5, 6, 4, 3], head: "hijab", hijab: ["#1f3a5f", "#2d2d4a", "#4a2240", "#1e4d4a"],
             outfit: "abaya", top: ["#a9cbe8", "#c4b5e0", "#b5d8c6"], pants: ["#2c3e57"], shoes: ["#2b2b30"],
             prop: "tablet", fav: { notes: 2.5, search: 1.5, typing: 1.5 } },
-  ben:    { name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short",
+  ben:    { worker: "assistant", name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short",
             outfit: "sweater", top: ["#7d8691", "#5f7f6b", "#8a6f5a"], pants: ["#c8b48a", "#b5a27a"],
             shoes: ["#6b3e26"], pack: ["#6b4a2e", "#3d5a80"], prop: null, fav: { stack: 3, telescope: 1.5, eureka: 1.5 } },
-  mei:    { name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "glasses",
+  mei:    { worker: "assistant", name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "glasses",
             outfit: "labcoat", shirt: ["#6f8fb3", "#8aa3c2"], pants: ["#2c3340"], shoes: ["#2b2b30"],
             prop: "laptop", fav: { typing: 3, read: 1.5, scroll: 1.5 } },
-  sam:    { name: "Sam", skin: [2, 3, 4], hair: ["#1d1d1d"], style: "short", head: "cap", cap: ["#2f3640", "#3d3d55", "#7a2e3b"],
+  sam:    { worker: "assistant", name: "Sam", skin: [2, 3, 4], hair: ["#1d1d1d"], style: "short", head: "cap", cap: ["#2f3640", "#3d3d55", "#7a2e3b"],
             outfit: "hoodie", top: ["#7a7f87", "#5c6370", "#6b5b7b"], pants: ["#4a78b5", "#3c5a99"], shoes: ["#e8e8e8"],
             prop: "phone", fav: { typing: 2.5, confused: 1.5, citation: 1.5 } },
-  evelyn: { name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly",
+  evelyn: { worker: "pi", name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly",
             outfit: "cardigan", top: ["#8a5a3c", "#6e5a8a", "#4f6e5a"], shirt: ["#efe6d6"], legs: "skirt",
             skirt: ["#2f3640", "#3a2f40"], pants: ["#d8b89a"], shoes: ["#6b3e26"], prop: "book",
             fav: { read: 3, coffee: 2, sleep: 1.5 } },
-  david:  { name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit",
+  david:  { worker: "pi", name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit",
             top: ["#22346b", "#2b2e38", "#3b3f48"], tie: ["#e8e8e8", "#c0392b", "#d4a017"], shoes: ["#2b2b30"],
             prop: ["briefcase", "tablet"], fav: { citation: 2, papers: 2, notes: 1.5 } },
-  javier: { name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", head: "hardhat", outfit: "vest",
-            shirt: ["#9cc3e6", "#a8b8c8"], pants: ["#3a4250"], shoes: ["#6b3e26"], prop: null,
+  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", outfit: "overalls",
+            shirt: ["#b5473a", "#5f7f6b", "#e8e4da", "#8a6f9e"], pants: ["#3f5f8a", "#4a6f9e"], shoes: ["#6b3e26"], prop: null,
             fav: { dig: 3.5, search: 1.5, telescope: 1 } },
-  hanna:  { name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
+  hanna:  { worker: "assistant", name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
             beanie: ["#5d6b55", "#7a4a4a", "#45556b"], outfit: "jacket", top: ["#566152", "#4a5568", "#6b5a45"],
             pants: ["#4a6f9e"], shoes: ["#e8e8e8"], pack: ["#3a3f45", "#5a3f2e"], prop: "laptop",
             fav: { typing: 2, telescope: 1.5, scroll: 1.5 } },
-  kenji:  { name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "glasses", outfit: "labcoat",
+  kenji:  { worker: "pi", name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "glasses", outfit: "labcoat",
             shirt: ["#5a7fa6", "#4f6d8a"], pants: ["#2f3640"], shoes: ["#2b2b30"], prop: "camera",
             fav: { search: 2.5, telescope: 2, eureka: 1.5 } },
-  quill:  { name: "Det. Quill", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: NATURAL_HAIR, style: "short", head: "deerstalker",
+  quill:  { worker: "pi", name: "Det. Quill", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: NATURAL_HAIR, style: "short", head: "deerstalker",
             outfit: "trench", top: ["#b8925a", "#a07c4c"], pants: ["#3a3a40"], shoes: ["#5d4037"], prop: "magnifier",
             facial: ["mustache", null], fav: { search: 4, confused: 1.5 } },
-  pip:    { name: "Intern Pip", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: ["#c9572d", "#e1c27f", "#17110e"], style: "spiky",
+  pip:    { worker: "assistant", name: "Intern Pip", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: ["#c9572d", "#e1c27f", "#17110e"], style: "spiky",
             head: "propeller", outfit: "tshirt", top: ["#e84393", "#0abde3", "#f39c12", "#27ae60"], pants: ["#556b2f", "#34495e"],
             shoes: ["#c0392b", "#e8e8e8"], prop: "mug", fav: { papers: 2.5, coffee: 2.5, stack: 1.5 } },
 };
 const CAST = Object.keys(ROSTER);
+const crewOf = worker => CAST.filter(k => !worker || ROSTER[k].worker === worker);
 
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
@@ -128,7 +133,7 @@ function makeLook(kind, seed) {
   a.hijab = one(t.hijab) || "#1f3a5f"; a.cap = one(t.cap) || "#2f3640"; a.beanie = one(t.beanie) || "#5d6b55";
   a.prop = one(t.prop) || null;
   a.sleeve = { labcoat: a.coat, suit: a.top, hoodie: a.top, sweater: a.top, cardigan: a.top, jacket: a.top,
-               abaya: a.top, trench: a.top, vest: a.shirt, tshirt: a.top }[a.outfit] || a.top;
+               abaya: a.top, trench: a.top, vest: a.shirt, overalls: a.shirt, tshirt: a.top }[a.outfit] || a.top;
   a.sleeveD = shade(a.sleeve, 0.78);
   a.short = a.outfit === "tshirt";            // short sleeves
   a.legs = 11 + Math.floor(r() * 7);          // 11..17 px: short to lanky
@@ -224,6 +229,15 @@ function drawTorso(P, a, g) {
       P(tl + 1, hip, W - 2, T - 2, "#ff8a1a"); P(-1, hip, 2, T - 2, "#e5741a");
       P(tl + 1, hip + 3, W - 2, 2, "#ffe14d"); P(-4, hip + 5, 2, T - 7, "#ffe14d"); P(2, hip + 5, 2, T - 7, "#ffe14d");
       break;
+    case "overalls": {                                             // a shirt under a denim bib and straps
+      const bib = T - 5;
+      plain(a.shirt, a.shirtD);
+      P(tl + 1, hip, W - 2, bib, a.pants); P(tl + 1, hip, 2, bib, a.pantsD);
+      P(-3, hip + bib, 2, 5, a.pants); P(2, hip + bib, 2, 5, a.pants);
+      P(-3, hip + bib - 1, 1, 1, "#d8b36a"); P(3, hip + bib - 1, 1, 1, "#d8b36a");   // brass buttons
+      P(-1, hip + 2, 3, 2, a.pantsD);                                                // bib pocket
+      break;
+    }
     case "jacket":
       plain(a.top, a.topD);
       P(0, hip, 1, T, a.topD); P(-2, sh - 1, 5, 2, a.topD); P(tr - 4, hip + 2, 3, 1, a.topD);
@@ -870,18 +884,22 @@ const MOODS = {
              stack: 1, typing: 1, search: 1, scroll: 1, dig: 0.6 },
   // the loop is off: nothing is moving, so mostly naps
   idle: { idle: 2, sleep: 4, coffee: 2, read: 1, confused: 0.6, telescope: 0.4 },
+  // standing by their worker's card on the Settings page: mostly still, now and then a little bit of business
+  crew: { idle: 6, read: 1.2, notes: 1, coffee: 1.2, typing: 0.8, citation: 0.6, scroll: 0.6, confused: 0.4,
+          eureka: 0.4, telescope: 0.4, sleep: 0.5 },
 };
 
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
 const BAG = "researcher:bag";
-function nextCharacter(busy) {
-  let bag = (memory.get(BAG) || []).filter(k => ROSTER[k]);
-  if (!bag.length) bag = shuffle(CAST);
+function nextCharacter(busy, worker) {           // worker: only that crew; none: anyone
+  const key = BAG + (worker ? ":" + worker : ""), crew = crewOf(worker);
+  let bag = (memory.get(key) || []).filter(k => crew.includes(k));
+  if (!bag.length) bag = shuffle(crew);
   let i = bag.findIndex(k => !busy.has(k));      // skip anyone already on stage elsewhere
   if (i < 0) i = 0;
   const [kind] = bag.splice(i, 1);
-  memory.set(BAG, bag);
+  memory.set(key, bag);
   return kind;
 }
 
@@ -897,10 +915,12 @@ class Researcher {
     this.face = carry && carry.face ? carry.face : (this.rand() < 0.5 ? 1 : -1);
     this.y = 0; this.alpha = 1; this.squash = 1; this.tilt = 0; this.caffeine = 0;
     this.bubble = null; this.badge = null; this.headTop = 48; this.topY = 52; this.prev = null; this.clock = 0;
-    this.quipIn = between(this.rand, 4, 9);
+    this.quipIn = stage.mood === "crew" ? between(this.rand, 6, 40) : between(this.rand, 4, 9);
     this.begin(carry ? "idle" : "spawn");
   }
-  say(text, dur) { this.bubble = { text, t: 0, dur: dur || readTime(text), y: null, lines: null }; }
+  say(text, dur) {
+    if (this.stage.kind === "crew" && this.stage.talking(this)) return;   // a crew takes turns to speak
+    this.bubble = { text, t: 0, dur: dur || readTime(text), y: null, lines: null }; }
   quip(key) {                                    // a line for the bit, or one from the big library
     const own = QUOTES[key];
     this.say(own && this.rand() < 0.4 ? pick(this.rand, own) : nextQuip());
@@ -913,9 +933,9 @@ class Researcher {
   chooseNext() {
     if (this.next) { const [n, o] = this.next; this.next = null; return this.begin(n, o); }
     const after = this.act.name;
-    if (after !== "walk" && after !== "stack" && this.rand() < 0.55) return this.begin("walk");
+    if (after !== "walk" && after !== "stack" && this.rand() < (this.mood === "crew" ? 0.18 : 0.55)) return this.begin("walk");
     const table = Object.assign({}, MOODS[this.mood] || MOODS.busy);
-    for (const k in this.a.fav) if (k in table || this.mood !== "idle") table[k] = (table[k] || 0.5) * this.a.fav[k];
+    for (const k in this.a.fav) if (k in table || !["idle", "crew"].includes(this.mood)) table[k] = (table[k] || 0.5) * this.a.fav[k];
     delete table[after];
     this.begin(weighted(this.rand, table));
   }
@@ -934,7 +954,7 @@ class Researcher {
     if (this.bubble && (this.bubble.t += dt) > this.bubble.dur) this.bubble = null;
     if (this.badge && (this.badge.t += dt) > this.badge.dur) this.badge = null;
     if ((this.quipIn -= dt) <= 0) {               // now and then, an unprompted remark
-      this.quipIn = between(this.rand, 8, 16);
+      this.quipIn = this.mood === "crew" ? between(this.rand, 25, 60) : between(this.rand, 8, 16);
       if (!this.bubble && !this.badge && !this.leaving && ["walk", "idle"].includes(this.act.name)) this.say(nextQuip());
     }
     const act = this.act;
@@ -960,8 +980,10 @@ const stages = [];
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "pill" ? "pill" : host.getAttribute("href"));
-    this.mood = kind === "pill" ? "busy" : host.dataset.lab || "busy";
+    this.key = "researcher:" + (kind === "pill" ? "pill" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href"));
+    this.mood = kind === "pill" ? "busy" : kind === "crew" ? "crew" : host.dataset.lab || "busy";
+    const lit = kind === "pill" && host.querySelector(".agent.on[data-worker]");
+    this.worker = (lit ? lit.dataset.worker : host.dataset.worker) || null;   // whose crew visits
     this.canvas = document.createElement("canvas");
     this.canvas.className = "lab-stage";
     this.canvas.setAttribute("aria-hidden", "true");
@@ -1039,6 +1061,7 @@ class Stage {
     const t = now();
     let rec = memory.get(this.key);
     if (rec && (!(rec.life <= LIFE_MAX) || !ROSTER[rec.kind])) rec = null;
+    if (rec && rec.kind && this.worker && ROSTER[rec.kind].worker !== this.worker) rec = null;   // the step changed hands
     const out = stages.filter(s => s !== this && s.resident).length;
     if (rec && t < rec.born + rec.life - 1 && out < MAX_ON_STAGE) this.spawn(rec, true);
     else if (rec && rec.next && t < rec.next) this.nextAt = rec.next;
@@ -1047,7 +1070,7 @@ class Stage {
   spawn(rec, resume) {
     if (!rec) {
       const busy = new Set(stages.filter(s => s !== this && s.resident).map(s => s.resident.a.kind));
-      rec = { kind: nextCharacter(busy), seed: Math.floor(Math.random() * 2 ** 31), born: now(),
+      rec = { kind: nextCharacter(busy, this.worker), seed: Math.floor(Math.random() * 2 ** 31), born: now(),
               life: between(Math.random, LIFE_MIN, LIFE_MAX) };
       memory.set(this.key, rec);
     }
@@ -1196,6 +1219,46 @@ class Stage {
   }
 }
 
+// ---------- a crew: a worker's whole cast standing about on its Settings card ----------
+
+class Crew extends Stage {
+  constructor(host) {
+    super(host, "crew");
+    const crew = crewOf(host.dataset.crew);
+    this.slots = crew.map((kind, i) => {
+      const slot = Object.create(this);          // each researcher keeps to its own patch of floor
+      slot.range = () => { const w = (this.W || 320) / crew.length; return [w * i + 10, w * (i + 1) - 10]; };
+      const seed = [...kind].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0;
+      const [lo, hi] = slot.range();
+      const r = new Researcher(slot, { kind, seed }, { x: (lo + hi) / 2, face: i < crew.length / 2 ? 1 : -1 });
+      r.act.t = -Math.random() * 3;               // so they don't all fidget in step
+      return r;
+    });
+    host.addEventListener("mouseenter", () => this.slots.length && pick(Math.random, this.slots).poke());
+  }
+  schedule() {}                                   // always on stage: nobody visits, nobody leaves
+  talking(who) { return (this.slots || []).some(r => r !== who && (r.bubble || r.badge)); }
+  layout() {
+    super.layout();
+    for (const r of this.slots || []) { const [lo, hi] = r.stage.range(); r.x = clamp(r.x, lo, hi); }
+  }
+  update(dt) {
+    for (const r of this.slots) r.update(dt);
+    this.resident = null;
+    super.update(dt);                             // effects and marks
+  }
+  draw() {
+    const ctx = this.ctx, k = this.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    for (const r of this.slots) if (r.pose) this.drawResearcher(ctx, r);
+    for (const p of this.fx) this.drawFx(ctx, p);
+    for (const r of this.slots) this.drawOverlay(ctx, r);
+  }
+}
+
 const BUBBLE_FONT = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace", BUBBLE_MAX = 232;
 // Greedy word wrap; a word too long for a line gets broken rather than spilling out of the bubble.
 function wrapText(ctx, text, max) {
@@ -1226,14 +1289,17 @@ function admit() {
   for (const s of ready) { if (free-- <= 0) break; s.spawn(); }
 }
 
+const crews = [];
 function boot() {
   document.querySelectorAll(".card[data-lab]").forEach(c => stages.push(new Stage(c, "card")));
   const strip = document.querySelector(".agents[data-lab]");
   if (strip && strip.querySelector(".agent.on")) stages.push(new Stage(strip, "pill"));
-  if (!stages.length) return;
+  document.querySelectorAll(".crew[data-crew]").forEach(c => crews.push(new Crew(c)));
+  if (!stages.length && !crews.length) return;
   addEventListener("pagehide", () => stages.forEach(s => s.save()));
   if (REDUCE) {                                   // one still researcher per stage, no wandering
     stages.slice(0, MAX_ON_STAGE).forEach(s => { if (!s.resident) s.spawn(null, true); s.resident.update(0); s.draw(); });
+    crews.forEach(c => { c.slots.forEach(r => r.update(0)); c.draw(); });
     return;
   }
   let last = performance.now();
@@ -1241,10 +1307,11 @@ function boot() {
     const dt = clamp((t - last) / 1000, 0, 0.05); last = t;
     admit();
     for (const s of stages) { s.update(dt); s.draw(); }
+    for (const c of crews) { c.update(dt); c.draw(); }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 }
-window.Researchers = { stages, ROSTER, makeLook, ACTIONS, Stage, Researcher };   // handy from the console
+window.Researchers = { stages, crews, ROSTER, makeLook, ACTIONS, Stage, Researcher, Crew };   // handy from the console
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

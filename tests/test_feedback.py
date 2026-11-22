@@ -30,7 +30,7 @@ def test_requeue_revives_parked_mission():
 def test_research_crash_counts_as_failed_attempt(monkeypatch):
     import agents
     def boom(m, now): raise RuntimeError("ollama is not running")
-    monkeypatch.setattr(agents, "research", boom)
+    monkeypatch.setattr(agents, "gather", boom)
     store.save_mission(Mission(slug="c", topic="x"))
     orchestrator.run_until_idle(lambda: T0)
     m = store.get_mission("c")
@@ -54,13 +54,13 @@ def test_passing_brief_clears_the_rejected_one(monkeypatch):
 def test_crash_keeps_the_rejected_brief_and_its_notes(monkeypatch):
     import agents
     from agents import stubs
-    results = iter([stubs.research, RuntimeError("ollama is not running")])
-    def flaky(m, now):
+    results = iter([stubs.write_brief, RuntimeError("ollama is not running")])
+    def flaky(*args):
         result = next(results)
         if isinstance(result, Exception):
             raise result
-        return result(m, now)
-    monkeypatch.setattr(agents, "research", flaky)
+        return result(*args)
+    monkeypatch.setattr(agents, "write_brief", flaky)
     monkeypatch.setattr(agents, "validate", lambda m, brief: (False, "s1: quote not found"))
     store.save_mission(Mission(slug="cr", topic="x", max_attempts=2))
     orchestrator.run_until_idle(lambda: T0)
@@ -109,7 +109,7 @@ def test_push_through_only_from_parked():
 def test_push_through_needs_a_draft(monkeypatch):
     import agents
     def boom(m, now): raise RuntimeError("ollama is not running")
-    monkeypatch.setattr(agents, "research", boom)
+    monkeypatch.setattr(agents, "gather", boom)
     store.save_mission(Mission(slug="c", topic="x"))
     orchestrator.run_until_idle(lambda: T0)
     with pytest.raises(ValueError, match="no failed brief"):

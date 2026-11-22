@@ -57,7 +57,7 @@ async def test_tool_loop_then_brief(monkeypatch):
     assert brief.thesis.startswith("Stub thesis")
     assert FakeToolbox.calls == [("search", {"query": "heat pumps"})]
     assert seen[-1]["format"] is not None         # final call asks for the JSON schema
-    assert [c["model"] for c in seen] == [llm.SEARCH_MODEL, llm.SEARCH_MODEL, None]   # small model searches, main model writes
+    assert [c["model"] for c in seen] == [llm.model_for("assistant"), llm.model_for("assistant"), None]   # small model searches, main model writes
 
 async def test_tool_budget_is_enforced(monkeypatch):
     replies = [tool_call("search", query=str(i)) for i in range(100)]
@@ -163,7 +163,7 @@ async def test_outreach_runs_contacts_separately_and_checks_them(monkeypatch):
     brief = await research_mod.run_research(M, toolbox_factory=FakeToolbox)
     assert "separate run finds them" in prompts[0][0]                 # sources run doesn't hunt contacts
     assert "finding people to interview" in prompts[2][0]             # contacts run has its own prompt
-    assert [model for _, model in prompts] == [llm.SEARCH_MODEL] * 5 + [None]
+    assert [model for _, model in prompts] == [llm.model_for("assistant")] * 5 + [None]
     assert brief.pocs == POCS                                         # the checked contacts, set by code
 
 async def test_unverified_contacts_stop_before_the_main_model(monkeypatch):
@@ -172,7 +172,7 @@ async def test_unverified_contacts_stop_before_the_main_model(monkeypatch):
     seen = script(monkeypatch, [text("DONE"), text("DONE"), text(CONTACTS_JSON), text(BRIEF_JSON)])
     with pytest.raises(research_mod.ResearchFailed, match="only 1 verified contact"):
         await research_mod.run_research(M, toolbox_factory=FakeToolbox)
-    assert all(c["model"] == llm.SEARCH_MODEL for c in seen)          # the main model was never called
+    assert all(c["model"] == llm.model_for("assistant") for c in seen)          # the main model was never called
 
 def test_source_finder_limit_is_15_minutes():
     assert research_mod.SOURCE_TIME_LIMIT == 15 * 60

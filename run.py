@@ -204,11 +204,16 @@ def show(slug: str):
 
 @app.command(name="join-1f916")
 def join_1f916(handle: str = typer.Argument(..., help="2-32 letters, digits, _ or -; permanent and public"),
-               model: str = typer.Option(None, help="Self-declared model id; defaults to the writing model")):
-    """Register our citizen on 1f916.ai once and save its secret key to data/1f916.json (stays on this machine)."""
+               model: str = typer.Option(None, help="Self-declared model id; defaults to the writing model"),
+               server: str = typer.Option(None, help="1F916 server to join; defaults to the configured one")):
+    """Register our citizen on 1F916 once and save its secret key, with its server, to data/1f916.json (stays on
+    this machine). The server comes from config: --server (saved), the Settings page, MISSION_LOOP_1F916_URL, or 1f916.ai."""
+    import settings
     from agents import f916
+    if server:
+        settings.set_f916_url(server)
     if not model:
-        from agents.llm import MODEL as model
+        model = settings.model_for("pi") or "unknown"
     try:
         me = f916.register(handle, model)
     except (FileExistsError, RuntimeError) as e:

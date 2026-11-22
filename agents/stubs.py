@@ -1,4 +1,4 @@
-from contracts import Mission, MissionIdea, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
+from contracts import Evidence, Mission, MissionIdea, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
 
 def find_missions(inspiration: str, topics: list[str], now=None, epics=None) -> list[MissionIdea]:
     return [MissionIdea(topic=f"Stub lead {len(topics) + 1} from {inspiration}",
@@ -20,6 +20,12 @@ def research(m: Mission, now=None) -> ResearchBrief:
               for i in range(1, 4)],
         question_for_pocs="What is your take on this thesis?",
     )
+
+def gather(m: Mission, now=None) -> Evidence:
+    return Evidence(messages=[{"role": "system", "content": f"stub sources for {m.topic}"}])
+
+def write_brief(m: Mission, evidence: Evidence, now=None) -> ResearchBrief:
+    return research(m, now)
 
 def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     if "FAIL" in m.topic:

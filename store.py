@@ -65,6 +65,10 @@ def save_artifact(slug: str, kind: str, obj):
     with conn() as c:
         c.execute("INSERT OR REPLACE INTO artifacts VALUES (?, ?, ?)", (slug, kind, data))
 
+def delete_artifact(slug: str, kind: str):
+    with conn() as c:
+        c.execute("DELETE FROM artifacts WHERE slug = ? AND kind = ?", (slug, kind))
+
 def load_artifact(slug: str, kind: str):
     row = conn().execute(
         "SELECT data FROM artifacts WHERE slug = ? AND kind = ?", (slug, kind)).fetchone()
