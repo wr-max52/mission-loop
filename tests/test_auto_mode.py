@@ -122,7 +122,7 @@ def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypa
         ("publisher", "agent")]
     html = track(client.get("/").text)
     assert '<a class="human propose waiting" href="/#needs-you" data-step="epic_review"' in html
-    assert "Whatever fails is dropped; nothing is parked." in html               # the desk's checks park nothing
+    assert "Failures are dropped." in html               # the desk's checks park nothing
     assert client.get("/api/flow").json()["waiting"]["epic_review"] == 1
     monkeypatch.setattr(settings, "OUTREACH", True)                              # contacts get their own check
     keys = [k for k, _ in steps(client.get("/").text)]

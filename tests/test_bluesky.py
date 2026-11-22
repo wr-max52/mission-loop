@@ -208,9 +208,9 @@ def test_check_bluesky_logs_in_without_posting(sky, capsys, monkeypatch):
 def test_ui_and_status_show_the_channel(sky, capsys):
     backlog("waiting")
     page = TestClient(ui.app).get("/published").text
-    assert "Bluesky: posting as <strong>loopdesk.bsky.social</strong>" in page and "1 queued" in page
-    assert "<strong>Bluesky</strong>: waiting, #1 of 1 in the queue" in page
-    assert "<strong>Bluesky</strong>: waiting" in TestClient(ui.app).get("/m/waiting").text
+    assert "Bluesky: <strong>loopdesk.bsky.social</strong>" in page and "1 queued" in page
+    assert "<strong>Bluesky</strong>: queued, #1 of 1" in page
+    assert "<strong>Bluesky</strong>: queued" in TestClient(ui.app).get("/m/waiting").text
     cli.status()
     assert "Bluesky as loopdesk.bsky.social: 1 queued" in capsys.readouterr().out
     run_at(T0)
@@ -219,7 +219,7 @@ def test_ui_and_status_show_the_channel(sky, capsys):
 def test_ui_says_how_to_turn_it_on_when_off():
     published("a", T0)
     client = TestClient(ui.app)
-    assert "No channels yet" in client.get("/published").text
+    assert "No channels" in client.get("/published").text
     html = client.get("/settings").text                # Add a channel: Bluesky
     assert "<strong>Bluesky</strong> · built in" in html and 'name="app_password"' in html
 
@@ -237,7 +237,7 @@ def test_settings_page_turns_bluesky_on_after_checking_the_login(sky_server):
                     follow_redirects=False)
     assert r.headers["location"] == "/settings?done=bluesky_on"
     assert agents.bluesky_enabled() and oct(bluesky.CRED_FILE.stat().st_mode & 0o777) == "0o600"
-    assert "posting as <strong>loopdesk.bsky.social</strong>" in client.get("/settings").text
+    assert "Bluesky: <strong>loopdesk.bsky.social</strong>" in client.get("/settings").text
     published("a", T0)
     assert on_bluesky("a") and len(sky_server.roots) == 1   # posted with the saved login
     client.post("/settings/bluesky", data={"forget": "1"})

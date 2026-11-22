@@ -118,6 +118,12 @@ def _limit(tb, name: str) -> int:
     server = getattr(tb, "server", {}).get(name)
     return MAX_WEB_CHARS if server and server != LOOP_SERVER else MAX_TOOL_CHARS
 
+def _language() -> str:
+    """The UI's language (Settings page), so replies come in it. English adds nothing."""
+    import settings
+    code = settings.language()
+    return "" if code == "en" else f"\nAlways answer in {settings.LANGUAGE_NAMES[code]}."
+
 def _history(history: list[dict] | None) -> list[dict]:
     turns = [h for h in history or [] if h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip()]
     return [{"role": h["role"], "content": str(h["content"])[:MAX_MESSAGE_CHARS]} for h in turns[-MAX_TURNS:]]
@@ -127,7 +133,8 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
     question = " ".join(question.split())[:MAX_MESSAGE_CHARS]
     if not question:
         return "Ask me what the loop is doing, or where a mission is."
-    messages = [{"role": "system", "content": SYSTEM}, *_history(history), {"role": "user", "content": question}]
+    messages = [{"role": "system", "content": SYSTEM + _language()}, *_history(history),
+                {"role": "user", "content": question}]
     model = model or default_model()
     factory = toolbox_factory or (lambda names: Toolbox(names, config_path=CONFIG))
     try:

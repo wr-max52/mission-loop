@@ -36,7 +36,7 @@ def test_dashboard_groups_missions(client):
     assert '<span>In progress</span><span class="n" data-n="1">1</span>' in html and "Queued topic" in html
     assert '<span>Queued</span><span class="n">1</span></h3>' in html         # grouped by workflow stage
     assert html.index("Needs you") < html.index("In progress") < html.index("Inspiration") < html.index("New mission")
-    assert "Loop is off" in html
+    assert "Loop off" in html
 
 def test_mission_page_shows_brief_and_actions(client):
     brief_ready()
@@ -90,14 +90,14 @@ def test_push_through_parked_brief(client):
     assert r.headers["location"] == "/m/p?done=pushed"
     html = client.get("/m/p").text
     assert store.get_mission("p").state == State.BRIEF_READY
-    assert "failing the source check" in html and "stub: forced failure" in html
+    assert "pushed through: failed source check" in html and "stub: forced failure" in html
     assert "failed the source check)" in html and 'action="/m/p/approve"' in html
     assert "error=state" in client.post("/m/p/push", follow_redirects=False).headers["location"]
 
 def test_push_through_parked_article(client):
     store.save_mission(Mission(slug="w", topic="BADARTICLE", approved=True))
     run_at(T0); run_at(T0 + timedelta(hours=48)); run_at(T0 + timedelta(hours=48))
-    assert "Last article that failed its check" in client.get("/m/w").text
+    assert "Last failed article" in client.get("/m/w").text
     client.post("/m/w/push")
     assert store.get_mission("w").state == State.ARTICLE_READY
     assert 'action="/m/w/publish"' in client.get("/m/w").text
@@ -108,7 +108,7 @@ def test_no_push_button_without_a_draft(client, monkeypatch):
     store.save_mission(Mission(slug="c", topic="x"))
     run_at(T0)
     html = client.get("/m/c").text
-    assert 'action="/m/c/push"' not in html and "no attempt left a finished brief" in html
+    assert 'action="/m/c/push"' not in html and "no finished brief" in html
     assert "error=state" in client.post("/m/c/push", follow_redirects=False).headers["location"]
 
 def test_add_mission_makes_slug_from_topic(client):
@@ -180,7 +180,7 @@ def test_dashboard_highlights_the_working_agent(client, monkeypatch):
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
     store.save_mission(Mission(slug="q", topic="Other topic"))
-    assert "No agent is working right now" in client.get("/").text
+    assert ">Idle<" in client.get("/").text
     before = ui.signature()
     activity.begin("b", "brief")
     html = client.get("/").text
@@ -188,10 +188,10 @@ def test_dashboard_highlights_the_working_agent(client, monkeypatch):
     assert '<span class="name">Brief</span><span class="sub">writes the brief</span>' in html
     assert html.count(' on" data-step') == 1 and html.count('class="card active"') == 1
     assert 'data-working="[{&quot;worker&quot;: &quot;desk&quot;, &quot;step&quot;: &quot;brief&quot;, &quot;slug&quot;: &quot;b&quot;}]"' in html
-    assert "Brief writer is working on this now." in html
+    assert "Brief writer working now" in html
     assert "Contact finder" not in html            # outreach is off
     assert ui.signature() != before                # open pages refresh when the agent changes
-    assert "Brief writer is working on this now." in client.get("/m/b").text
+    assert "Brief writer working now" in client.get("/m/b").text
     assert "working on this now" not in client.get("/m/q").text
 
 def test_stale_record_is_ignored_when_the_loop_is_off(client):
@@ -219,7 +219,7 @@ def test_status_colors_on_cards_and_pills(client):
 def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeypatch):
     """Agents on the track, code checks as blocks right after what they check, human reviews as sidesteps."""
     html = client.get("/").text
-    assert 'id="flow" class="flow off"' in html and "Loop is off, so every step is idle." in html
+    assert 'id="flow" class="flow off"' in html and "Loop off" in html
     assert '<script src="/assets/flow.js" defer></script>' in html
     track = html.split('class="flow-track"')[1].split("</section>")[0]
     order = re.findall(r'data-step="([a-z0-9_]+)"', track)

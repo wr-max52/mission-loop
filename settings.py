@@ -124,6 +124,19 @@ def animations() -> bool:
 def set_animations(on: bool) -> None:
     save(animations="" if on else "off")   # nothing stored while on, so a fresh install has them
 
+# The UI's language (i18n.py). English is the default and stores nothing; the published site stays English.
+LANGUAGES = {"en": "English", "zh": "中文", "fr": "Français", "es": "Español", "pt": "Português", "de": "Deutsch"}
+LANGUAGE_NAMES = {"en": "English", "zh": "Chinese", "fr": "French", "es": "Spanish", "pt": "Portuguese",
+                  "de": "German"}                   # in English, for the chat model's prompt
+
+def language() -> str:
+    return saved().get("language") if saved().get("language") in LANGUAGES else "en"
+
+def set_language(code: str) -> None:
+    if code not in LANGUAGES:
+        raise ValueError("not a language")
+    save(language="" if code == "en" else code)
+
 THEMES = ("system", "light", "dark")
 
 def theme() -> str:

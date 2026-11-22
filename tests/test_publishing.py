@@ -73,9 +73,9 @@ def test_nav_goes_to_the_published_page_which_leads_back(client, sky):
     assert '<a href="/published">' in client.get("/").text and 'href="/site/" target="_blank">' not in \
         client.get("/").text.split("</nav>")[0]
     html = client.get("/published").text
-    assert '<a class="back" href="/">&larr; Back to missions</a>' in html
+    assert '<a class="back" href="/">&larr; Missions</a>' in html
     assert '<a class="btn" href="/site/" target="_blank">Open the local site</a>' in html
-    assert "<strong>Local site</strong>: the foundation" in html and "<strong>Bluesky</strong>: waiting" in html
+    assert "<strong>Local site</strong>: always on" in html and "<strong>Bluesky</strong>: queued" in html
     assert 'action="/m/a/republish"' in html
     assert '<input type="checkbox" name="to" value="site" checked> Local site' in html
     assert '<input type="checkbox" name="to" value="bluesky" checked> Bluesky' in html   # not posted yet: ticked
@@ -127,7 +127,7 @@ def test_the_queue_is_on_the_published_page_with_one_card_on_the_missions_page(c
     run_at(T0 + timedelta(hours=1))
     run_at(T0 + timedelta(hours=2))
     assert "articles queued" not in client.get("/").text and "article queued" not in client.get("/").text
-    assert "Nothing waiting" in client.get("/published").text
+    assert "Nothing queued" in client.get("/published").text
 
 def test_publishing_again_needs_no_loop_and_leaves_the_backlog_to_it(client, sky, monkeypatch, publish_waits):
     backlog("old", "middle", "newer")
@@ -143,7 +143,7 @@ def test_publishing_again_needs_no_loop_and_leaves_the_backlog_to_it(client, sky
     assert on_bluesky("old") and len(sky.roots) == 2 and not store.get_mission("old").publish_requests
     assert Path("site/old/index.html").read_text() != "stale"
     assert not on_bluesky("middle")                    # nobody asked for it: it waits for the loop
-    assert "<strong>Bluesky</strong>: waiting" in client.get("/published").text
+    assert "<strong>Bluesky</strong>: queued" in client.get("/published").text
 
 def test_a_failed_request_without_the_loop_stays_requested(client, sky, monkeypatch, publish_waits):
     backlog("a")
@@ -222,7 +222,7 @@ def test_custom_channel_settings_are_checked(client):
                  {"name": "x", "kind": "folder", "target": "relative/dir", "format": "json"},
                  {"name": "x", "kind": "webhook", "target": "ftp://nope", "format": "json"},
                  {"name": "x", "kind": "carrier-pigeon", "target": "/tmp/x", "format": "json"}):
-        assert "Custom channel not added" in client.post("/settings/custom-channel", data=data).text
+        assert "Channel not added" in client.post("/settings/custom-channel", data=data).text
     assert settings.custom_channels() == []
     evil = {"origin": "https://evil.example"}
     assert client.post("/settings/custom-channel", data={"name": "x"}, headers=evil).status_code == 403

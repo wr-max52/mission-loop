@@ -323,7 +323,7 @@ def test_model_picker_lists_models_and_reports_ollama_down(monkeypatch):
     def down(): raise ConnectionError("no ollama")
     monkeypatch.setattr(ui.agents, "chat_catalog", down)
     data = client.get("/chat/models").json()
-    assert data["models"] == [default] and "Ollama isn't reachable" in data["error"] and default in data["crews"]
+    assert data["models"] == [default] and "Can't reach Ollama" in data["error"] and default in data["crews"]
 
 def test_panel_is_researcher_chat_with_a_guide_only_while_animations_are_on():
     client = TestClient(ui.app)

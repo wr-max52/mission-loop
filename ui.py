@@ -22,8 +22,9 @@ from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
 from icons import icon, CSS as ICON_CSS
-import flowchart
+import flowchart, i18n
 from flowchart import flow_steps
+from i18n import _, _n
 
 LOG = Path("data/loop.log")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
@@ -34,72 +35,74 @@ LABELS = {
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
 }
 MESSAGES = {
-    "approved": "Approved. The loop writes the article next.",
-    "published": "Marked for publishing. The loop publishes it next, before any research or writing.",
-    "rejected": "Sent back with your notes.",
-    "requeued": "Requeued. It starts again after the missions further along.",
-    "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
-    "added": "Mission added. The loop researches it after the missions further along.",
-    "inspired": "Inspiration saved. The mission finder works from it each time the loop has caught up.",
-    "uninspired": "Inspiration cleared. The mission finder and the Theorist are off.",
-    "thinking": "The Theorist goes next: as the loop's next run starts, or when you start the loop.",
+    "approved": "Brief approved.",
+    "published": "Article approved for publishing.",
+    "rejected": "Sent back with notes.",
+    "requeued": "Requeued.",
+    "pushed": "Pushed through to review.",
+    "added": "Mission added.",
+    "inspired": "Inspiration saved.",
+    "uninspired": "Inspiration cleared. Mission finder and Theorist off.",
+    "thinking": "Theorist runs next.",
     "started": "Loop started.",
-    "stopping": "Stop requested. The agent at work writes out what it has (2 minutes at most), then the loop exits.",
-    "woken": "The loop checks for work now.",
+    "stopping": "Stopping after the current task.",
+    "woken": "Checking for work.",
     "epic_set": "Epic saved.",
-    "epic_approved": "New epic approved.",
-    "epic_moved": "Missions moved to that epic.",
-    "epic_rejected": "Proposed epic rejected. Its missions went back to the epics they were in before.",
-    "epic_renamed": "Epic renamed. Published pages show the new name.",
-    "site_url_saved": "Site address saved. The feeds use full links now.",
-    "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
-    "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
-    "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
-    "every_saved": "Saved. The next loop you start rests that long between looks for work.",
-    "auto_on": "Auto mode on. Briefs and new epics are approved for you; articles still wait for you to publish them.",
-    "auto_off": "Auto mode off. Every brief and new epic waits for you again.",
-    "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
-    "animations_off": "Animations off. The Missions page stays still.",
+    "epic_approved": "Epic approved.",
+    "epic_moved": "Missions moved.",
+    "epic_rejected": "Epic rejected. Missions moved back.",
+    "epic_renamed": "Epic renamed.",
+    "site_url_saved": "Site address saved.",
+    "site_url_cleared": "Site address cleared.",
+    "bluesky_on": "Bluesky connected.",
+    "bluesky_off": "Bluesky disconnected.",
+    "every_saved": "Rest time saved. Applies when the loop next starts.",
+    "auto_on": "Auto mode on.",
+    "auto_off": "Auto mode off.",
+    "animations_on": "Animations on.",
+    "animations_off": "Animations off.",
     "theme_saved": "Appearance saved.",
+    "language_saved": "Language saved.",
     "chat_color_saved": "Chat colour saved.",
-    "ollama_saved": "LLM connection saved. Workers use the Ollama at that address from their next task.",
-    "worker_saved": "Worker saved. It takes its next task with that model.",
-    "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
-    "worker_off": "Worker off. The other worker does its steps, one task at a time.",
-    "joined": "Joined 1F916. Published articles post there from now on, one a day, newest first.",
-    "github_connected": "GitHub connected. Now pick the repo the site goes to.",
-    "github_linked": "Site linked. The site was pushed to GitHub; GitHub Pages takes a minute or two to put it online.",
-    "github_unlinked": "Site unlinked. The repo and the site stay on GitHub; nothing is pushed there any more.",
-    "github_off": "GitHub disconnected. Its token was deleted from this machine; the repo and the site stay on GitHub.",
-    "github_app_saved": "GitHub OAuth app saved. Connect GitHub to sign in with it.",
-    "custom_added": "Custom channel added. Published articles go there from the next publishing pass, newest first.",
-    "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
-    "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
-    "republish_off": "Publishing now. The loop is off, so this page does it; the rest of each channel's backlog waits for the loop.",
+    "ollama_saved": "Ollama address saved.",
+    "worker_saved": "Model saved.",
+    "worker_on": "Worker on.",
+    "worker_off": "Worker off.",
+    "joined": "Joined 1F916.",
+    "github_connected": "GitHub connected. Choose a repo.",
+    "github_linked": "Repo linked and site pushed. Pages can take a few minutes.",
+    "github_unlinked": "Repo unlinked.",
+    "github_off": "GitHub disconnected.",
+    "github_app_saved": "OAuth client ID saved.",
+    "custom_added": "Channel added.",
+    "custom_removed": "Channel removed.",
+    "republish": "Publishing queued.",
+    "republish_off": "Publishing now.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
+    "language": "Pick a language from the list.",
     "chat_color": "That colour wasn't a #rrggbb colour.",
     "slug": "Short name: lowercase letters, numbers and dashes only.",
     "exists": "A mission with that short name already exists.",
-    "notes": "Say what needs fixing so the agent can act on it.",
-    "state": "That mission isn't waiting for that action any more.",
+    "notes": "Add notes on what to fix.",
+    "state": "That action no longer applies.",
     "running": "The loop is already running.",
-    "every": "Give the rest between looks for work in whole minutes.",
+    "every": "Enter whole minutes.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
-    "epic_target": "Pick a different, approved epic to move them to.",
-    "site_url": "The site address must be a full http:// or https:// address, or empty.",
+    "epic_target": "Pick a different approved epic.",
+    "site_url": "Enter a full http(s):// address, or leave it empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
-    "worker_model": "Pick a model the LLM connection has.",
-    "ollama_host": "The Ollama address must be a full http:// or https:// address, or empty for the default.",
-    "server": "A server address must be a full http:// or https:// address, or empty for the default.",
-    "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
-    "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
+    "worker_model": "Pick a model from the list.",
+    "ollama_host": "Enter a full http(s):// address, or leave it empty.",
+    "server": "Enter a full http(s):// address, or leave it empty.",
+    "worker_last": "At least one worker must stay on.",
+    "ollama": "Can't reach Ollama. Start it and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
-    "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
-    "places": "Tick at least one place to publish it to.",
+    "github_app": "That isn't a valid OAuth client ID.",
+    "places": "Pick at least one place.",
 }
 
 # ---------- loop status ----------
@@ -163,30 +166,32 @@ def tone(m: Mission) -> str:
 
 def label(m: Mission) -> str:
     if m.state == State.DONE and m.publish_requests:
-        return "Publishing again"
+        return _("Publishing again")
     if m.state == State.BRIEF_READY and m.approved:
-        return "Approved, writing next"
+        return _("Approved")
     if m.state == State.ARTICLE_READY and m.reviewed:
-        return "Publishing next"
-    return LABELS[m.state]
+        return _("Publishing next")
+    return _(LABELS[m.state])
 
 def next_step(m: Mission) -> str:
     if m.state == State.BRIEF_READY and not m.approved:
-        return "Read the brief, then approve it or send it back."
+        return _("Brief needs review")
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        return "Read the article, then publish it or send it back."
+        return _("Article needs review")
     if m.state == State.PARKED:
-        stage = "writing" if orchestrator.parked_while_writing(m) else "research"
-        then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
-        return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
+        stopped = (_("Stopped after {n} writing attempts") if orchestrator.parked_while_writing(m)
+                   else _("Stopped after {n} research attempts"))
+        return stopped.format(n=m.max_attempts)
     if m.state == State.RESEARCHING:
-        doing = "Writing the brief from its sources." if m.gathered or m.interrupted_brief else "Finding sources."
+        doing = _("Writing brief") if m.gathered or m.interrupted_brief else _("Finding sources")
         try_ = m.attempts if m.gathered or m.interrupted_brief else m.attempts + 1
-        return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
+        attempt = _("attempt {n} of {total}").format(n=try_, total=m.max_attempts)
+        return f"{doing} · {attempt}" if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
-        return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}."
+        attempt = _("attempt {n} of {total}").format(n=m.write_attempts + 1, total=m.max_attempts)
+        return f'{_("Writing")} · {attempt}'
     if m.state == State.DONE and m.publish_requests:
-        return "To " + ", ".join(orchestrator.channel_name(k) for k in m.publish_requests) + ", ahead of everything else."
+        return _("To {places}").format(places=", ".join(_(orchestrator.channel_name(k)) for k in m.publish_requests))
     return ""
 
 def in_progress(m: Mission) -> bool:
@@ -210,7 +215,13 @@ def _article(slug: str) -> Article | None:
 def working_on(m: Mission, now: list[dict]) -> str:
     """A line saying which agent is on this mission right now, or "" if none is."""
     e = next((e for e in now or [] if e["slug"] == m.slug), None)
-    return f'{activity.AGENTS[e["agent"]]} is working on this now.' if e else ""
+    return _("{agent} working now").format(agent=agent_name(e["agent"])) if e else ""
+
+def agent_name(agent: str) -> str:
+    return _(activity.AGENTS[agent])
+
+def worker_name(worker: str) -> str:
+    return _(settings.WORKERS[worker])
 
 def elapsed(since: float) -> str:
     seconds = max(0, int(time.time() - since))
@@ -559,14 +570,14 @@ def loop_button() -> str:
     has nothing to do); pause asks it to stop after the current agent saves its work."""
     every = settings.loop_every()
     if not loop_running():
-        action, ico, text, dot = "start", "play", "Loop off", ""
-        title = f"Start the loop. When it has nothing to do it rests {every:g} min (Settings) before looking again."
+        action, ico, text, dot = "start", "play", _("Loop off"), ""
+        title = _("Start the loop")
     elif orchestrator.STOP_FLAG.exists():
-        action, ico, text, dot = "", "pause", "Stopping", "stopping"
-        title = "Stopping: the agent at work saves what it has (2 minutes at most), then the loop exits."
+        action, ico, text, dot = "", "pause", _("Stopping"), "stopping"
+        title = _("Stopping after the current task")
     else:
-        action, ico, text, dot = "stop", "pause", "Running", "on"
-        title = "Pause the loop. The agent at work saves what it has (2 minutes at most), then the loop stops."
+        action, ico, text, dot = "stop", "pause", _("Running"), "on"
+        title = _("Pause the loop")
     button = (f'<button class="play {dot}" title="{escape(title)}" aria-label="{escape(title)}"'
               f' onclick="this.form.back.value = location.pathname"{"" if action else " disabled"}>{icon(ico)}</button>')
     return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
@@ -577,12 +588,11 @@ def loop_button() -> str:
 def auto_switch() -> str:
     """Auto mode, in the top bar on every page: approves every brief and proposed epic, never publishing."""
     on = settings.auto_mode()
-    title = ("Auto mode: the loop approves every brief and every proposed epic for you. "
-             "Publishing an article always waits for you.")
+    title = _("Auto-approve briefs and new epics. Articles still need you to publish.")
     return (f'<form class="auto" method="post" action="/auto"><input type="hidden" name="back" value="/">'
             f'<label class="switch" title="{escape(title)}"><input type="checkbox" role="switch" name="auto" value="on"'
             f'{" checked" if on else ""} onchange="this.form.back.value = location.pathname; this.form.submit()">'
-            f'<span>Auto</span></label></form>')
+            f'<span>{_("Auto")}</span></label></form>')
 
 def html_attrs() -> str:
     """The theme and chat colour from the Settings page, on <html> so they apply before first paint. "system"
@@ -631,22 +641,32 @@ async function refresh() {{
   return true;
 }}
 </script>{ELAPSED_JS}""" if poll else ""
-    html = (f'<!doctype html><html lang="en"{html_attrs()}><head><meta charset="utf-8">'
+    html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title><style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
-            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/published">{ICON_SITE}Published</a>'
-            f'<a href="/settings">{ICON_SETTINGS}Settings</a></span></nav>'
-            f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
+            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
+            f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
+            f'<a href="/settings">{ICON_SETTINGS}{_("Settings")}</a></span></nav>'
+            f"{body}</main>{js_strings()}{i18n.lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
     return HTMLResponse(html)
+
+JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
+              "No answer. Is the UI still running?", "{n} parked here"]
+
+def js_strings() -> str:
+    """The few strings the page's scripts show, in the UI's language (window.I18N; English needs none)."""
+    if i18n.current() == "en":
+        return ""
+    table = {s: _(s) for s in JS_STRINGS}
+    return f"<script>window.I18N = {json.dumps(table, ensure_ascii=False).replace('</', '<\\/')};</script>"
 
 def flash(request: Request) -> str:
     done, err = request.query_params.get("done"), request.query_params.get("error")
     if err in ERRORS:
-        return f'<div class="flash err">{escape(ERRORS[err])}</div>'
+        return f'<div class="flash err">{escape(_(ERRORS[err]))}</div>'
     if done in MESSAGES:
-        return f'<div class="flash">{escape(MESSAGES[done])}</div>'
+        return f'<div class="flash">{escape(_(MESSAGES[done]))}</div>'
     return ""
 
 def strip_step(agent: str) -> str:
@@ -654,21 +674,21 @@ def strip_step(agent: str) -> str:
     return "publisher" if agent in ("1f916", "github", "bluesky") else agent
 
 def doing(e: dict) -> str:
-    """What one working agent is doing, e.g. "Source finder is working on <topic> · 2m 3s"."""
+    """What one working agent is doing, e.g. "Source finder · <topic> · 2m 3s"."""
     since = f' · <span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>'
     if not e["slug"]:                      # the Theorist and the mission finder work for the desk, not one mission
-        task = "is looking across the desk for patterns" if e["agent"] == "theorist" else "is looking for new missions"
-        return f'<strong>{activity.AGENTS[e["agent"]]}</strong> {task}{since}'
+        task = _("all missions") if e["agent"] == "theorist" else _("new missions")
+        return f'<strong>{agent_name(e["agent"])}</strong> · {task}{since}'
     m = store.get_mission(e["slug"])
-    return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> is working on '
+    return (f'<strong>{agent_name(e["agent"])}</strong> · '
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
 def flow_status(now: list[dict], running: bool) -> str:
     """The lines under the strip: who is working on what, and for how long. With both workers busy,
     one line each, named."""
-    lines = [(f'<span class="who">{settings.WORKERS[e["worker"]]}</span> ' if e["worker"] in settings.WORKERS
+    lines = [(f'<span class="who">{worker_name(e["worker"])}</span> ' if e["worker"] in settings.WORKERS
               and len(now) > 1 else "") + doing(e) for e in now]
-    return "<br>".join(lines) or ("No agent is working right now." if running else "Loop is off, so every step is idle.")
+    return "<br>".join(lines) or (_("Idle") if running else "")   # the loop panel already says it is off
 
 def flow_state() -> dict:
     """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
@@ -684,7 +704,7 @@ def flow_state() -> dict:
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
-                     "name": activity.AGENTS[e["agent"]]} for e in now],
+                     "name": agent_name(e["agent"])} for e in now],
         "waiting": {"epic_review": len(store.all_epics("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
@@ -707,37 +727,35 @@ def flow_strip(state: dict) -> str:
     attrs = f'data-shape="{",".join(k + ("*" if kind == "auto" else "") for k, kind, _ in steps)}" ' \
             f'data-working="{escape(working, quote=True)}"'
     off = "" if state["running"] else " off"
-    return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
+    return (f'<section id="flow" class="flow{off}" {attrs} aria-label="{_("Pipeline")}">'
             f'<div class="flow-scroll"><div class="flow-track"{lab}>{track}</div></div>'
             f'<div class="now" aria-live="polite">{state["now"]}</div></section>')
 
 def loop_panel(back: str) -> str:
     running, stopping = loop_running(), orchestrator.STOP_FLAG.exists()
     if running and stopping:
-        state, dot = "Loop is stopping: saving the current work (2 minutes at most)", "stopping"
+        state, dot = _("Stopping after the current task"), "stopping"
         controls = ""
     elif running:
-        state, dot = "Loop is running. Pause it with the button at the top of the page", "on"
+        state, dot = _("Loop running"), "on"
         controls = (f'<form method="post" action="/loop/wake"><input type="hidden" name="back" value="{back}">'
-                    f'<button>Check for work now</button></form>')
+                    f'<button>{_("Check for work now")}</button></form>')
     else:
-        state, dot = ("Loop is off. Nothing will be researched, written or published until you press play at the "
-                      "top of the page"), ""
+        state, dot = _("Loop off. Press play at the top to start."), ""
         controls = ""
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
             f'{flow_strip(flow_state())}</div>{FLOW_JS}')
 
 def finder_panel() -> str:
     line = store.get_inspiration()
-    state = ("Each time the loop has caught up on its missions, the finder searches around this line and adds 1 to 3 "
-             "missions. The Theorist evolves it as the desk's work grows: questions only, keeping your words.") if line \
-        else "Off until you set a line."
-    think = ('<button formaction="/theorist" title="Look across the desk and evolve the line on the loop\'s next run">'
-             'Ask the Theorist</button>') if line else ""
-    return heading("brain", "Inspiration") + f"""<form method="post" action="/inspiration" class="actions">
-  <label for="inspiration" style="margin-top:0"><span class="hint">{state} Clear it to turn the finder and the Theorist off.</span></label>
-  <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="e.g. Who really decides what the Federal Reserve does?">
-  <p><button>Save inspiration</button>{think}</p>{theorist_notes()}
+    state = _("The mission finder searches from this line. Empty turns the finder and Theorist off.")
+    think = (f'<button formaction="/theorist" title="{escape(_("Run the Theorist on the next loop pass"))}">'
+             f'{_("Run Theorist")}</button>') if line else ""
+    example = escape(_("e.g. Who really decides what the Federal Reserve does?"), quote=True)
+    return heading("brain", _("Inspiration")) + f"""<form method="post" action="/inspiration" class="actions">
+  <label for="inspiration" style="margin-top:0"><span class="hint">{state}</span></label>
+  <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="{example}">
+  <p><button>{_("Save")}</button> {think}</p>{theorist_notes()}
 </form>"""
 
 def _when(at: str) -> str:
@@ -750,57 +768,58 @@ def theorist_notes() -> str:
         return ""
     parts = []
     if last.get("failed"):
-        parts.append(f'<p class="muted">Last turn {_when(last["at"])} failed: {escape(last["failed"])}</p>')
+        failed = _("Last run {when} failed: {error}").format(when=_when(last["at"]), error=escape(last["failed"]))
+        parts.append(f'<p class="muted">{failed}</p>')
     elif last:
-        parts.append(f'<p class="muted">Last turn {_when(last["at"])}. {escape(last.get("why", ""))}</p>')
+        parts.append(f'<p class="muted">{_("Last run {when}.").format(when=_when(last["at"]))} '
+                     f'{escape(last.get("why", ""))}</p>')
         if last.get("patterns"):
-            parts.append("<p>Patterns it saw:</p><ul>" + "".join(f"<li>{escape(p)}</li>" for p in last["patterns"])
+            parts.append(f'<p>{_("Patterns:")}</p><ul>' + "".join(f"<li>{escape(p)}</li>" for p in last["patterns"])
                          + "</ul>")
-        made = [f"proposed the epic <strong>{escape(t)}</strong> (waiting for you below)" for t in last.get("epics", [])]
+        made = [f'<li>{_("Proposed epic")} <strong>{escape(t)}</strong></li>' for t in last.get("epics", [])]
         m = store.get_mission(last["mission"]) if last.get("mission") else None
         if m:
-            made.append(f'proposed the mission <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>')
+            made.append(f'<li>{_("Proposed mission")} <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a></li>')
         if made:
-            parts.append(f"<p>It {', and '.join(made)}.</p>")
+            parts.append(f"<ul>{''.join(made)}</ul>")
         if last.get("notes"):
-            parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+            parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
     if history:
         rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
-                       f'{"you" if h.get("by") == "human" else "the Theorist"}:</span> '
-                       f'{escape(h.get("line") or "(cleared)")}</li>' for h in reversed(history))
-        parts.append(f"<p>The line over time, newest first:</p><ul>{rows}</ul>")
-    return f'<details><summary>{icon("bulb")}Theorist\'s notes</summary>{"".join(parts)}</details>'
+                       f'{_("you") if h.get("by") == "human" else _("Theorist")}:</span> '
+                       f'{escape(h.get("line") or _("(cleared)"))}</li>' for h in reversed(history))
+        parts.append(f'<p>{_("Line history, newest first:")}</p><ul>{rows}</ul>')
+    return f'<details><summary>{icon("bulb")}{_("Theorist\'s notes")}</summary>{"".join(parts)}</details>'
 
 
 def f916_status() -> str:
     """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
     if not agents.f916_enabled():
-        return ('1F916 is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
-                "or once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
+        return _("1F916 off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     queued, until, state = len(orchestrator.queue(f916)), f916.spent_until(), f916.load_state()
     if until and until > clock.now():
-        when = f"today's post is used; next one after {until:%b %-d %H:%M} UTC"
+        when = _("next post after {when} UTC").format(when=f"{until:%b %-d %H:%M}")
     else:
-        when = "can post now" if queued else "nothing waiting"
+        when = _("ready") if queued else _("nothing queued")
     problem = state.get("note", "") if not state.get("spent_until") else ""
-    line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong> on {escape(f916.api())}, one article a day, newest first · '
-            f"{queued} queued · {when}")
-    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+    line = (f'1F916: <strong>{escape(f916.key()["handle"])}</strong> {_("on")} {escape(f916.api())} · {_("1 per day")} · '
+            f'{_("{n} queued").format(n=queued)} · {when}')
+    return line + (f'<br><span class="hint">{_("Last error:")} {escape(problem)}</span>' if problem else "")
+
+def SETTINGS_LINK() -> str:
+    return f'<a href="/settings#publishing">{_("Settings")}</a>'
 
 def bluesky_status() -> str:
     """One line on the Bluesky channel: who we post as, how many wait, and the last failure if any."""
     if not agents.bluesky_enabled():
-        return ('Bluesky is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
-                "or set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env and run "
-                "<code>python run.py check-bluesky</code>.")
+        return _("Bluesky off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
-    server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f" on {escape(bluesky._service())}"
-    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, at most one article every 10 minutes, "
-            f"newest first · {queued} queued")
+    server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f' {_("on")} {escape(bluesky._service())}'
+    line = (f'Bluesky: <strong>{escape(bluesky.handle())}</strong>{server} · {_("max 1 per 10 min")} · '
+            f'{_("{n} queued").format(n=queued)}')
     if not settings.site_url():
-        line += ('<br><span class="hint">No hosted address for the site, so posts link to the 1F916 copy when there '
-                 "is one and otherwise carry no link.</span>")
-    return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+        line += f'<br><span class="hint">{_("No site address: posts link to 1F916, or nowhere.")}</span>'
+    return line + (f'<br><span class="hint">{_("Last error:")} {escape(problem)}</span>' if problem else "")
 
 def _link(url: str, text: str = "") -> str:
     return f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener">{escape(text or url)}</a>'
@@ -808,25 +827,25 @@ def _link(url: str, text: str = "") -> str:
 def github_status() -> str:
     """One line on the GitHub Pages channel: which repo, where the site is, the last push or failure."""
     if not agents.github_enabled():
-        return ('GitHub Pages is off. Connect GitHub on the <a href="/settings#publishing">Settings</a> page to put the site '
-                "online, so Bluesky posts link to each article.")
+        return _("GitHub Pages off. Set it up in {settings}.").format(settings=SETTINGS_LINK())
     state, repo = github.load_state(), github.repo()
-    line = (f"GitHub Pages: {_link(github.site_address())} from "
-            f"{_link(settings.github_url() + '/' + repo, repo)} · {len(orchestrator.queue(github))} queued")
+    line = (f'GitHub Pages: {_link(github.site_address())} {_("from")} '
+            f"{_link(settings.github_url() + '/' + repo, repo)} · "
+            f'{_("{n} queued").format(n=len(orchestrator.queue(github)))}')
     if state.get("at"):
-        line += f" · last push {escape(state['at'][:16].replace('T', ' '))}"
+        line += f' · {_("last push")} {escape(state["at"][:16].replace("T", " "))}'
     if state.get("pages_note"):
-        line += f'<br><span class="hint">To do: {escape(state["pages_note"])}</span>'
+        line += f'<br><span class="hint">{_("Action needed:")} {escape(state["pages_note"])}</span>'
     if state.get("note"):
-        line += f'<br><span class="hint">Last push failed: {escape(state["note"])}</span>'
+        line += f'<br><span class="hint">{_("Last push failed:")} {escape(state["note"])}</span>'
     return line
 def custom_status(c) -> str:
     """One line on a custom channel: what it sends where, and how many wait."""
     cfg = c.cfg
-    where = (f"POSTs to <code>{escape(urlparse(cfg['target']).netloc)}</code>" if cfg["kind"] == "webhook"
-             else f"writes files into <code>{escape(cfg['target'])}</code>")
-    fmt = settings.CUSTOM_FORMATS.get(cfg["format"], cfg["format"])
-    return f"{escape(c.NAME)}: {where} as {escape(fmt)}, newest first · {len(orchestrator.queue(c))} queued"
+    where = (f"{_('webhook')} <code>{escape(urlparse(cfg['target']).netloc)}</code>" if cfg["kind"] == "webhook"
+             else f"{_('folder')} <code>{escape(cfg['target'])}</code>")
+    fmt = _(settings.CUSTOM_FORMATS.get(cfg["format"], cfg["format"]))
+    return f'{escape(c.NAME)}: {where} · {escape(fmt)} · {_("{n} queued").format(n=len(orchestrator.queue(c)))}'
 
 def channel_status(c) -> str:
     if c.KEY == f916.KEY:
@@ -856,34 +875,33 @@ def places(m: Mission, queues: dict[str, list[str]] | None = None) -> list[dict]
             link = (f'<a href="{where}" target="_blank" rel="noopener">{where}</a>'
                     if post.where.startswith(("https://", "http://")) else
                     f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>' if key == "site" else where)
-            bits.append(f"{'written' if key == 'site' else 'posted'} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
+            bits.append(f"{_('written') if key == 'site' else _('posted')} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
         if key in m.publish_requests:
-            bits.append(f'<strong>publishing requested {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>, ahead of '
-                        "everything else")
+            bits.append(f'<strong>{_("requested")} {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>')
         elif not post and key in queues:
             slugs = queues[key]
-            bits.append(f"waiting, #{slugs.index(m.slug) + 1} of {len(slugs)} in the queue" if m.slug in slugs
-                        else "waiting for the feed to carry its text")
+            bits.append(_("queued, #{n} of {total}").format(n=slugs.index(m.slug) + 1, total=len(slugs))
+                        if m.slug in slugs else _("waiting for feed"))
         if m.channel_errors.get(key):
-            bits.append(f"refused the last try: {escape(m.channel_errors[key])}")
-        out.append({"key": key, "name": orchestrator.channel_name(key), "posted": bool(post),
-                    "on": key == "site" or key in queues, "status": " · ".join(bits) or "not posted"})
+            bits.append(f'{_("refused:")} {escape(m.channel_errors[key])}')
+        out.append({"key": key, "name": _(orchestrator.channel_name(key)), "posted": bool(post),
+                    "on": key == "site" or key in queues, "status": " · ".join(bits) or _("not posted")})
     return out
 
 def channel_names(m: Mission) -> str:
     """Where a published mission went, e.g. "Local site, 1F916"."""
-    return ", ".join(orchestrator.channel_name(k) for k in orchestrator.channels(m))
+    return ", ".join(_(orchestrator.channel_name(k)) for k in orchestrator.channels(m))
 
 def publish_form(m: Mission, rows: list[dict], back: str) -> str:
     """Publish a published article again: tick where. Places it hasn't reached yet are ticked already."""
     boxes = "".join(
         f'<label class="tick"><input type="checkbox" name="to" value="{escape(r["key"], quote=True)}"'
         f'{"" if r["posted"] and r["key"] != "site" else " checked"}> {escape(r["name"])}'
-        f'<span class="hint">{" (rewrite the page)" if r["key"] == "site" else " (again)" if r["posted"] else ""}</span></label>'
+        f'<span class="hint">{" " + _("(rebuild page)") if r["key"] == "site" else " " + _("(again)") if r["posted"] else ""}</span></label>'
         for r in rows if r["on"])
     return (f'<form method="post" action="/m/{quote(m.slug)}/republish" class="republish">'
             f'<input type="hidden" name="back" value="{escape(back, quote=True)}">{boxes}'
-            f'<button class="primary">Publish</button></form>')
+            f'<button class="primary">{_("Publish")}</button></form>')
 
 def places_html(m: Mission, rows: list[dict]) -> str:
     return "".join(f'<li><strong>{escape(r["name"])}</strong>: {r["status"]}</li>' for r in rows)
@@ -891,17 +909,17 @@ def places_html(m: Mission, rows: list[dict]) -> str:
 # ---------- settings: the two workers and the LLM connection ----------
 
 WORKER_BLURBS = {
-    "assistant": "Young, quick and tireless. Does the legwork: searching and reading pages, with the small model.",
-    "pi": "Tenured, slow and thorough. Does the thinking and the writing, with the big model.",
+    "assistant": "Small model. Searches and reads.",
+    "pi": "Big model. Thinks and writes.",
 }
 ROLE_STEPS = {                             # where each worker's model is used; the rest of the pipeline is code
-    "assistant": ["<strong>Source finder</strong>: searches the web and reads pages for each mission (up to 15 minutes)",
-                  "<strong>Mission finder</strong>: its searches around your inspiration line",
-                  "<strong>Contact finder</strong>: looks for people to interview (only while outreach is on)"],
-    "pi": ["<strong>Theorist</strong>: looks across every epic, post and mission and evolves your inspiration line",
-           "<strong>Brief writer</strong>: turns the gathered sources into the research brief",
-           "<strong>Article writer</strong>: writes the article from the approved brief",
-           "<strong>Mission finder</strong>: picks the new missions from what the searches found"],
+    "assistant": ["<strong>Source finder</strong>: searches and reads pages",
+                  "<strong>Mission finder</strong>: searches",
+                  "<strong>Contact finder</strong>: finds people (outreach only)"],
+    "pi": ["<strong>Theorist</strong>: refines the inspiration line",
+           "<strong>Brief writer</strong>: writes the brief",
+           "<strong>Article writer</strong>: writes the article",
+           "<strong>Mission finder</strong>: picks new missions"],
 }
 
 def gb(size: int) -> str:
@@ -910,95 +928,86 @@ def gb(size: int) -> str:
 def model_options(current: str, conn: dict) -> str:
     names = [m["name"] for m in conn["models"]]
     opts = [f'<option value="{escape(m["name"], quote=True)}"{" selected" if m["name"] == current else ""}>'
-            f'{escape(m["name"])} · {gb(m["size"])}{" · loaded" if m["name"] in conn["loaded"] else ""}</option>'
+            f'{escape(m["name"])} · {gb(m["size"])}{" · " + _("loaded") if m["name"] in conn["loaded"] else ""}</option>'
             for m in conn["models"]]
     if not current:                        # nothing chosen on this machine yet: the code has no default
-        opts.insert(0, '<option value="" selected disabled>Choose a model</option>')
+        opts.insert(0, f'<option value="" selected disabled>{_("Choose a model")}</option>')
     elif current not in names:             # saved before, or Ollama is closed: still show what it is set to
-        missing = "not pulled" if conn["ok"] else "Ollama not reachable"
+        missing = _("not pulled") if conn["ok"] else _("Ollama not reachable")
         opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
     return "".join(opts)
 
 def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
-    name, other_name = settings.WORKERS[worker], settings.WORKERS[other]
-    steps = "".join(f"<li>{s}</li>" for s in ROLE_STEPS[worker])
+    name, other_name = worker_name(worker), worker_name(other)
+    steps = "".join(f"<li>{_(s)}</li>" for s in ROLE_STEPS[worker])
     if not on:
-        note = (f'<p class="note hint">Off: the {other_name} does these steps with '
-                f"<code>{escape(settings.worker_model(other) or 'its model')}</code>, one task at a time.</p>")
+        note = f'<p class="note hint">{_("Off. The {other} runs these steps.").format(other=other_name)}</p>'
     elif not model:
-        note = '<p class="note"><strong>No model chosen yet.</strong> The loop waits until this worker has one.</p>'
+        note = (f'<p class="note"><strong>{_("No model chosen yet.")}</strong> '
+                f'{_("The loop won\'t start without one.")}</p>')
     else:
-        extra = "" if settings.worker_on(other) else (f'<li>and, while the {other_name} is off, every one of '
-                                                      "its steps too</li>")
+        extra = "" if settings.worker_on(other) else f'<li>{_("The {other}\'s steps, while it\'s off").format(other=other_name)}</li>'
         steps += extra
         busy = next((e for e in now if e["worker"] == worker), None)
-        note = f'<p class="note">Now: {doing(busy)}</p>' if busy else ""
+        note = f'<p class="note">{_("Now:")} {doing(busy)}</p>' if busy else ""
     checked = " checked" if on else ""
     crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
   <input type="hidden" name="worker" value="{worker}">
   <div class="head"><h3>{name}</h3>
-    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{name} on"></label></div>
-  <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
-  <label for="{worker}_model">Model</label>
+    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{escape(_("{name} on").format(name=name), quote=True)}"></label></div>
+  <p class="tagline hint">{_(WORKER_BLURBS[worker])}</p>
+  <label for="{worker}_model">{_("Model")}</label>
   <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn)}</select>
-  <label>Uses this model for</label>
+  <label>{_("Steps")}</label>
   <ul>{steps}</ul>
   {note}<div class="grow"></div>
-  <noscript><p><button>Save</button></p></noscript>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
   {crew}
 </form>"""
 
 def workers_section(conn: dict) -> str:
     now = running_now()
-    a, p = (f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>" for w in settings.WORKERS)
-    if settings.parallel():
-        lead = (f"Both workers are on, so they work at the same time whenever each has a task: the Research "
-                f"Assistant searches with {a} while the Principal Investigator writes with {p}.")
+    if settings.missing_models():          # the code has no models of its own: this machine picks them
+        lead = f'<strong>{_("Choose a model for each worker; the loop won\'t start until you do.")}</strong>'
+    elif settings.parallel():
+        lead = ""
     else:
         w = next(w for w in settings.WORKERS if settings.worker_on(w))
-        lead = (f"Only the {settings.WORKERS[w]} is on: it does every step with "
-                f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>, one task at a time.")
-    if settings.missing_models():          # the code has no models of its own: this machine picks them
-        lead = ("<strong>Choose a model for each worker that is on; the loop won't start until you do.</strong> "
-                "Both on: they work at the same time whenever each has a task.")
-    else:
-        lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
+        lead = _("Only the {worker} is on. It runs every step, one at a time.").format(worker=worker_name(w))
     cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
-    return (f'{heading("people", "Workers")}<p>{lead} The source checker, article checker and publisher are '
-            f'code and use no model.</p><div class="workers">{cards}</div>')
+    return (f'{heading("people", _("Workers"))}{f"<p>{lead}</p>" if lead else ""}'
+            f'<div class="workers">{cards}</div>')
 
 def ollama_form() -> str:
     saved, env = settings.saved().get("ollama_host", ""), settings._env("OLLAMA_HOST")
-    source = ("from OLLAMA_HOST in .env" if env and not saved else
-              "saved on this page" if saved else "the standard local address")
     return f"""<form method="post" action="/settings/ollama" class="inline">
-  <label for="ollama_host" class="sr">Ollama address</label>
+  <label for="ollama_host" class="sr">{_("Ollama address")}</label>
   <input type="text" id="ollama_host" name="ollama_host" maxlength="300" value="{escape(saved, quote=True)}" placeholder="{escape(env or settings.OLLAMA_DEFAULT, quote=True)}">
-  <button>Save address</button><span class="hint">now {source}; empty goes back to .env or {settings.OLLAMA_DEFAULT}</span>
+  <button>{_("Save")}</button><span class="hint">{_("Empty uses {address}").format(address=escape(env or settings.OLLAMA_DEFAULT))}</span>
 </form>"""
 
 def connection_section(conn: dict) -> str:
     host = escape(conn["host"])
     if not conn["ok"]:
-        return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> is not reachable '
-                f'({escape(conn["error"])}). Start the Ollama app, or point this at the machine running it; its '
-                "models show here and in the workers' model lists once it answers.</p>" + ollama_form())
+        return (f'{heading("plug", _("LLM connection"))}<p>'
+                + _("Can't reach Ollama at {host} ({error}).").format(host=f"<code>{host}</code>",
+                                                                       error=escape(conn["error"]))
+                + "</p>" + ollama_form())
     users: dict[str, list[str]] = {}
     for w in settings.WORKERS:
         if settings.worker_on(w):
-            users.setdefault(settings.worker_model(w), []).append(settings.WORKERS[w])
+            users.setdefault(settings.worker_model(w), []).append(worker_name(w))
     rows = "".join(
         f'<tr><td><code>{escape(m["name"])}</code></td><td class="size">{gb(m["size"])}</td>'
-        f'<td class="size">{"in memory, " + gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
+        f'<td class="size">{gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
         f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
     count = len(conn["models"])
-    return (f'{heading("plug", "LLM connection")}<p>Ollama at <code>{host}</code> · connected · '
-            f'{count} model{"" if count == 1 else "s"}. The workers can use any of them; '
-            f'<code>ollama pull &lt;model&gt;</code> adds more.</p>{ollama_form()}'
-            f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
-            f'<td class="when">Loaded</td><td class="when">Used by</td></tr>{rows}</table>')
+    return (f'{heading("plug", _("LLM connection"))}<p>{_("Ollama at {host}").format(host=f"<code>{host}</code>")} · '
+            f'{_("connected")} · {_n("{n} model", "{n} models", count)}</p>{ollama_form()}'
+            f'<table class="events models"><tr><td class="when">{_("Model")}</td><td class="when">{_("Size")}</td>'
+            f'<td class="when">{_("In memory")}</td><td class="when">{_("Used by")}</td></tr>{rows}</table>')
 
 async def save_ollama(request: Request) -> Response:
     if not same_origin(request):
@@ -1040,42 +1049,44 @@ GITHUB_LOGIN: dict = {}                     # the GitHub sign-in in progress (st
 def github_row() -> str:
     """The GitHub Pages channel on the Settings page: one step at a time, connect, then pick the repo."""
     if os.environ.get("MISSION_LOOP_STUBS") == "1":
-        return "<p>GitHub Pages is off while MISSION_LOOP_STUBS=1, so a test run never publishes for real.</p>"
+        return f"<p>{_(STUB_RUN)}</p>"
     gh = escape(settings.github_url(), quote=True)
     if github.enabled():
         return f"""<p>{github_status()}</p>
-<p class="hint">Each time the loop publishes, whatever changed in <code>site/</code> is pushed to the repo as one commit.
-The repo holds the site and nothing else.</p>
+<p class="hint">{_("Changes in site/ are pushed after each publish.")}</p>
 <form method="post" action="/settings/github" class="actions inline-buttons">
-  <button name="do" value="unlink">Use a different repo</button> <button name="do" value="forget">Disconnect GitHub</button>
+  <button name="do" value="unlink">{_("Use a different repo")}</button> <button name="do" value="forget">{_("Disconnect GitHub")}</button>
 </form>"""
     if github.connected():
         name = escape(github.suggested_name(), quote=True)
-        return f"""<p>Connected as <strong>{escape(github.login_name())}</strong>. Last step: the repo the site goes to.
-Everything in it is replaced by the site, so use a new or empty public repo.</p>
+        served = _("{repo} is served at {address}").format(
+            repo=f"<code>{escape(github.suggested_name())}</code>",
+            address=escape(github.pages_address(github.login_name() + "/" + github.suggested_name())))
+        connected = _("Connected as {login}.").format(login=f"<strong>{escape(github.login_name())}</strong>")
+        return f"""<p>{connected} {_("Choose a repo for the site. Its contents will be replaced, so use a new or empty public repo.")}</p>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="create">
-  <label for="gh_name" style="margin-top:0">Create my site <span class="hint">a new public repo; <code>{escape(github.suggested_name())}</code> is served at {escape(github.pages_address(github.login_name() + "/" + github.suggested_name()))}</span></label>
+  <label for="gh_name" style="margin-top:0">{_("New repo")} <span class="hint">{served}</span></label>
   <input type="text" id="gh_name" name="name" maxlength="100" value="{name}">
-  <p><button>Create the repo and publish</button></p>
+  <p><button>{_("Create repo and publish")}</button></p>
 </form>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="link">
-  <label for="gh_repo">Or use a repo you already made <span class="hint">paste its link, e.g. {gh}/{escape(github.login_name())}/my-site</span></label>
+  <label for="gh_repo">{_("Existing repo")} <span class="hint">{_("repo link")}</span></label>
   <input type="text" id="gh_repo" name="repo" maxlength="300" required placeholder="{gh}/{escape(github.login_name())}/my-site">
-  <p><button>Link this repo and publish</button></p>
+  <p><button>{_("Link repo and publish")}</button></p>
 </form>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="forget">
-  <p><button>Disconnect GitHub</button></p></form>"""
+  <p><button>{_("Disconnect GitHub")}</button></p></form>"""
     if GITHUB_LOGIN:
         code, where = escape(GITHUB_LOGIN["user_code"]), escape(GITHUB_LOGIN["verification_uri"], quote=True)
         return f"""<div class="gh-code" data-interval="{GITHUB_LOGIN['interval']}">
-<p>Open <a href="{where}" target="_blank" rel="noopener">{where}</a>, sign in, enter this code and approve:</p>
-<p class="code-big"><code>{code}</code> <button type="button" class="copy" data-code="{code}">Copy</button></p>
-<p class="hint gh-wait">Waiting for GitHub… this page carries on by itself once you approve.</p>
+<p>{_("Open {link} and enter this code:").format(link=f'<a href="{where}" target="_blank" rel="noopener">{where}</a>')}</p>
+<p class="code-big"><code>{code}</code> <button type="button" class="copy" data-code="{code}">{_("Copy")}</button></p>
+<p class="hint gh-wait">{_("Waiting for approval…")}</p>
 </div>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="cancel">
-  <p><button>Cancel</button></p></form>
+  <p><button>{_("Cancel")}</button></p></form>
 <script>
 (() => {{
   const box = document.querySelector(".gh-code"), wait = box.querySelector(".gh-wait");
@@ -1085,7 +1096,7 @@ Everything in it is replaced by the site, so use a new or empty public repo.</p>
     try {{
       const r = await (await fetch("/settings/github/poll", {{method: "POST"}})).json();
       if (r.state === "done") return location.assign("/settings?done=github_connected");
-      if (r.state === "error") {{ wait.textContent = r.message + " Cancel and connect again."; return; }}
+      if (r.state === "error") {{ wait.textContent = r.message + " " + {json.dumps(_("Cancel and connect again."))}; return; }}
       if (r.state === "slow_down") every += 5000;
     }} catch (e) {{}}
     setTimeout(poll, every);
@@ -1094,24 +1105,22 @@ Everything in it is replaced by the site, so use a new or empty public repo.</p>
 }})();
 </script>"""
     if not settings.github_client_id():
-        return f"""<p>Off. This copy of mission-loop has no GitHub OAuth app to sign in with yet. Register one once
-(on GitHub: Settings &gt; Developer settings &gt; OAuth Apps &gt; New OAuth App, or <a href="{gh}/settings/applications/new" target="_blank" rel="noopener">here</a>):
-any name, homepage and callback URL (e.g. http://127.0.0.1:8770), then tick <strong>Enable Device Flow</strong>
-and paste its client ID below. A client ID isn't a secret; there is no client secret to make.</p>
+        needs = _("Needs a GitHub OAuth app. {create} with any name and URLs (e.g. http://127.0.0.1:8770), tick "
+                  "{device}, then paste its client ID.").format(
+            create=f'<a href="{gh}/settings/applications/new" target="_blank" rel="noopener">{_("Create one")}</a>',
+            device="<strong>Enable Device Flow</strong>")
+        return f"""<p>{needs}</p>
 <form method="post" action="/settings/github" class="actions">
   <input type="hidden" name="do" value="client_id">
-  <label for="gh_client" style="margin-top:0">OAuth app client ID</label>
+  <label for="gh_client" style="margin-top:0">{_("OAuth app client ID")}</label>
   <input type="text" id="gh_client" name="client_id" maxlength="64" required placeholder="Ov23li…">
-  <p><button>Save</button></p>
+  <p><button>{_("Save")}</button></p>
 </form>"""
-    return f"""<p>Off. Puts the site online for free with GitHub Pages, so Bluesky posts link to the full article,
-and keeps it up to date each time something is published. Connecting signs you in on GitHub itself; no password or
-token is typed here. The app can then reach your public repos only, and its token is saved to
-<code>data/github.json</code> on this machine.</p>
+    return f"""<p>{_("Hosts the site free on GitHub Pages. You sign in on GitHub; access is limited to public repos.")}</p>
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="connect">
-  <p><button>Connect GitHub</button></p></form>"""
+  <p><button>{_("Connect GitHub")}</button></p></form>"""
 
-STUB_RUN = "Off while MISSION_LOOP_STUBS=1, so a test run never posts for real."
+STUB_RUN = "Off in stub mode (MISSION_LOOP_STUBS=1)."
 
 def local_site_box() -> str:
     """The foundation: the static site in site/ on this machine, which every channel posts from."""
@@ -1120,46 +1129,39 @@ def local_site_box() -> str:
     feeds = ('<a href="/site/feed.xml" target="_blank">site/feed.xml</a> (RSS) · '
              '<a href="/site/feed.json" target="_blank">site/feed.json</a> (JSON Feed)')
     hosted = escape(url.rstrip("/") + "/")
-    links = (f"Links in the feeds are full addresses under {hosted}; once the site is there, its feeds are "
-             f"{hosted}feed.xml and {hosted}feed.json." if url else
-             "No hosted address yet, so links in the feeds are relative to the feed file. "
-             "That works wherever the site folder is served.")
-    source = (' <span class="hint">(from MISSION_LOOP_SITE_URL in .env; saving here overrides it)</span>'
+    links = _("Feed links use {address}").format(address=hosted) if url else _("Feed links are relative to the feed file.")
+    source = (f' <span class="hint">{_("(from .env)")}</span>'
               if env and not settings.saved().get("site_url") else
-              ' <span class="hint">(the GitHub Pages address until you type one)</span>'
+              ' <span class="hint">(GitHub Pages)</span>'
               if url and not settings.saved().get("site_url") else "")
     return f"""<div class="pubbox">
-<div class="head"><h3>Local site</h3><span class="badge">Foundation · always on</span></div>
-<p>Every published article is written here first, as files on this machine: a page per article in <code>site/</code>,
-an index page and two feeds. It is the record of what is published, and every channel posts from it.</p>
-<p>{count} article{"" if count == 1 else "s"} · {feeds} · <a href="/published">See what's published</a></p>
+<div class="head"><h3>{_("Local site")}</h3><span class="badge">{_("Always on")}</span></div>
+<p>{_("Files in site/. Every channel posts from here.")}</p>
+<p>{_n("{n} article", "{n} articles", count)} · {feeds} · <a href="/published">{_("Published")}</a></p>
 <form method="post" action="/settings/site-url">
-  <label for="site_url">Hosted address{source} <span class="hint">optional: where a copy of <code>site/</code> is served,
-  e.g. https://example.com/news/. Feed links and Bluesky link cards use it. Empty: the GitHub Pages address once that
-  channel is set up, else none while the site is only on this machine.</span></label>
+  <label for="site_url">{_("Site address")}{source} <span class="hint">{_("optional: where site/ is hosted, for feed and Bluesky links")}</span></label>
   <input type="text" id="site_url" name="site_url" maxlength="300" value="{escape(settings.saved().get("site_url", ""), quote=True)}" placeholder="{escape(url or "https://example.com/news/", quote=True)}">
   <p class="hint">{links}</p>
-  <p><button>Save hosted address</button></p>
+  <p><button>{_("Save")}</button></p>
 </form></div>"""
 
 def channel_card(c) -> str:
     """One channel that is set up: what it is, how it is doing, and how to take it away."""
     if c.KEY == f916.KEY:
-        kind, remove = "Built in", ('<p class="hint">Joined for good: <code>data/1f916.json</code> is the citizen\'s '
-                                    "whole identity, with no recovery, so it can't be removed here.</p>")
+        kind, remove = _("Built in"), f'<p class="hint">{_("Permanent: data/1f916.json is the account\'s only key.")}</p>'
     elif c.KEY == github.KEY:               # its status and its unlink / disconnect buttons
-        return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">Built in</span>'
+        return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">{_("Built in")}</span>'
                 f'</div>{github_row()}</div>')
     elif c.KEY == bluesky.KEY:
-        kind = "Built in"
-        remove = ("""<form method="post" action="/settings/bluesky"><input type="hidden" name="forget" value="1">
-  <button>Disconnect Bluesky</button></form>""" if bluesky.saved_credentials() else
-                  '<p class="hint">Set in .env; remove BLUESKY_HANDLE and BLUESKY_APP_PASSWORD there to turn it off.</p>')
+        kind = _("Built in")
+        remove = (f"""<form method="post" action="/settings/bluesky"><input type="hidden" name="forget" value="1">
+  <button>{_("Disconnect Bluesky")}</button></form>""" if bluesky.saved_credentials() else
+                  f'<p class="hint">{_("Set in .env (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD).")}</p>')
     else:
-        kind = "Custom · " + settings.CUSTOM_KINDS.get(c.cfg["kind"], c.cfg["kind"])
+        kind = _("Custom") + " · " + _(settings.CUSTOM_KINDS.get(c.cfg["kind"], c.cfg["kind"]))
         remove = (f'<form method="post" action="/settings/custom-channel/remove">'
                   f'<input type="hidden" name="id" value="{escape(c.cfg["id"], quote=True)}">'
-                  f'<button>Remove channel</button></form>')
+                  f'<button>{_("Remove channel")}</button></form>')
     return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">{escape(kind)}</span>'
             f'</div><p>{channel_status(c)}</p>{remove}</div>')
 
@@ -1167,82 +1169,67 @@ def add_channel_forms() -> str:
     """Ways to add a channel: the built-in ones not set up yet, and a custom one."""
     out = []
     if not agents.f916_enabled():
-        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Posts each article's full text,
-one a day, newest first. Joining makes a permanent, public citizen on <a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>.
-Its secret key is saved to <code>data/1f916.json</code> on this machine only; there is no recovery if it is lost.</p>
+        server = f'<a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>'
+        body = (f"<p>{_(STUB_RUN)}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>{_("Posts each article's full text, 1 per day. Joining creates a permanent public account on {server}. Its key is saved to data/1f916.json and can't be recovered.").format(server=server)}</p>
 <form method="post" action="/settings/join-1f916">
-  <label for="handle">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
-  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="e.g. loop-desk">
-  <label for="f916_url">Server <span class="hint">the 1F916 to join; the key only works there, so it is saved with the key</span></label>
+  <label for="handle">{_("Handle")} <span class="hint">{_("2–32 letters, digits, _ or -; permanent")}</span></label>
+  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="loop-desk">
+  <label for="f916_url">{_("Server")}</label>
   <input type="text" id="f916_url" name="f916_url" maxlength="300" value="{escape(settings.f916_url(), quote=True)}">
-  <p><button>Join 1F916</button></p>
+  <p><button>{_("Join 1F916")}</button></p>
 </form>""")
-        out.append(f'<details class="pubbox add"><summary><strong>1F916</strong> · built in</summary>{body}</details>')
+        out.append(f'<details class="pubbox add"><summary><strong>1F916</strong> · {_("built in")}</summary>{body}</details>')
     if not agents.github_enabled():         # connect, then pick the repo: open while a step is under way
         under_way = " open" if (GITHUB_LOGIN or github.connected()) and os.environ.get("MISSION_LOOP_STUBS") != "1" else ""
-        out.append(f'<details class="pubbox add"{under_way}><summary><strong>GitHub Pages</strong> · built in</summary>'
+        out.append(f'<details class="pubbox add"{under_way}><summary><strong>GitHub Pages</strong> · {_("built in")}</summary>'
                    f'{github_row()}</details>')
     if not agents.bluesky_enabled():
-        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Announces each article with a
-3-post thread (its title, boldest possibility and hardest fact), every post linking to the full text, at most
-one article every 10 minutes. Use an app password from Bluesky's
-Settings &gt; Privacy and security &gt; App passwords, never your account password. It is checked with Bluesky, then
-saved to <code>data/bluesky.json</code> on this machine only.</p>
+        body = (f"<p>{_(STUB_RUN)}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>{escape(_("Posts a 3-post thread per article, max 1 per 10 min. Use an app password (Bluesky: Settings > Privacy and security > App passwords), not your account password."))}</p>
 <form method="post" action="/settings/bluesky">
-  <label for="bsky_handle">Handle <span class="hint">e.g. yourname.bsky.social</span></label>
+  <label for="bsky_handle">{_("Handle")}</label>
   <input type="text" id="bsky_handle" name="handle" required maxlength="253" autocomplete="username" placeholder="yourname.bsky.social">
-  <label for="bsky_password">App password</label>
+  <label for="bsky_password">{_("App password")}</label>
   <input type="password" id="bsky_password" name="app_password" required maxlength="64" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
-  <label for="bsky_service">Server <span class="hint">optional: only for an account on another Bluesky server</span></label>
+  <label for="bsky_service">{_("Server")} <span class="hint">{_("optional, for accounts not on bsky.social")}</span></label>
   <input type="text" id="bsky_service" name="service" maxlength="300" placeholder="{escape(settings.bluesky_service(), quote=True)}">
-  <p><button>Check and turn on Bluesky</button></p>
+  <p><button>{_("Connect Bluesky")}</button></p>
 </form>""")
-        out.append(f'<details class="pubbox add"><summary><strong>Bluesky</strong> · built in</summary>{body}</details>')
-    kinds = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_KINDS.items())
-    formats = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_FORMATS.items())
-    out.append(f"""<details class="pubbox add"><summary><strong>Custom channel</strong> · anything else</summary>
-<p>Sends every published article somewhere you choose, in a format you choose, newest first and once each, like the
-other channels. Point a webhook at a service (a chat room, an automation tool, your own server), or have it drop a
-file per article into a folder another tool picks up (a clone of a site repository, a synced folder).</p>
+        out.append(f'<details class="pubbox add"><summary><strong>Bluesky</strong> · {_("built in")}</summary>{body}</details>')
+    kinds = "".join(f'<option value="{k}">{escape(_(v))}</option>' for k, v in settings.CUSTOM_KINDS.items())
+    formats = "".join(f'<option value="{k}">{escape(_(v))}</option>' for k, v in settings.CUSTOM_FORMATS.items())
+    out.append(f"""<details class="pubbox add"><summary><strong>{_("Custom channel")}</strong> · {_("webhook or folder")}</summary>
+<p>{_("Sends each published article to a webhook, or as a file into a folder.")}</p>
 <form method="post" action="/settings/custom-channel">
-  <label for="cc_name">Name <span class="hint">what the Published page calls it</span></label>
-  <input type="text" id="cc_name" name="name" required maxlength="40" placeholder="e.g. Team chat">
-  <label for="cc_kind">Send by</label>
+  <label for="cc_name">{_("Name")}</label>
+  <input type="text" id="cc_name" name="name" required maxlength="40" placeholder="{escape(_("e.g. Team chat"), quote=True)}">
+  <label for="cc_kind">{_("Type")}</label>
   <select id="cc_kind" name="kind">{kinds}</select>
-  <label for="cc_target">Where <span class="hint">a webhook's full http(s) address, or a folder's full path on this machine</span></label>
-  <input type="text" id="cc_target" name="target" required maxlength="500" placeholder="https://hooks.example.com/abc or /Users/me/outbox">
-  <label for="cc_format">Format</label>
+  <label for="cc_target">{_("Target")} <span class="hint">{_("webhook URL or folder path")}</span></label>
+  <input type="text" id="cc_target" name="target" required maxlength="500" placeholder="https://hooks.example.com/abc · /Users/me/outbox">
+  <label for="cc_format">{_("Format")}</label>
   <select id="cc_format" name="format">{formats}</select>
-  <details class="formats"><summary>What each format looks like</summary>
-  <p><strong>JSON</strong>: one JSON Feed 1.1 item, the same as the article's entry in <code>site/feed.json</code>:
-  <code>id</code> (the short name), <code>url</code>, <code>title</code>, <code>summary</code> (the dek),
-  <code>content_text</code> (the full article with its sources), <code>date_published</code> and, in an epic,
-  <code>tags</code>. Sent as <code>application/json</code>; a folder gets <code>&lt;short-name&gt;.json</code>.</p>
-  <p><strong>Markdown</strong>: <code># Title</code>, the dek in italics, the link to the hosted site when there is
-  one, then the full text. A folder gets <code>&lt;short-name&gt;.md</code>.</p>
-  <p><strong>Plain text</strong>: the same without the markup, as <code>&lt;short-name&gt;.txt</code>.</p>
-  <p>A webhook counts as posted on any 2xx reply; a JSON reply with a <code>url</code> is shown as where the article
-  can be read. 429 means try later, other 4xx refuse that article, and anything else is tried again next pass.</p>
+  <details class="formats"><summary>{_("Format details")}</summary>
+  <p><strong>JSON</strong>: {escape(_("a JSON Feed 1.1 item, as in site/feed.json"))} (<code>&lt;short-name&gt;.json</code>).</p>
+  <p><strong>Markdown</strong>: {_("title, dek, site link, full text")} (<code>&lt;short-name&gt;.md</code>).</p>
+  <p><strong>{_("Plain text")}</strong>: {_("the same without markup")} (<code>&lt;short-name&gt;.txt</code>).</p>
+  <p>{_("Webhooks: 2xx is posted, 429 retries later, other 4xx refuses, anything else retries next pass.")}</p>
   </details>
-  <p><button>Add custom channel</button></p>
+  <p><button>{_("Add channel")}</button></p>
 </form></details>""")
     return "".join(out)
 
 def publishing_section() -> str:
     live = live_channels()
     if os.environ.get("MISSION_LOOP_STUBS") == "1":
-        cards = f'<p class="muted">{STUB_RUN}</p>'
+        cards = f'<p class="muted">{_(STUB_RUN)}</p>'
     else:
         cards = "".join(channel_card(c) for c in live) or \
-            '<p class="muted">No channels yet, so articles stay on the local site. Add one below.</p>'
-    return heading("broadcast", "Publishing", anchor="publishing") + f"""
-<p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
-<strong>channels</strong>, everywhere else the articles go. Each channel posts from the local site, newest first, and
-remembers what it has posted. Publish any article again from the <a href="/published">Published</a> page.</p>
+            f'<p class="muted">{_("No channels.")}</p>'
+    return heading("broadcast", _("Publishing"), anchor="publishing") + f"""
 {local_site_box()}
-<h3 class="sub">Channels ({len(live)})</h3>
+<h3 class="sub">{_("Channels")} ({len(live)})</h3>
 {cards}
-<h3 class="sub">Add a channel</h3>
+<h3 class="sub">{_("Add a channel")}</h3>
 {add_channel_forms()}"""
 
 THEME_CHOICES = [("system", "monitor", "System"), ("light", "sun", "Light"), ("dark", "moon", "Dark")]
@@ -1270,14 +1257,18 @@ def display_forms() -> str:
     theme = settings.theme()
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{v}"{" checked" if v == theme else ""} '
-        f'onchange="this.form.requestSubmit()">{icon(ico)}{label}</label>' for v, ico, label in THEME_CHOICES)
+        f'onchange="this.form.requestSubmit()">{icon(ico)}{_(label)}</label>' for v, ico, label in THEME_CHOICES)
+    langs = "".join(
+        f'<label><input type="radio" name="language" value="{code}"{" checked" if code == i18n.current() else ""} '
+        f'onchange="this.form.requestSubmit()"><span lang="{code}">{escape(name)}</span></label>'
+        for code, name in settings.LANGUAGES.items())
     current = settings.chat_color()
     known = set(settings.CHAT_COLORS.values())
     def swatch(value: str, name: str, color: str) -> str:
         on = " checked" if value == current else ""
         ink = settings.ink_on(color) if color.startswith("#") else "#ffffff"
         return (f'<label class="swatch" style="--c:{color};--ink:{ink}"><input type="radio" name="choice" value="{value}"'
-                f'{on} onchange="this.form.requestSubmit()"><span class="dab"></span>{escape(name)}</label>')
+                f'{on} onchange="this.form.requestSubmit()"><span class="dab"></span>{escape(_(name))}</label>')
     swatches = swatch("", "Library red", "var(--accent)")
     swatches += "".join(swatch(c, n, c) for n, c in settings.CHAT_COLORS.items())
     mine = current if current and current not in known else ""
@@ -1286,19 +1277,23 @@ def display_forms() -> str:
     swatches += (f'<label class="swatch own{" set" if mine else ""}"{own_style}>'
                  f'<input type="radio" name="choice" value="own"{own_on} onchange="this.form.requestSubmit()">'
                  f'<span class="dab"><input type="color" id="own-color" name="own" value="{mine or OWN_DEFAULT}" '
-                 f'aria-label="Choose your own colour"></span>Your own</label>')
-    return f"""<form method="post" action="/settings/theme" class="actions display">
-  <h3>{icon("sun")}Appearance</h3>
-  <p class="hint">System follows your computer's light or dark setting, and changes with it. The article previews here
-  follow it too; the published site keeps its own switch for readers.</p>
-  <div class="choice" role="radiogroup" aria-label="Appearance">{themes}</div>
-  <noscript><p><button>Save</button></p></noscript>
+                 f'aria-label="{escape(_("Choose your own colour"), quote=True)}"></span>{_("Your own")}</label>')
+    return f"""<form method="post" action="/settings/language" class="actions display">
+  <h3>{icon("globe")}{_("Language")}</h3>
+  <div class="choice" role="radiogroup" aria-label="{escape(_("Language"), quote=True)}">{langs}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
+</form>
+<form method="post" action="/settings/theme" class="actions display">
+  <h3>{icon("sun")}{_("Appearance")}</h3>
+  <p class="hint">{_("System follows your computer's setting.")}</p>
+  <div class="choice" role="radiogroup" aria-label="{escape(_("Appearance"), quote=True)}">{themes}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>
 <form method="post" action="/settings/chat-color" class="actions display">
-  <h3>{icon("palette")}Chat colour</h3>
-  <p class="hint">The ink for the chat bubble and your questions in the chat panel.</p>
-  <div class="swatches" role="radiogroup" aria-label="Chat colour">{swatches}</div>
-  <noscript><p><button>Save</button></p></noscript>
+  <h3>{icon("palette")}{_("Chat colour")}</h3>
+  <p class="hint">{_("The chat bubble and your messages.")}</p>
+  <div class="swatches" role="radiogroup" aria-label="{escape(_("Chat colour"), quote=True)}">{swatches}</div>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>{CHAT_COLOR_JS}"""
 
 def settings_body(request: Request, error: str = "") -> str:
@@ -1306,28 +1301,28 @@ def settings_body(request: Request, error: str = "") -> str:
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
     sprites = RESEARCHERS if settings.animations() else ""
-    return f"""{err}<h1>Settings</h1>
+    return f"""{err}<h1>{_("Settings")}</h1>
 {workers_section(conn)}
 {connection_section(conn)}
-{heading("clock", "Loop")}
+{heading("clock", _("Loop"))}
 <form method="post" action="/settings/loop-every" class="inline">
-  <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
+  <label for="every" style="margin:0">{_("Rest when idle")}</label>
   <input type="number" id="every" name="every" value="{settings.loop_every():g}" min="1" step="1" style="width:5rem">
-  <span class="hint">minutes before looking again (a loop already running keeps its own until you start it again)</span>
-  <button>Save</button>
+  <span class="hint">{_("minutes (applies on next start)")}</span>
+  <button>{_("Save")}</button>
 </form>
-{heading("monitor", "Display")}
+{heading("monitor", _("Display"))}
 {display_forms()}
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
-  Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
-  <noscript><p><button>Save</button></p></noscript>
+  {_("Animations")} <span class="hint">{_("pixel researchers on active missions")}</span></label>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>
 {publishing_section()}
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
-    return page("Settings", settings_body(request))
+    return page(_("Settings"), settings_body(request))
 
 async def save_site_url(request: Request) -> Response:
     if not same_origin(request):
@@ -1348,6 +1343,15 @@ async def save_theme(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="theme")
     return go("/settings", done="theme_saved")
+
+async def save_language(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        settings.set_language(str((await request.form()).get("language") or ""))
+    except ValueError:
+        return go("/settings", error="language")
+    return go("/settings", done="language_saved")
 
 async def save_chat_color(request: Request) -> Response:
     if not same_origin(request):
@@ -1406,7 +1410,7 @@ async def join_1f916(request: Request) -> Response:
     try:
         await run_in_threadpool(f916.register, handle, settings.model_for("pi") or "unknown")
     except (FileExistsError, RuntimeError) as e:
-        return page("Settings", settings_body(request, f"1F916 did not join: {e}"))
+        return page(_("Settings"), settings_body(request, _("1F916 did not join: {error}").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="joined")
@@ -1419,7 +1423,7 @@ async def add_custom_channel(request: Request) -> Response:
         settings.add_custom_channel(str(form.get("name") or ""), str(form.get("kind") or ""),
                                     str(form.get("target") or "")[:500], str(form.get("format") or ""))
     except ValueError as e:
-        return page("Settings", settings_body(request, f"Custom channel not added: {e}."))
+        return page(_("Settings"), settings_body(request, _("Channel not added: {error}.").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="custom_added")
@@ -1449,7 +1453,7 @@ async def save_bluesky(request: Request) -> Response:
     try:
         await run_in_threadpool(bluesky.check_login, handle, password, service)
     except Exception as e:                 # wrong password, rate limit, network: nothing is saved
-        return page("Settings", settings_body(request, f"Bluesky did not accept that login: {e}"))
+        return page(_("Settings"), settings_body(request, _("Bluesky did not accept that login: {error}").format(error=e)))
     bluesky.save_credentials(handle, password, service)
     if loop_running():
         wake()
@@ -1473,7 +1477,7 @@ async def github_action(request: Request) -> Response:
             GITHUB_LOGIN.clear()
             GITHUB_LOGIN.update(await run_in_threadpool(github.start_login))
         except Exception as e:             # no OAuth app, device flow off, network
-            return page("Settings", settings_body(request, f"GitHub did not start the sign-in: {e}"))
+            return page(_("Settings"), settings_body(request, _("GitHub did not start the sign-in: {error}").format(error=e)))
         return go("/settings")
     if do == "cancel":
         GITHUB_LOGIN.clear()
@@ -1494,13 +1498,13 @@ async def github_action(request: Request) -> Response:
             else:
                 await run_in_threadpool(github.link_site, str(form.get("repo") or "")[:300])
         except Exception as e:             # private, no access, holds other files, network
-            return page("Settings", settings_body(request, f"The site wasn't linked: {e}"))
+            return page(_("Settings"), settings_body(request, _("The site wasn't linked: {error}").format(error=e)))
         orchestrator.refresh_feed()        # the feeds use the site's address from now on
         try:
             await run_in_threadpool(github.sync, clock.now())   # files only; the loop records each article's link
         except Exception as e:
-            return page("Settings", settings_body(request, f"The site is linked, but the first push failed: {e}. "
-                                                            "The loop tries again each time it posts."))
+            return page(_("Settings"), settings_body(request, _("Linked, but the first push failed: {error}. The loop "
+                                                                 "retries on each post.").format(error=e)))
         if loop_running():
             wake()
         return go("/settings", done="github_linked")
@@ -1539,12 +1543,13 @@ def epic_datalist() -> str:
 
 # ---------- anything waiting on a human: one look for every decision ----------
 
-ASK_ACTION = {"review": "Read the brief", "publish": "Read the article", "parked": "See why it stopped"}
+ASK_ACTION = {"review": "Review brief", "publish": "Review article", "parked": "See why"}
 
 def ask(color: str, title: str, badge: str, body: str, actions: str, link: str = "") -> str:
     """A decision waiting on the human, the same for a brief, an article, a parked mission or a proposed epic:
     the finger, what it is, a colored badge, what to know, and the buttons that decide it."""
     name = f'<a class="topic" href="{link}">{escape(title)}</a>' if link else f'<span class="topic">{escape(title)}</span>'
+    badge = badge and _(badge)
     tag = f'<span class="badge {color}">{escape(badge)}</span>' if badge else ""
     return (f'<div class="ask {color}"><div class="ask-head">{icon("touch")}{name}{tag}</div>'
             f'{body}<div class="ask-actions">{actions}</div></div>')
@@ -1553,7 +1558,7 @@ def mission_ask(m: Mission, epics: dict[str, Epic]) -> str:
     color, href = tone(m), f"/m/{quote(m.slug)}"
     return ask(color, m.topic, label(m),
                f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)} · {escape(next_step(m))}</div>',
-               f'<a class="btn primary" href="{href}">{ASK_ACTION[color]}</a>', href)
+               f'<a class="btn primary" href="{href}">{_(ASK_ACTION[color])}</a>', href)
 
 def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
@@ -1566,23 +1571,22 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
         ms = [m for m in missions if m.epic == e.slug]
         slug = quote(e.slug)
         items = "".join(f'<li><a href="/m/{quote(m.slug)}">{escape(m.topic)}</a>'
-                        + (f' <span class="hint">· if rejected: {escape(epics[m.epic_fallback].title)}</span>'
-                           if m.epic_fallback in epics else ' <span class="hint">· if rejected: no epic</span>')
+                        + (f' <span class="hint">· {_("if rejected: {epic}").format(epic=escape(epics[m.epic_fallback].title))}</span>'
+                           if m.epic_fallback in epics else f' <span class="hint">· {_("if rejected: no epic")}</span>')
                         + "</li>" for m in ms)
         move = ""
         if active:
             options = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>' for a in active)
-            move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="Existing epic">'
-                    f'{options}</select><button>Move them there</button></form>')
-        who = "The Theorist" if e.title.lower() in theorist else "The mission finder"
+            move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="{_("Existing epic")}">'
+                    f'{options}</select><button>{_("Move to epic")}</button></form>')
+        who = _("Proposed by Theorist") if e.title.lower() in theorist else _("Proposed by mission finder")
         out.append(ask(
-            "propose", e.title, "New epic",
-            f'<div class="sub">{who} proposes this epic for {len(ms)} missions. Edit the name before approving to '
-            f'rename it; reject puts each mission back in the epic shown beside it.</div><ul>{items}</ul>',
+            "propose", e.title, _("New epic"),
+            f'<div class="sub">{who} · {_n("{n} mission", "{n} missions", len(ms))}</div><ul>{items}</ul>',
             f'<form method="post" action="/epics/{slug}/approve">'
-            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
-            f'<button class="primary">Approve epic</button></form>{move}'
-            f'<form method="post" action="/epics/{slug}/reject"><button>Reject</button></form>'))
+            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+            f'<button class="primary">{_("Approve epic")}</button></form>{move}'
+            f'<form method="post" action="/epics/{slug}/reject"><button>{_("Reject")}</button></form>'))
     return out
 
 def epic_list(missions: list[Mission]) -> str:
@@ -1591,10 +1595,11 @@ def epic_list(missions: list[Mission]) -> str:
         return ""
     rows = "".join(
         f'<form method="post" action="/epics/{quote(e.slug)}/rename" class="inline">'
-        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="Epic name">'
-        f'<span class="hint">{sum(m.epic == e.slug for m in missions)} missions</span><button>Rename</button></form>'
+        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+        f'<span class="hint">{_n("{n} mission", "{n} missions", sum(m.epic == e.slug for m in missions))}</span>'
+        f'<button>{_("Rename")}</button></form>'
         for e in active)
-    return heading("layers", "Epics", len(active)) + f'<div class="epics">{rows}</div>'
+    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{rows}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
 STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("research", "search", "Research"),
@@ -1614,7 +1619,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     color = tone(m)
     working, idle = working_on(m, now), next_step(m)
     if m.state == State.DONE and m.published_at and not m.publish_requests:
-        working, idle = "", f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+        working, idle = "", _("Published {date}").format(date=f"{m.published_at:%b %-d, %Y}") + f" · {channel_names(m)}"
     sub = working or idle
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
@@ -1637,7 +1642,7 @@ def publish_queue(missions: list[Mission]) -> list[tuple[str, str, list[tuple[st
     site = [(m.slug, m.topic, False) for m in missions if m.state == State.ARTICLE_READY and m.reviewed]
     site += [(m.slug, titles.get(m.slug, m.topic), True) for m in missions
              if m.state == State.DONE and "site" in m.publish_requests]
-    out = [("site", "Local site", site)] if site else []
+    out = [("site", _("Local site"), site)] if site else []
     for c in live_channels():
         entries = [(e["slug"], e.get("title") or e["slug"], c.KEY in by_slug[e["slug"]].publish_requests)
                    for e in orchestrator.queue(c) if e["slug"] in by_slug]
@@ -1649,24 +1654,24 @@ def queue_card(queued: list, count: int) -> str:
     """The Missions page's one card for everything waiting to be published; the queue is on /published."""
     places = " · ".join(f"{escape(name)} {len(entries)}" for _, name, entries in queued)
     return (f'<a class="card publish" href="/published#queue"><div class="row"><span class="topic">'
-            f'{count} article{"" if count == 1 else "s"} queued</span><span class="badge publish">Publishing</span></div>'
-            f'<div class="sub">{places} · see the queue</div></a>')
+            f'{_n("{n} article queued", "{n} articles queued", count)}</span><span class="badge publish">{_("Publishing")}</span></div>'
+            f'<div class="sub">{places}</div></a>')
 
 def queue_section(queued: list) -> str:
     """The Published page's queue: each place, then its articles in the order they go out."""
     if not queued:
-        return (heading("clock", "Queue", 0, "queue")
-                + '<p class="muted">Nothing waiting. Every article has reached every place it is going.</p>')
+        return (heading("clock", _("Queue"), 0, "queue")
+                + f'<p class="muted">{_("Nothing queued.")}</p>')
     parts = []
     for key, name, entries in queued:
         items = "".join(
             f'<li><a href="{f"#a-{escape(slug)}" if key != "site" or asked else f"/m/{quote(slug)}"}">{escape(title)}</a>'
-            + (" · <strong>requested</strong>" if asked else "") + "</li>"
+            + (f' · <strong>{_("requested")}</strong>' if asked else "") + "</li>"
             for slug, title, asked in entries)
         parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span></h3>'
                      f'<ol class="queue">{items}</ol>')
     total = len({slug for _, _, entries in queued for slug, _, _ in entries})
-    return heading("clock", "Queue", total, "queue") + "".join(parts)
+    return heading("clock", _("Queue"), total, "queue") + "".join(parts)
 
 # ---------- pages ----------
 
@@ -1685,19 +1690,19 @@ async def home(request: Request) -> HTMLResponse:
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
     asks += [(6, a) for a in epic_proposals(missions)]
-    body.append(heading("touch", "Needs you", len(asks), "needs-you"))
-    body.append("".join(a for _, a in sorted(asks, key=lambda a: a[0]))
-                or '<p class="muted empty">Nothing is waiting on you.</p>')
+    body.append(heading("touch", _("Needs you"), len(asks), "needs-you"))
+    body.append("".join(a for _rank, a in sorted(asks, key=lambda a: a[0]))
+                or f'<p class="muted empty">{_("Nothing needs you.")}</p>')
 
     # In progress, by stage. assets/flow.js relights cards in place; researchers may only visit data-lab-ok groups.
     going = flow(m for m in missions if in_progress(m) and stage_of(m) != "publishing")
     queued = publish_queue(missions)
     waiting = {slug for _, _, entries in queued for slug, _, _ in entries}
-    body.append(heading("activity", "In progress", len(going) + len(waiting)))
+    body.append(heading("activity", _("In progress"), len(going) + len(waiting)))
     if not going and not waiting:
-        body.append('<p class="muted empty">Nothing in progress. Add a mission below, or set an inspiration line '
-                    'and start the loop.</p>')
+        body.append(f'<p class="muted empty">{_("Nothing in progress.")}</p>')
     for key, name, title in STAGES:
+        title = _(title)
         if key == "publishing":
             if waiting:
                 body.append(f'<h3 class="stage">{icon(name)}<span>{title}</span><span class="n">{len(waiting)}</span></h3>'
@@ -1711,25 +1716,25 @@ async def home(request: Request) -> HTMLResponse:
 
     body.append(finder_panel())
     body.append(epic_list(missions))
-    body.append(epic_datalist() + heading("pencil", "New mission") + """<form method="post" action="/missions" class="actions">
-  <label for="topic" style="margin-top:0">Topic <span class="hint">what to research, in one line</span></label>
-  <input type="text" id="topic" name="topic" required placeholder="e.g. Did the new transit levy pass, and who paid for the campaign?">
-  <label for="objective">Objective <span class="hint">optional: the question to answer, what counts as evidence, any hypothesis to test</span></label>
+    body.append(epic_datalist() + heading("pencil", _("New mission")) + f"""<form method="post" action="/missions" class="actions">
+  <label for="topic" style="margin-top:0">{_("Topic")}</label>
+  <input type="text" id="topic" name="topic" required placeholder="{escape(_("e.g. Did the new transit levy pass, and who paid for the campaign?"), quote=True)}">
+  <label for="objective">{_("Objective")} <span class="hint">{_("optional")}</span></label>
   <textarea id="objective" name="objective" rows="4"></textarea>
-  <label for="slug">Short name <span class="hint">optional; made from the topic if left blank</span></label>
+  <label for="slug">{_("Short name")} <span class="hint">{_("optional, made from the topic")}</span></label>
   <input type="text" id="slug" name="slug" placeholder="transit-levy">
-  <label for="epic">Epic <span class="hint">optional: pick one, or type a new name of 1 to 4 words</span></label>
-  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="e.g. Fed Policy Capture">
-  <p><button class="primary">Add mission</button></p>
+  <label for="epic">{_("Epic")} <span class="hint">{_("optional, pick or type 1–4 words")}</span></label>
+  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="{escape(_("e.g. Fed Policy Capture"), quote=True)}">
+  <p><button class="primary">{_("Add mission")}</button></p>
 </form>""")
     tail = log_tail()
     if tail:
-        body.append(f'<details><summary>{icon("terminal")}Loop log (data/loop.log)</summary><pre class="notes">'
+        body.append(f'<details><summary>{icon("terminal")}{_("Loop log")}</summary><pre class="notes">'
                     + escape("\n".join(tail)) + "</pre></details>")
     done = sum(m.state == State.DONE for m in missions)   # the very last thing, for anyone looking for it
-    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published</span>'
-                f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
-                f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
+    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}{_("Published")}</span>'
+                f'<span class="badge">{_n("{n} article", "{n} articles", done)}</span></div>'
+                f'<div class="sub">{_("Where each article went, and republish")}</div></a>')
     if lab:
         body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
@@ -1737,43 +1742,42 @@ async def home(request: Request) -> HTMLResponse:
 def actions_for(m: Mission) -> str:
     slug = quote(m.slug)
     def send_back(what: str, placeholder: str) -> str:
-        return (f'<details class="send-back"><summary>Send it back with notes</summary>'
-                f'<form method="post" action="/m/{slug}/reject"><label for="notes">What should the {what} fix?</label>'
-                f'<textarea id="notes" name="notes" rows="4" required placeholder="{placeholder}"></textarea>'
-                f'<p><button>Send back to {what}</button></p></form></details>')
+        return (f'<details class="send-back"><summary>{_("Send back with notes")}</summary>'
+                f'<form method="post" action="/m/{slug}/reject"><label for="notes">{what}</label>'
+                f'<textarea id="notes" name="notes" rows="4" required placeholder="{escape(placeholder, quote=True)}"></textarea>'
+                f'<p><button>{_("Send back")}</button></p></form></details>')
     if m.state == State.BRIEF_READY and not m.approved:
-        return ask("review", "Approve the brief, or send it back", "Brief ready",
-                   '<p class="hint">Read it below. Approving sends it to the writer.</p>',
-                   f'<form method="post" action="/m/{slug}/approve"><button class="primary">Approve brief</button></form>'
-                   + send_back("researcher", "e.g. Find the FAA's own incident report; the thesis overstates the denial."))
+        return ask("review", _("Review brief"), "Brief ready", "",
+                   f'<form method="post" action="/m/{slug}/approve"><button class="primary">{_("Approve brief")}</button></form>'
+                   + send_back(_("Notes for the researcher"),
+                               _("e.g. Find the FAA's own incident report; the thesis overstates the denial.")))
     if m.state == State.ARTICLE_READY and not m.reviewed:
-        where = (f"Publishing writes it to the local site (site/{escape(m.slug)}/)"
-                 + (" and queues it for 1F916, which takes one post a day, newest first" if agents.f916_enabled() else "")
-                 + (" and announces it on Bluesky" if agents.bluesky_enabled() else "") + ".")
-        return ask("publish", "Publish the article, or send it back", "Article ready", f'<p class="hint">{where}</p>',
-                   f'<form method="post" action="/m/{slug}/publish"><button class="primary">Publish article</button></form>'
-                   f'<a class="btn" href="/m/{slug}/preview" target="_blank">Open full-page preview</a>'
-                   + send_back("writer", "e.g. The second section repeats the first; lead with the FAA findings."))
+        where = _("Publishes to: {places}").format(places=", ".join([_("Local site")] + [c.NAME for c in live_channels()]))
+        return ask("publish", _("Review article"), "Article ready", f'<p class="hint">{escape(where)}</p>',
+                   f'<form method="post" action="/m/{slug}/publish"><button class="primary">{_("Publish article")}</button></form>'
+                   f'<a class="btn" href="/m/{slug}/preview" target="_blank">{_("Open preview")}</a>'
+                   + send_back(_("Notes for the writer"),
+                               _("e.g. The second section repeats the first; lead with the FAA findings.")))
     if m.state == State.PARKED:
-        what = "article" if orchestrator.parked_while_writing(m) else "brief"
+        writing = orchestrator.parked_while_writing(m)
         if orchestrator.parked_draft(m):
-            push = f'<form method="post" action="/m/{slug}/push"><button>Push through anyway</button></form>'
-            push_hint = (f"Push through sends the last failed {what} on to your review. It stays marked as "
-                         f"failing its check, including on the published page.")
+            push = f'<form method="post" action="/m/{slug}/push"><button>{_("Push through anyway")}</button></form>'
+            push_hint = (_("Push through: send the last failed article to review, marked as failed.") if writing
+                         else _("Push through: send the last failed brief to review, marked as failed."))
         else:
             push = ""
-            push_hint = f"It can't be pushed through because no attempt left a finished {what}."
-        return ask("parked", "Requeue it" + (", or push it through" if push else ""), "Parked",
-                   f'<p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
-                   f'below so the agent can learn from them. {push_hint}</p>',
-                   f'<form method="post" action="/m/{slug}/requeue"><button class="primary">Requeue</button></form>{push}')
+            push_hint = _("Can't push through: no finished article.") if writing else _("Can't push through: no finished brief.")
+        requeue = _("Requeue: {n} new attempts, notes kept.").format(n=m.max_attempts)
+        return ask("parked", next_step(m), "Parked",
+                   f'<p class="hint">{requeue} {push_hint}</p>',
+                   f'<form method="post" action="/m/{slug}/requeue"><button class="primary">{_("Requeue")}</button></form>{push}')
     if m.state == State.DONE:
         rows = places(m)
         return (f'<div class="actions"><div class="buttons">'
-                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the local site</a>'
-                f'<a class="btn" href="/published">All published articles</a></div>'
-                f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul class="places">{places_html(m, rows)}</ul>'
-                f'<p class="hint" style="margin-bottom:.2rem">Publish it again</p>{publish_form(m, rows, f"/m/{slug}")}</div>')
+                f'<a class="btn" href="/site/{slug}/" target="_blank">{_("View on local site")}</a>'
+                f'<a class="btn" href="/published">{_("All published")}</a></div>'
+                f'<p class="hint" style="margin-bottom:.2rem">{_("Published to")}</p><ul class="places">{places_html(m, rows)}</ul>'
+                f'<p class="hint" style="margin-bottom:.2rem">{_("Publish it again")}</p>{publish_form(m, rows, f"/m/{slug}")}</div>')
     return ""
 
 async def published_page(request: Request) -> HTMLResponse:
@@ -1787,20 +1791,20 @@ async def published_page(request: Request) -> HTMLResponse:
     queues = {c.KEY: [] for c in live} | {key: [slug for slug, _, _ in entries] for key, _, entries in queued}
     queues.pop("site", None)
     epics = {e.slug: e for e in store.all_epics()}
-    body = [flash(request), '<p><a class="back" href="/">&larr; Back to missions</a></p>', "<h1>Published</h1>",
-            f'<p>{len(missions)} article{"" if len(missions) == 1 else "s"} on the local site. '
-            f'<a class="btn" href="/site/" target="_blank">Open the local site</a> '
-            f'<a class="btn" href="/settings#publishing">Publishing settings</a></p>']
-    rows = ['<li><strong>Local site</strong>: the foundation, always on · files in <code>site/</code> · '
+    body = [flash(request), f'<p><a class="back" href="/">&larr; {_("Missions")}</a></p>', f'<h1>{_("Published")}</h1>',
+            f'<p>{_n("{n} article", "{n} articles", len(missions))} · '
+            f'<a class="btn" href="/site/" target="_blank">{_("Open the local site")}</a> '
+            f'<a class="btn" href="/settings#publishing">{_("Publishing settings")}</a></p>']
+    rows = [f'<li><strong>{_("Local site")}</strong>: {_("always on")} · <code>site/</code> · '
             '<a href="/site/feed.xml" target="_blank">RSS</a> · <a href="/site/feed.json" target="_blank">JSON Feed</a></li>']
     rows += [f"<li>{channel_status(c)}</li>" for c in live]
     if not live:
-        rows.append('<li class="muted">No channels yet. Add one on the <a href="/settings#publishing">Settings</a> page.</li>')
-    body.append(f'{heading("send", "Where articles go")}<ul class="places">{"".join(rows)}</ul>')
+        rows.append(f'<li class="muted">{_("No channels. Add one in {settings}.").format(settings=SETTINGS_LINK())}</li>')
+    body.append(f'{heading("send", _("Channels"))}<ul class="places">{"".join(rows)}</ul>')
     body.append(queue_section(queued))
-    body.append(heading("newspaper", "Articles"))
+    body.append(heading("newspaper", _("Articles")))
     if not missions:
-        body.append('<p class="muted">Nothing published yet. Articles show up here once you publish them from the Missions page.</p>')
+        body.append(f'<p class="muted">{_("Nothing published yet.")}</p>')
     for m in missions:
         rows = places(m, queues)
         when = f"{m.published_at:%b %-d, %Y}" if m.published_at else ""
@@ -1808,15 +1812,15 @@ async def published_page(request: Request) -> HTMLResponse:
             f'<div class="card pub{" publish" if m.publish_requests else ""}" id="a-{escape(m.slug)}">'
             f'<div class="row"><a class="topic" href="/site/{quote(m.slug)}/" target="_blank">{escape(titles.get(m.slug, m.topic))}</a>'
             f'<span class="badge{" publish" if m.publish_requests else ""}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">mission page</a></div>'
+            f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">{_("mission page")}</a></div>'
             f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
-    return page("Published", "\n".join(body), poll=True)
+    return page(_("Published"), "\n".join(body), poll=True)
 
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]
     m = store.get_mission(slug)
     if not m:
-        return page("Not found", '<h1>No such mission</h1><p><a href="/">Back to missions</a></p>')
+        return page(_("Not found"), f'<h1>{_("No such mission")}</h1><p><a href="/">{_("Back to missions")}</a></p>')
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request),
             f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
@@ -1827,54 +1831,54 @@ async def mission(request: Request) -> Response:
     step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
-    ask = escape(f"Where is the mission {slug} at, and what is taking so long?", quote=True)
-    body.append(f'<p><button type="button" class="btn" data-ask="{ask}">Ask the assistant about this mission</button></p>')
+    ask = escape(_("Where is the mission {slug} at, and what is taking so long?").format(slug=slug), quote=True)
+    body.append(f'<p><button type="button" class="btn" data-ask="{ask}">{_("Ask chat about this mission")}</button></p>')
     body.append(actions_for(m))
     current = epics.get(m.epic)
-    hint = " (proposed; approve it on the home page)" if current and current.status == "proposed" else ""
+    hint = " " + _("(proposed)") if current and current.status == "proposed" else ""
     body.append(f'{epic_datalist()}<form method="post" action="/m/{quote(slug)}/epic" class="inline">'
-                f'<label for="epic" style="margin:0">Epic<span class="hint">{hint}</span></label>'
+                f'<label for="epic" style="margin:0">{_("Epic")}<span class="hint">{hint}</span></label>'
                 f'<input type="text" id="epic" name="epic" list="epic-names" maxlength="48" '
-                f'value="{escape(current.title if current else "", quote=True)}" placeholder="none">'
-                f'<button>Save epic</button></form>')
+                f'value="{escape(current.title if current else "", quote=True)}" placeholder="{_("none")}">'
+                f'<button>{_("Save")}</button></form>')
 
     if m.validator_notes:
-        title = "Why it was parked" if m.state == State.PARKED else \
-                "Feedback being worked on" if m.validator_notes.startswith("Human reviewer feedback") else \
-                "Last check's notes"
-        name = "alert" if m.state == State.PARKED or not title.startswith("Feedback") else "message"
-        body.append(f'{heading(name, title, cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
+        title = "Why it stopped" if m.state == State.PARKED else \
+                "Your feedback" if m.validator_notes.startswith("Human reviewer feedback") else \
+                "Check notes"
+        name = "message" if title == "Your feedback" else "alert"
+        body.append(f'{heading(name, _(title), cls="sec")}<pre class="notes">{escape(m.validator_notes)}</pre>')
     if m.unchecked_brief:
-        body.append(heading("alert", "Brief pushed through despite failing the source check", cls="sec")
+        body.append(heading("alert", _("Brief pushed through: failed source check"), cls="sec")
                     + f'<pre class="notes">{escape(m.unchecked_brief)}</pre>')
     if m.unchecked_article:
-        body.append(heading("alert", "Article pushed through despite failing its check", cls="sec")
+        body.append(heading("alert", _("Article pushed through: failed article check"), cls="sec")
                     + f'<pre class="notes">{escape(m.unchecked_article)}</pre>')
 
     brief, article = _brief(slug), _article(slug)
     checked = not m.unchecked_brief
     preview = Path("missions") / slug / "preview.html"
     if article and preview.exists() and m.state in (State.ARTICLE_READY, State.DONE, State.WRITING):
-        body.append(f'{heading("newspaper", "Article", cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
+        body.append(f'{heading("newspaper", _("Article"), cls="sec")}<iframe class="article" src="/m/{quote(slug)}/preview"></iframe>')
     if brief and m.state == State.BRIEF_READY:
-        body.append(f'{heading("search", "Research brief", cls="sec")}<div class="doc">{brief_html(brief, checked)}</div>')
+        body.append(f'{heading("search", _("Research brief"), cls="sec")}<div class="doc">{brief_html(brief, checked)}</div>')
     elif brief:
-        body.append(f'<details><summary>{icon("search")}Research brief</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
+        body.append(f'<details><summary>{icon("search")}{_("Research brief")}</summary><div class="doc">{brief_html(brief, checked)}</div></details>')
     rejected = Path("missions") / slug / "brief.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.RESEARCHING, State.QUEUED):
-        body.append(f'<details><summary>{icon("cross")}Last brief that failed the source check</summary>'
+        body.append(f'<details><summary>{icon("cross")}{_("Last failed brief")}</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
     rejected = Path("missions") / slug / "article.rejected.md"
     if rejected.exists() and m.state in (State.PARKED, State.WRITING):
-        body.append(f'<details><summary>{icon("cross")}Last article that failed its check</summary>'
+        body.append(f'<details><summary>{icon("cross")}{_("Last failed article")}</summary>'
                     f'<pre class="notes">{escape(rejected.read_text())}</pre></details>')
 
     events = store.events(slug)
     if events:
         rows = "".join(f'<tr><td class="when">{escape(e["at"][:16].replace("T", " "))}</td>'
-                       f'<td>{escape(LABELS.get(State(e["to_state"]), e["to_state"]))}</td>'
+                       f'<td>{escape(_(LABELS.get(State(e["to_state"]), e["to_state"])))}</td>'
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
-        body.append(f'{heading("history", "History", cls="sec")}<table class="events">{rows}</table>')
+        body.append(f'{heading("history", _("History"), cls="sec")}<table class="events">{rows}</table>')
     return page(m.topic, "\n".join(body), poll=True)
 
 async def preview(request: Request) -> Response:
@@ -1909,6 +1913,7 @@ CHAT_JS = """<script>
   const log = document.getElementById("chat-log"), form = document.getElementById("chat-form");
   const box = document.getElementById("chat-q"), pickModel = document.getElementById("chat-model");
   const hint = document.getElementById("chat-hint"), suggest = document.getElementById("chat-suggest");
+  const T = window.I18N || {}, t = s => T[s] || s;
   const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false, crews = {};
@@ -1959,11 +1964,11 @@ CHAT_JS = """<script>
     let data = {models: [], default: ""};
     try { data = await (await fetch("/chat/models")).json(); } catch (e) {}
     const saved = (() => { try { return localStorage.getItem("chat-model"); } catch (e) { return null; } })();
-    pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} (default, shared with the loop)` : m, m)));
+    pickModel.replaceChildren(...data.models.map(m => new Option(m === data.default ? `${m} ${t("(default)")}` : m, m)));
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " Web search needs a Brave key (BRAVE_API_KEY in .env); it can still read pages you link.";
+    else if (data.web === false) hint.textContent += " " + t("Web search off (set BRAVE_API_KEY in .env).");
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
@@ -1988,13 +1993,13 @@ CHAT_JS = """<script>
     setOpen(true); suggest.hidden = true;
     const model = pickModel.value;
     show("user", question); box.value = ""; box.disabled = true;
-    const wait = show("assistant", "Looking…", "", "wait");
+    const wait = show("assistant", t("Looking…"), "", "wait");
     let answer;
     try {
       const r = await fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({question, model, history: history.slice(-4).map(({role, content}) => ({role, content}))})});
       answer = (await r.json()).answer;
-    } catch (e) { answer = "Researcher Chat didn't answer. Is the UI still running?"; }
+    } catch (e) { answer = t("No answer. Is the UI still running?"); }
     wait.remove(); show("assistant", answer, model);
     history.push({role: "user", content: question}, {role: "assistant", content: answer, model});
     history = history.slice(-20); store("chat-history", history);
@@ -2016,21 +2021,22 @@ CHAT_JS = """<script>
 </script>"""
 
 def chat_widget() -> str:
-    chips = "".join(f'<button type="button">{escape(q)}</button>' for q in SUGGESTIONS)
+    chips = "".join(f'<button type="button">{escape(_(q))}</button>' for q in SUGGESTIONS)
+    chat = escape(_("Researcher Chat"), quote=True)
     guide = (f'<div class="chat-guide" aria-hidden="true" data-sprites="{RESEARCHERS_SRC}"></div>'
              if settings.animations() else "")
-    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="Researcher Chat" aria-expanded="false"
+    return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="{chat}" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
-<aside id="chat-panel" class="chat-panel" aria-label="Researcher Chat" hidden>{guide}
-<header><strong>Researcher Chat</strong><span><button type="button" id="chat-clear" title="Start over">Clear</button>
- <button type="button" id="chat-close" aria-label="Close">×</button></span></header>
-<label class="model">Model <select id="chat-model" aria-label="Model"></select></label>
-<p class="hint" id="chat-hint">It reads what the loop is doing, searches the web, can add a mission or move one to an epic, and works with the loop off.</p>
+<aside id="chat-panel" class="chat-panel" aria-label="{chat}" hidden>{guide}
+<header><strong>{chat}</strong><span><button type="button" id="chat-clear" title="{_("Start over")}">{_("Clear")}</button>
+ <button type="button" id="chat-close" aria-label="{_("Close")}">×</button></span></header>
+<label class="model">{_("Model")} <select id="chat-model" aria-label="{_("Model")}"></select></label>
+<p class="hint" id="chat-hint">{_("Ask about the loop, or search the web.")}</p>
 <div class="chat-log" id="chat-log" aria-live="polite"></div>
 <div class="suggest" id="chat-suggest">{chips}</div>
 <form id="chat-form" class="chat-form"><textarea id="chat-q" rows="2" maxlength="600"
- placeholder="Where is the grid outage mission at?" aria-label="Your question"></textarea>
-<button class="primary">Ask</button></form>
+ placeholder="{escape(_("Where is the grid outage mission at?"), quote=True)}" aria-label="{_("Your question")}"></textarea>
+<button class="primary">{_("Ask")}</button></form>
 </aside>{CHAT_JS}"""
 
 async def chat_models(request: Request) -> JSONResponse:
@@ -2041,7 +2047,7 @@ async def chat_models(request: Request) -> JSONResponse:
         found = await run_in_threadpool(agents.chat_catalog)
     except Exception:
         return JSONResponse({"models": [MODEL], "default": MODEL, "crews": {MODEL: chat_crew(MODEL)}, "web": web,
-                             "error": "Ollama isn't reachable, so Researcher Chat can't answer. Start the Ollama app."})
+                             "error": _("Can't reach Ollama. Start it to use chat.")})
     found = found or [{"name": MODEL, **chat_crew(MODEL)}]
     return JSONResponse({"models": [c["name"] for c in found], "default": found[0]["name"], "web": web,
                          "crews": {c["name"]: {"crew": c["crew"], "family": c["family"]} for c in found}})
@@ -2060,11 +2066,11 @@ async def chat_ask(request: Request) -> Response:
         model = str(data.get("model") or "")[:100] or None
         history = history if isinstance(history, list) else []
     except (ValueError, AttributeError):
-        return JSONResponse({"answer": "That question didn't arrive in one piece. Try again."}, status_code=400)
+        return JSONResponse({"answer": _("That question didn't arrive in one piece. Try again.")}, status_code=400)
     try:
         answer = await run_in_threadpool(agents.chat, question, [h for h in history if isinstance(h, dict)], model)
     except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
-        answer = f"I couldn't answer just now ({type(e).__name__}: {str(e)[:200]}). Is Ollama running?"
+        answer = _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
     return JSONResponse({"answer": answer})
 
 async def api_signature(request: Request) -> PlainTextResponse:
@@ -2264,6 +2270,7 @@ app = Starlette(routes=[
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
+    Route("/settings/language", save_language, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
     Route("/auto", save_auto, methods=["POST"]),
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),

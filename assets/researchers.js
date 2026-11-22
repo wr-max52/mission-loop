@@ -32,6 +32,10 @@ window.__researchers = true;
 // every visitor says hello): window.RESEARCHERS_PACE = {life: [lo, hi], gap: [lo, hi], first: [lo, hi],
 // entry: [lo, hi], greet: chance, rest: [lo, hi]}.
 const PACE = window.RESEARCHERS_PACE || {};
+// What they say, in the UI's language: assets/lines/<code>.js sets window.RESEARCHER_LINES before this script runs
+// (written in that language, not translated). Anything it leaves out is said in English.
+const LINES = window.RESEARCHER_LINES || {};
+const fill = (text, vars) => text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
 const [LIFE_MIN, LIFE_MAX] = PACE.life || [15, 30];      // seconds on stage
 const [GAP_MIN, GAP_MAX] = PACE.gap || [10, 20];         // seconds between visitors on one stage
 const [FIRST_MIN, FIRST_MAX] = PACE.first || [2, 15];    // the first visitor's random wait, so stages never start in step
@@ -138,7 +142,7 @@ const crewOf = worker => CAST.filter(k => !worker || ROSTER[k].worker === worker
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
   const one = v => (Array.isArray(v) ? pick(r, v) : v);
-  const a = { kind, seed, name: t.name, fav: t.fav || {} };
+  const a = { kind, seed, name: (LINES.names || {})[kind] || t.name, fav: t.fav || {} };
   a.skin = SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)];
   a.skinD = shade(a.skin, 0.82);
   a.hair = one(t.hair) || "#17110e"; a.hairD = shade(a.hair, 0.72); a.hairL = shade(a.hair, 1.25);
@@ -543,7 +547,7 @@ function roomAhead(r, need) {                     // turn around if there's no r
   if (r.face > 0 && r.x + need > hi) r.face = -1;
   else if (r.face < 0 && r.x - need < lo) r.face = 1;
 }
-const QUOTES = {
+const QUOTES = Object.assign({
   intro: ["On it!", "Reporting in.", "Who funded this?", "Let's dig.", "Facts, please.", "Hello, sources."],
   read: ["hm.", "fascinating", "p. 412...", "a footnote!", "wait, what", "...interesting"],
   search: ["a clue!", "evidence?", "aha, a URL", "hmmmm"],
@@ -562,13 +566,13 @@ const QUOTES = {
   wave: ["hi!", "o/", "hello!", "busy busy"],
   stack: ["light reading", "just a few books"],
   topple: ["NOOO"],
-};
+}, LINES.quotes);
 
 
 // The general library (500+ lines): academic nagging, grad-school and peer-review memes, stats and LaTeX pain,
 // archive and newsroom jokes, logical fallacies, bad Latin and literary misquotes. Dealt from a shuffled deck shared by the
 // whole page, so a line comes round again only after all the others have been said.
-const QUIPS = [
+const QUIPS = LINES.quips || [
   // the classics of the margin
   "[citation needed]", "Show your work!", "Where is your bibliography?", "Don't forget logos!",
   "Ethos, pathos... LOGOS.", "Cite your sources!", "Says who, exactly?", "Source?", "Source??",
@@ -767,7 +771,9 @@ function nextQuip() {
   memory.set(QUIP_DECK, deck);
   return QUIPS[i] || QUIPS[0];
 }
-const readTime = text => clamp(1.6 + text.length * 0.055, 1.8, 5);
+// A Chinese character carries about as much as a short word, so it counts for more reading time.
+const WIDE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/g;
+const readTime = text => clamp(1.6 + (text.length + 2 * (text.match(WIDE) || []).length) * 0.055, 1.8, 5);
 
 // ---------- little bits of everyday research life: pixel maps, props and helpers ----------
 // A pixel map is a list of rows, top to bottom, drawn facing right; "." is empty and each letter a color.
@@ -923,7 +929,7 @@ function propGlobe(P, hx, hy, off) {
 }
 
 // Lines for the bits. They're said at the bit's big moment and replace whatever bubble was up.
-const BIT_LINES = {
+const BIT_LINES = Object.assign({
   beaker_boom: ["That's... a result.", "Note to self: not that one.", "*cough* Noted.", "Hypothesis: rejected.", "Science!"],
   beaker_ok: ["Hypothesis: confirmed?", "Ooh, pretty.", "Reproducible? Let's not.", "It fizzes!"],
   rocket_crash: ["Peer review: failed.", "Back to the drawing board.", "It's a learning experience.", "Rocket science is hard."],
@@ -954,7 +960,7 @@ const BIT_LINES = {
   duck_talk: ["So this function...", "...and then the loop...", "Okay duck, listen."],
   duck_done: ["Oh! It was a typo.", "Thanks, duck.", "Duck solves it again."],
   globe: ["Fieldwork, anywhere?", "Let's go... there!", "Somewhere, a source."],
-};
+}, LINES.bits);
 
 const ACTIONS = {
   spawn: {                                       // walk in from one side
@@ -974,7 +980,7 @@ const ACTIONS = {
         r.alpha = 1; r.y = 0; s.done = true;
         if (r.stage.kind === "flow") r.arrive();
         else if (r.greet) { r.say(r.greet, Math.max(3.5, readTime(r.greet) + 1.5)); r.greet = null; }
-        else if (r.rand() < GREET) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
+        else if (r.rand() < GREET) r.say(r.rand() < 0.35 ? fill(LINES.reporting || "{name}, reporting in.", { name: r.a.name }) : nextQuip());
         return stand({ carry: true });
       }
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
@@ -1644,7 +1650,7 @@ const ACTIONS = {
       const open = s.t > 0.4, tickle = s.t > 1 && s.t < 2.2, achoo = s.t >= 2.2;
       if (open && !achoo && Math.random() < 0.15) r.stage.add({ kind: "smoke", c: "#d8c9a3", x: ahead(r, 9), y: r.headTop - 14, vx: r.face * 4, vy: 6, life: 1, size: 2 });
       if (achoo && !s.boom) {
-        s.boom = true; r.say("ACHOO!", 1.3); r.stage.dust(ahead(r, 10), 8);
+        s.boom = true; r.say(LINES.achoo || "ACHOO!", 1.3); r.stage.dust(ahead(r, 10), 8);
         for (let i = 0; i < 4; i++) r.stage.paper(ahead(r, 8), r.headTop - 10, r.face * between(r.rand, 10, 40), between(r.rand, 20, 50));
       }
       if (achoo && s.t < 2.5) { const [lo, hi] = r.stage.range(); r.x = clamp(r.x - r.face * 30 * dt, lo, hi); }
@@ -1738,7 +1744,7 @@ Object.assign(MOODS, {
   github: { typing: 3, idle: 1, eureka: 1, papers: 1.5, rocket: 1, dance: 1 },
   bluesky: { typing: 3, idle: 1, eureka: 1, plane: 2, bird: 1.5, dance: 1 },
 });
-const STEP_LINES = {                             // said on reaching a step
+const STEP_LINES = Object.assign({                             // said on reaching a step
   theorist: ["Connecting the dots.", "What ties these together?", "Big picture time.", "Red string, please."],
   finder: ["Scanning the horizon.", "Any new leads?", "Mission hunting."],
   sources: ["To the sources!", "Let's dig.", "Who funded this?", "Opening 47 tabs."],
@@ -1751,10 +1757,10 @@ const STEP_LINES = {                             // said on reaching a step
   "1f916": ["Posting to 1F916.", "One post a day!"],
   github: ["Pushing the site.", "git push, basically."],
   bluesky: ["Posting to Bluesky.", "Telling the timeline."],
-};
+}, LINES.steps);
 // The closing line when a step's work ends: where the mission went (its state now), or why nobody is
 // working any more. Human reviews get named, since that's where the work waits.
-const CLOSERS = {
+const CLOSERS = Object.assign({
   BRIEF_READY: ["Brief's on your desk!", "Over to you: review the brief.", "Brief filed. Your call, boss."],
   ARTICLE_READY: ["Article's ready for your red pen!", "Draft's on your desk!", "Over to you: publish it?"],
   PARKED: ["Three strikes. Parked it for you.", "Stuck. Needs a human.", "Parked. Sorry!"],
@@ -1769,7 +1775,7 @@ const CLOSERS = {
   gathered: ["Sources gathered. PI's turn!", "Over to you, Professor.", "Notes are on your desk, Prof."],
   off: ["Clocking out.", "Loop's off. Nap time.", "Shift's over!"],
   other: ["Done here!", "That's a wrap.", "My work here is cited.", "Fin."],
-};
+}, LINES.closers);
 function closer(c) {
   const key = !c.running ? "off" : c.handoff ? (c.worker === "assistant" ? "gathered" : "handoff")
     : c.from.step === "finder" || c.from.step === "theorist" ? c.from.step
@@ -2354,7 +2360,7 @@ class Guide extends Stage {
   show(d) {
     if (!d || !d.model) return;
     const kind = guideFor(d.crew, d.family), seed = hash(d.model);
-    const line = `${ROSTER[kind].name} here, on ${d.model}.`;
+    const line = fill(LINES.guide || "{name} here, on {model}.", { name: (LINES.names || {})[kind] || ROSTER[kind].name, model: d.model });
     const r = this.resident;
     if (r && r.a.kind === kind && this.model === d.model) return;
     const same = !r && memory.get(this.key) === d.model;
@@ -2384,19 +2390,26 @@ class Guide extends Stage {
 }
 
 const BUBBLE_FONT = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace", BUBBLE_MAX = 232;
-// Greedy word wrap; a word too long for a line gets broken rather than spilling out of the bubble.
+// Greedy word wrap; a word too long for a line gets broken rather than spilling out of the bubble. Chinese has no
+// spaces: each character may start a line, joined to its neighbours with nothing between, and closing punctuation
+// never starts one.
+const CJK = "\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f";
+const TOKENS = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, "g"), CLOSING = /^[，。！？、：；」』）》…%]$/;
 function wrapText(ctx, text, max) {
   const lines = [];
-  let line = "";
-  for (let word of text.split(/\s+/)) {
+  let line = "", space = false;
+  for (let word of text.match(TOKENS) || []) {
+    if (/^\s+$/.test(word)) { space = true; continue; }
+    const glue = space && line ? " " : "";
+    space = false;
     while (ctx.measureText(word).width > max) {
       let k = word.length - 1;
       while (k > 1 && ctx.measureText(word.slice(0, k) + "-").width > max) k--;
       if (line) { lines.push(line); line = ""; }
       lines.push(word.slice(0, k) + "-"); word = word.slice(k);
     }
-    const next = line ? line + " " + word : word;
-    if (line && ctx.measureText(next).width > max) { lines.push(line); line = word; } else line = next;
+    const next = line + (line ? glue : "") + word;
+    if (line && !CLOSING.test(word) && ctx.measureText(next).width > max) { lines.push(line); line = word; } else line = next;
   }
   if (line) lines.push(line);
   return lines;
