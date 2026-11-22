@@ -23,7 +23,7 @@ network for the web tools).
 import asyncio, os, re
 from pathlib import Path
 import ollama
-import settings
+import library, settings
 from agents import llm, providers
 from agents.toolbox import Toolbox
 
@@ -135,6 +135,8 @@ def _limit(tb, name: str) -> int:
     if name in ROOMY:
         return ROOMY[name]
     server = getattr(tb, "server", {}).get(name)
+    if server == LIBRARY_SERVER:           # room for the Top N passages picked on the Settings page
+        return max(MAX_WEB_CHARS, settings.library_top_n() * library.PASSAGE_ROOM)
     return MAX_WEB_CHARS if server and server != LOOP_SERVER else MAX_TOOL_CHARS
 
 def _history(history: list[dict] | None) -> list[dict]:

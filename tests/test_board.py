@@ -384,3 +384,45 @@ def test_the_board_data_cannot_end_its_script(client):
     html = client.get("/board").text
     data = html.split('id="board-data">')[1].split("</script>")[0]
     assert "<" not in data and "\\u003c!--" in data
+
+# ---------- loose ends (#74) ----------
+
+def test_a_rejected_proposed_epic_leaves_no_board_row():
+    store.save_mission(Mission(slug="a", topic="One"))
+    epic = store.create_epic("Permit Money")
+    with store.conn() as c:
+        c.execute("UPDATE epics SET status = 'proposed' WHERE slug = ?", (epic.slug,))
+    board.layout()
+    rows = lambda: store.conn().execute("SELECT COUNT(*) FROM board WHERE kind = 'epic' AND id = ?",
+                                        (epic.slug,)).fetchone()[0]
+    assert rows() == 1
+    orchestrator.reject_epic(epic.slug, None)
+    assert rows() == 0
+
+def test_api_board_survives_an_epic_added_mid_read(client, monkeypatch):
+    grid = store.create_epic("Grid Power")
+    store.save_mission(Mission(slug="texas", topic="Texas grid rule", epic=grid.slug))
+    real = store.all_epics
+    calls = []
+    def later():                             # place() reads first; by the next read a new epic has landed
+        calls.append(1)
+        if len(calls) == 2:
+            store.create_epic("Ocean Data")
+        return real()
+    monkeypatch.setattr(store, "all_epics", later)
+    r = client.get("/api/board")
+    assert r.status_code == 200
+    ids = {n["id"] for n in r.json()["notes"]}
+    assert f"e:{grid.slug}" in ids and "m:texas" in ids
+
+def test_settings_saves_a_custom_string_colour(client):
+    import settings
+    page = client.get("/settings").text
+    assert 'name="own"' in page and "Your own" in page
+    client.post("/settings/board-style", data={"surface": "cork", "cards": "sticky", "string": "string",
+                                               "own": "#12ab34"})
+    assert settings.board_style()["color"] == "#12ab34"
+    assert 'class="swatch own set"' in client.get("/settings").text
+    client.post("/settings/board-style", data={"surface": "cork", "cards": "sticky", "string": "string",
+                                               "color": "#c0242b", "own": "#12ab34"})
+    assert settings.board_style()["color"] == "#c0242b"         # a ticked preset wins over the picker

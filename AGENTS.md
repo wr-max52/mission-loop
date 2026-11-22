@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 587 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 593 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -81,8 +81,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. On the Principal Investigator's
   model: first it searches the desk's library (see Library below; code looks up the inspiration line itself, then the
   Theorist may run up to `LOOKUPS` (4) searches of its own, all in `LOOKUP_TIME`, 4 minutes, through the `library` MCP
-  server), then one structured call with what it found (`findings_text`, within `FINDINGS_CHARS`) and no tools. A
-  library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
+  server), then one structured call with what it found (`findings_text`, within `findings_room()`: `FINDINGS_CHARS`,
+  or two searches at the Settings page's Top N, at most `FINDINGS_MAX`) and no tools. Stop is checked before each search,
+  and a search still running past `stopping.TURN_GRACE` is given up. A library that won't start or runs out of time never stops it (`Theory.library` says why, kept in its notes); what
   it searched for is `Theory.lookups`, in `data/theory.json` and its notes. It reads every epic with its latest missions, the missions in no epic,
   the latest published articles with the possibilities they left open, the links and combines so far (and the ones
   a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
@@ -432,7 +433,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
   tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
   panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
-  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour. A card's colour is its
+  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour (the gear and Settings → Display → Board both have the picker). A card's colour is its
   stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
   a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
   researcher from that worker's crew: on a sticky note it stands inside the card on its bottom edge (the busy note

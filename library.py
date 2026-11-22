@@ -33,6 +33,7 @@ TIMEOUT = httpx.Timeout(120, connect=10)
 QUERY_TIME = 30                                 # seconds to embed a search's query
 CHUNK_CHARS = 1200                         # a long article section is split into passages about this long
 PASSAGE_CHARS = 700                        # a passage as a search shows it
+PASSAGE_ROOM = 850                         # room one rendered hit takes with its heading, for callers' limits
 BATCH = 32                                 # passages per embedding request
 EMBED_TIME = 60                            # seconds one sync may spend embedding; the rest waits for the next
 RRF_K = 60                                 # reciprocal rank fusion's damping: the usual value
