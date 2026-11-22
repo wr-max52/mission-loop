@@ -1896,7 +1896,8 @@ const stages = [];
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href") || "#" + host.id);
+    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew
+      : host.getAttribute("href") || (host.dataset.id ? "note:" + host.dataset.id : "#" + host.id));   // a board note has no link
     this.mood = kind === "crew" ? "crew" : host.dataset.lab || "busy";
     this.worker = host.dataset.worker || null;   // whose crew visits a card
     this.canvas = document.createElement("canvas");
@@ -2439,7 +2440,8 @@ const crews = [], guides = [];
 function rescan() {
   for (const s of stages.slice()) {
     if (!s.host.isConnected) {
-      const sel = s.kind === "flow" ? ".flow-track[data-lab]" : `.card[href="${CSS.escape(s.host.getAttribute("href"))}"]`;
+      const sel = s.kind === "flow" ? ".flow-track[data-lab]" : s.host.dataset.id
+        ? `.note[data-id="${CSS.escape(s.host.dataset.id)}"]` : `.card[href="${CSS.escape(s.host.getAttribute("href"))}"]`;
       const next = document.querySelector(sel);
       if (!next || stages.some(o => o.host === next)) { s.save(); s.kill(); stages.splice(stages.indexOf(s), 1); continue; }
       s.adopt(next);
@@ -2450,7 +2452,7 @@ function rescan() {
     else s.worker = s.host.dataset.worker || null;   // the card changed hands: its next visitor is from that crew
   }
   for (let i = stages.length - 1; i >= 0; i--) if (stages[i].dead) { stages[i].kill(); stages.splice(i, 1); }
-  document.querySelectorAll(".card[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
+  document.querySelectorAll(".card[data-lab], .note[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
   const track = document.querySelector(".flow-track[data-lab]");
   if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
   document.querySelectorAll(".crew[data-crew]").forEach(c => { if (!crews.some(o => o.host === c)) crews.push(new Crew(c)); });

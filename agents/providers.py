@@ -20,6 +20,7 @@ TEMPERATURE = 0.2
 MODEL_CACHE_SECONDS = 600                  # the Settings page and the chat picker list models often
 NOT_CHAT = re.compile(r"embed|whisper|tts|dall-e|image|moderation|audio|realtime|transcri|speech|rerank|guard|"
                       r"ocr|vision-preview|search-preview|computer-use|codex-mini|babbage|davinci", re.I)
+EMBED = re.compile(r"embed", re.I)        # an embedding model's name says so (text-embedding-3-small, mistral-embed)
 _models: dict[str, tuple[float, str, list[str]]] = {}   # provider -> (when, key+url it was listed with, names)
 
 class ProviderError(Exception):
@@ -76,8 +77,10 @@ def _fail(pid: str, e: Exception) -> ProviderError:
 
 # ---------- models ----------
 
-def list_models(pid: str, key: str | None = None, url: str | None = None, timeout: float = 15) -> list[str]:
-    """The chat models the provider offers this key, sorted. Raises ProviderError for a refused key or no answer.
+def list_models(pid: str, key: str | None = None, url: str | None = None, timeout: float = 15,
+                embed: bool = False) -> list[str]:
+    """The chat models the provider offers this key, sorted (embed=True: its embedding models instead, for the
+    library). Raises ProviderError for a refused key or no answer.
     key and url default to the saved ones; the Settings page passes a key it is about to save, to check it first."""
     key = settings.provider_key(pid) if key is None else key
     url = (settings.provider_url(pid) if url is None else url).rstrip("/")
@@ -96,23 +99,31 @@ def list_models(pid: str, key: str | None = None, url: str | None = None, timeou
     items = body if isinstance(body, list) else body.get("data") or body.get("models") or []
     names = {str(m.get("id") or m.get("name") or "") if isinstance(m, dict) else str(m) for m in items}
     names = {n.removeprefix("models/") for n in names if n}    # Gemini lists "models/gemini-..."
+    if embed:
+        return sorted(n for n in names if EMBED.search(n))
     return sorted(n for n in names if not NOT_CHAT.search(n))
 
-def models(pid: str) -> tuple[list[str], str]:
-    """(names, error) for the provider, cached for MODEL_CACHE_SECONDS. Never raises, so pages render offline."""
+def models(pid: str, embed: bool = False) -> tuple[list[str], str]:
+    """(names, error) for the provider, cached for MODEL_CACHE_SECONDS. Never raises, so pages render offline.
+    embed=True lists its embedding models instead."""
     stamp = settings.provider_key(pid) + "|" + settings.provider_url(pid)
-    hit = _models.get(pid)
+    slot = f"{pid}:embed" if embed else pid
+    hit = _models.get(slot)
     if hit and hit[1] == stamp and time.monotonic() - hit[0] < MODEL_CACHE_SECONDS:
         return hit[2], ""
     try:
-        found = list_models(pid, timeout=8)
+        found = list_models(pid, timeout=8, embed=embed)
     except ProviderError as e:
         return [], str(e)
-    _models[pid] = (time.monotonic(), stamp, found)
+    _models[slot] = (time.monotonic(), stamp, found)
     return found, ""
 
 def forget_models(pid: str | None = None) -> None:
-    _models.clear() if pid is None else _models.pop(pid, None)
+    if pid is None:
+        _models.clear()
+    else:
+        _models.pop(pid, None)
+        _models.pop(f"{pid}:embed", None)
 
 def family(model: str) -> str:
     """'claude-sonnet-5-5' -> 'claude', 'meta-llama/llama-4-scout' -> 'llama': who the chat panel sends in."""

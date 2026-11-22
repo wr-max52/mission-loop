@@ -2,13 +2,13 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity, checkpoint
+import activity, board, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       ChannelPost, Combine, COMBINABLE, Link, SITE_FOLDERS, epic_title, is_open, slugify)
+                       ChannelPost, Combine, COMBINABLE, Epic, Link, SITE_FOLDERS, epic_title, is_open, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -136,6 +136,7 @@ def _write_brief(m: Mission, now) -> str:
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
+        _mentions(m.slug)
         m.unchecked_brief = ""
         path = _write_brief_md(m, brief)
         m.validator_notes = ""
@@ -200,6 +201,7 @@ def step(m: Mission, now) -> str | None:
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
+            _mentions(m.slug)
             m.unchecked_article, m.article_draft = "", None
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
@@ -302,12 +304,14 @@ def push_through(m: Mission, now) -> None:
     before = m.state
     if isinstance(draft, RejectedBrief):
         store.save_artifact(m.slug, "brief", draft.brief)
+        _mentions(m.slug)
         m.unchecked_brief, m.rejected_brief, m.approved = draft.notes, None, False
         _write_brief_md(m, draft.brief)
         m.state = State.BRIEF_READY
         note = "failed brief pushed through by human"
     else:
         store.save_artifact(m.slug, "article", draft.article)
+        _mentions(m.slug)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
         m.article_draft = None
         _write_article_review(m, _brief(m), draft.article)
@@ -357,6 +361,14 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
             break
         changed += 1
     return changed
+
+def _mentions(slug: str) -> None:
+    """The cork board's mentions for a mission whose brief or article was just saved. Display only: a failure is
+    printed and never stops the work."""
+    try:
+        board.find_mentions(slug)
+    except Exception as e:
+        print(f"board mentions for {slug} failed: {type(e).__name__}: {e}", flush=True)
 
 PROGRESS = ("brief_pick", "brief_sources", "article_draft")   # Mission fields an agent saves mid-task
 
@@ -473,7 +485,10 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     continue
                 if before == "theorist":   # applied here, between tasks, so no worker saves over its changes
                     busy = {m.slug for _, m, _ in running.values() if m}
-                    changed += apply_theory(result, now_fn(), busy) if result else 0
+                    if result is not None and hasattr(result, "moves"):   # a board turn
+                        changed += apply_board(result, now_fn())
+                    else:
+                        changed += apply_theory(result, now_fn(), busy) if result else 0
                     continue
                 if m is None:
                     changed += result
@@ -539,6 +554,17 @@ def find_new_missions(now) -> int:
 # ---------- the Theorist: looks across the desk, evolves the line ----------
 
 THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless a human asks (THINK_FLAG)
+BOARD_EVERY = 3                            # every third Theorist turn only arranges the cork board (#69)
+
+def theory_turn() -> int:
+    """The number the Theorist's next turn will have (data/theory.json counts them, failed ones included)."""
+    try:
+        return int(store.last_theory().get("turn") or 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+def board_turn(turn: int) -> bool:
+    return turn % BOARD_EVERY == 0
 
 def desk_fingerprint() -> str:
     """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
@@ -569,16 +595,21 @@ def theorist_due(now) -> bool:
         return True
 
 def think(now):
-    """The Theorist's turn, on a worker's thread. It only reads; apply_theory makes the changes. A failure is
-    noted, so it waits THEORY_GAP before trying again, and never holds up the loop."""
+    """The Theorist's turn, on a worker's thread: every BOARD_EVERY-th turn arranges the board (agents.tidy_board),
+    the others look across the desk (agents.theorize). It only reads; apply_theory or apply_board makes the
+    changes. A failure is noted (and counted as a turn), so it waits THEORY_GAP before trying again, and never
+    holds up the loop."""
     THINK_FLAG.unlink(missing_ok=True)
+    turn = theory_turn()
+    kind = "board" if board_turn(turn) else "ideas"
     try:
         activity.begin("", "theorist")
-        return agents.theorize(now)
+        return agents.tidy_board(now) if kind == "board" else agents.theorize(now)
     except Exception as e:
         why = f"{type(e).__name__}: {e}"
-        print(f"theorist failed: {why}", flush=True)
-        store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "failed": why})
+        print(f"theorist {'board turn ' if kind == 'board' else ''}failed: {why}", flush=True)
+        failed = {"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": turn, "kind": kind, "failed": why}
+        store.save_theory(failed | ({"ideas": store.last_ideas()} if kind == "board" else {}))
         return None
     finally:
         activity.clear()
@@ -601,24 +632,15 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
     homes, epics = {}, []                  # new epic title (lowercase) -> slug, for the new mission
     joins = epic_title(theory.new_mission.epic).lower() if theory.new_mission else ""
     for e in theory.new_epics:
-        members = [m for m in (store.get_mission(s) for s in e.missions) if m and m.slug not in busy]
-        if store.find_epic(e.title):
-            notes.append(f"new epic dropped: {e.title} exists now")
+        try:
+            epic, moved = propose_epic(e.title, e.missions, e.why, now, "theorist", busy,
+                                       extra=int(joins == e.title.lower()))
+        except ValueError as why:
+            notes.append(f"new epic dropped: {why}")
             continue
-        if len(members) + (joins == e.title.lower()) < MIN_NEW_EPIC_MISSIONS:
-            notes.append(f"new epic dropped: {e.title}, not enough of its missions are free to move")
-            continue
-        epic = store.create_epic(e.title, status="proposed")
         homes[e.title.lower()] = epic.slug
         epics.append(epic.title)
-        for m in members:
-            old = store.get_epic(m.epic) if m.epic else None
-            m.epic_fallback = m.epic if old and old.status == "active" else m.epic_fallback
-            m.epic = epic.slug
-            store.save_mission(m)
-            store.log_event(m.slug, now, m.state.value, m.state.value,
-                            f"the Theorist proposes the new epic {epic.title}" + (f": {e.why}" if e.why else ""))
-            changed += 1
+        changed += moved
 
     slug = ""
     if theory.new_mission:
@@ -634,20 +656,11 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
 
     combine = ""
     if theory.combine:
-        c, missions = theory.combine, store.all_missions()
-        state = {m.slug: m.state for m in missions}
-        late = [s for s in c.missions if state.get(s) not in COMBINABLE]
-        if late:
-            notes.append(f"combine dropped: {', '.join(late)} moved on while the Theorist was thinking")
-        else:
-            taken = {m.slug for m in missions} | {k.slug for k in store.all_combines()}
-            combine = _new_slug(c.topic, taken)
-            store.save_combine(Combine(slug=combine, topic=c.topic, objective=c.objective, members=c.missions,
-                                       epic=c.epic, why=c.why, at=now.isoformat()))
-            for s in c.missions:
-                store.log_event(s, now, state[s].value, state[s].value,
-                                f"the Theorist proposes combining it into: {c.topic}")
+        try:
+            combine = propose_combine(theory.combine, now, "theorist").slug
             changed += 1
+        except ValueError as why:
+            notes.append(f"combine dropped: {why} while the Theorist was thinking")
 
     linked = []
     for k in theory.links:
@@ -661,11 +674,73 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
         changed += 1
     _drop_empty_proposals()
 
-    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "patterns": theory.patterns,
+    if theory.library:
+        notes.append(theory.library)
+    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "ideas",
+                       "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
-                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes})
+                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes,
+                       "lookups": theory.lookups})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
+
+def apply_board(tidy, now) -> int:
+    """A board turn's moves, on the main thread between tasks, saved as the Theorist's. It may move notes a human
+    dragged. The last turn that looked across the desk stays in theory.json under "ideas", for the notes."""
+    moved, notes = [], list(tidy.dropped)
+    for mv in tidy.moves:
+        prefix, _, slug = mv.id.partition(":")
+        try:
+            board.move("epic" if prefix == "e" else "mission", slug, mv.x, mv.y, mv.size, by="theorist")
+            moved.append(mv.model_dump())
+        except ValueError as e:            # gone since the Theorist read the board
+            notes.append(f"{mv.id}: {e}")
+    store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "board",
+                       "why": tidy.why, "moved": moved, "notes": notes, "ideas": store.last_ideas()})
+    print(f"theorist: board turn moved {len(moved)} note(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
+    return len(moved)
+
+WHO = {"theorist": "the Theorist", "chat": "the chat assistant", "human": "human"}
+
+def propose_epic(title: str, slugs: list[str], why: str, now, by: str = "theorist", busy: set[str] = frozenset(),
+                 extra: int = 0) -> tuple[Epic, int]:
+    """A new epic, proposed: it waits for the human like the finder's, and each mission moved into it keeps its old
+    (active) epic to go back to if it is rejected. Missions being worked on right now stay where they are. extra
+    counts a mission that will join it later (the Theorist's new mission). Used by the Theorist and the chat
+    assistant. Returns (epic, missions moved); raises ValueError if the epic exists or too few missions can move."""
+    title = epic_title(title)
+    if not title:
+        raise ValueError("an epic title is 1 to 4 words")
+    if store.find_epic(title):
+        raise ValueError(f"{title} exists now")
+    members = [m for m in (store.get_mission(s) for s in dict.fromkeys(slugs)) if m and m.slug not in busy]
+    if len(members) + extra < MIN_NEW_EPIC_MISSIONS:
+        raise ValueError(f"{title}, not enough of its missions are free to move")
+    epic = store.create_epic(title, status="proposed")
+    for m in members:
+        old = store.get_epic(m.epic) if m.epic else None
+        m.epic_fallback = m.epic if old and old.status == "active" else m.epic_fallback
+        m.epic = epic.slug
+        store.save_mission(m)
+        store.log_event(m.slug, now, m.state.value, m.state.value,
+                        f"{WHO.get(by, by)} proposes the new epic {epic.title}" + (f": {why}" if why else ""))
+    return epic, len(members)
+
+def propose_combine(c, now, by: str = "theorist") -> Combine:
+    """Propose folding c.missions into one bigger mission (theorist.NewCombine, already settled); it waits for the
+    human. Raises ValueError if one of them has moved on to writing since it was checked."""
+    missions = store.all_missions()
+    state = {m.slug: m.state for m in missions}
+    late = [s for s in c.missions if state.get(s) not in COMBINABLE]
+    if late:
+        raise ValueError(f"{', '.join(late)} moved on")
+    taken = {m.slug for m in missions} | {k.slug for k in store.all_combines()}
+    made = Combine(slug=_new_slug(c.topic, taken), topic=c.topic, objective=c.objective, members=c.missions,
+                   epic=c.epic, why=c.why, at=now.isoformat(), by=by)
+    store.save_combine(made)
+    for s in c.missions:
+        store.log_event(s, now, state[s].value, state[s].value, f"{WHO.get(by, by)} proposes combining it into: {c.topic}")
+    return made
 
 # ---------- publishing: the local site, then every channel ----------
 
@@ -946,7 +1021,7 @@ def link(a: str, b: str, why: str, now, by: str = "human") -> Link:
     if not is_open(ma) and not is_open(mb):
         raise ValueError("a link needs at least one mission that isn't published yet")
     saved = store.save_link(Link(a=a, b=b, why=" ".join(why.split()), by=by, at=now.isoformat()))
-    who = "the Theorist" if by == "theorist" else by
+    who = WHO.get(by, by)
     for m, other in ((ma, mb), (mb, ma)):
         store.log_event(m.slug, now, m.state.value, m.state.value,
                         f"linked to {other.slug} by {who}" + (f": {saved.why}" if saved.why else ""))
@@ -982,7 +1057,7 @@ def approve_combine(slug: str, now, by: str = "", busy: set[str] = frozenset()) 
     epic = store.find_epic(c.epic) if c.epic else None
     listed = "\n".join(f"- {m.slug}: {m.topic}" for m in members)
     combined = Mission(slug=new, topic=c.topic, epic=epic.slug if epic else "", combines=[m.slug for m in members],
-                       objective=f"{c.objective}\n\nCombines these missions, proposed by the Theorist:\n{listed}")
+                       objective=f"{c.objective}\n\nCombines these missions, proposed by {WHO.get(c.by, c.by)}:\n{listed}")
     store.save_mission(combined)
     store.log_event(new, now, "", State.QUEUED.value, f"combined from {', '.join(combined.combines)}"
                     + (f", approved by {by}" if by else "") + (f": {c.why}" if c.why else ""))

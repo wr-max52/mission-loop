@@ -175,6 +175,19 @@ def inspire(line: str = typer.Argument(None, help='The new line; "" clears it an
     if last.get("why"):
         print(f"Theorist, {last['at'][:16].replace('T', ' ')} UTC: {last['why']}")
 
+@app.command("library")
+def library_cmd(query: str = typer.Argument("", help="What to look for; leave out to index and show the status"),
+                epic: str = typer.Option("", help="Only missions in this epic (its title)"),
+                mission: str = typer.Option("", help="Only this mission (its slug)")):
+    """Search the desk's library (what the Theorist and the chat search), or bring its index up to date."""
+    import library
+    store.init()
+    if not query.strip():
+        _, _, note = library.sync(time_limit=30 * 60)
+        print(library.summary() + (f" ({note})" if note else ""))
+        return
+    print(library.ask(query, epic=epic, mission=mission))
+
 @app.command()
 def theorize():
     """Ask the Theorist to look across the desk next: it runs as the loop's next task, or when the loop starts."""

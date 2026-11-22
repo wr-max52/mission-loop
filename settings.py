@@ -82,12 +82,13 @@ def set_ollama_host(url: str) -> str:
 #   api: "ollama", "anthropic" (Messages API) or "openai" (the OpenAI chat completions shape, which most speak)
 #   schema: False where the provider can't hold a reply to a JSON schema (it gets JSON mode and the schema in words)
 #   tokens: the request field for the reply cap; temperature: False where reasoning models refuse to be set
+#   embed: False where the provider has no embeddings API, so the library can't use it (library.py)
 PROVIDERS = {
     "ollama": {"name": "Ollama", "api": "ollama", "url": OLLAMA_DEFAULT, "key_env": "",
                "keys": "https://ollama.com/download", "blurb": "Free, on this machine. Pull models with ollama pull."},
     "anthropic": {"name": "Anthropic", "api": "anthropic", "url": "https://api.anthropic.com",
                   "key_env": "ANTHROPIC_API_KEY", "keys": "https://console.anthropic.com/settings/keys",
-                  "blurb": "Claude models."},
+                  "blurb": "Claude models.", "embed": False},
     "openai": {"name": "OpenAI", "api": "openai", "url": "https://api.openai.com/v1", "key_env": "OPENAI_API_KEY",
                "keys": "https://platform.openai.com/api-keys", "blurb": "GPT models.",
                "tokens": "max_completion_tokens", "temperature": False},
@@ -95,13 +96,13 @@ PROVIDERS = {
             "keys": "https://console.x.ai", "blurb": "Grok models."},
     "deepseek": {"name": "DeepSeek", "api": "openai", "url": "https://api.deepseek.com", "key_env": "DEEPSEEK_API_KEY",
                  "keys": "https://platform.deepseek.com/api_keys", "blurb": "DeepSeek chat and reasoner.",
-                 "schema": False},
+                 "schema": False, "embed": False},
     "gemini": {"name": "Google Gemini", "api": "openai", "url": "https://generativelanguage.googleapis.com/v1beta/openai",
                "key_env": "GEMINI_API_KEY", "keys": "https://aistudio.google.com/apikey", "blurb": "Gemini models."},
     "mistral": {"name": "Mistral", "api": "openai", "url": "https://api.mistral.ai/v1", "key_env": "MISTRAL_API_KEY",
                 "keys": "https://console.mistral.ai/api-keys", "blurb": "Mistral models."},
     "groq": {"name": "Groq", "api": "openai", "url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY",
-             "keys": "https://console.groq.com/keys", "blurb": "Open models, served very fast."},
+             "keys": "https://console.groq.com/keys", "blurb": "Open models, served very fast.", "embed": False},
     "openrouter": {"name": "OpenRouter", "api": "openai", "url": "https://openrouter.ai/api/v1",
                    "key_env": "OPENROUTER_API_KEY", "keys": "https://openrouter.ai/keys",
                    "blurb": "Hundreds of models from every lab behind one key."},
@@ -194,6 +195,61 @@ def _write_private(path: Path, data: dict) -> None:
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     tmp.replace(path)
 
+# ---------- the library: retrieval over the desk's own work, for the Theorist and the chat (library.py) ----------
+# It always ranks by words; an embedding model adds ranking by meaning. Like every model, which one is this
+# machine's choice: "" (words only), an Ollama model ("nomic-embed-text") or "<provider>/<model>" for a connected
+# provider with an embeddings API. How many passages a search returns is a pick from TOP_N_CHOICES.
+
+EMBED_ENV = "MISSION_LOOP_EMBED_MODEL"
+TOP_N_CHOICES = (3, 5, 8, 10, 15, 20)
+TOP_N = 5
+
+def can_embed(pid: str) -> bool:
+    return pid in PROVIDERS and PROVIDERS[pid].get("embed", True)
+
+def embed_providers() -> list[str]:
+    """Providers whose embedding models the library can use now: Ollama, then each connected one with an embeddings API."""
+    return [LOCAL] + [p for p in cloud_providers() if can_embed(p)]
+
+WORDS_ONLY = "-"   # saved as embed_model: words only, even while .env names a model
+
+def embed_model() -> str:
+    """The library's embedding model: settings.json, then MISSION_LOOP_EMBED_MODEL; "" ranks by words only."""
+    got = saved().get("embed_model")
+    if got == WORDS_ONLY:
+        return ""
+    return got or _env(EMBED_ENV)
+
+def set_embed_model(ref: str) -> str:
+    """Save the embedding model: a model name, "" to go back to .env, or WORDS_ONLY to rank by words only (stored
+    only while .env names a model; otherwise nothing is stored). A name equal to .env's is not stored either, so a
+    later .env edit still applies. Raises ValueError for a bad name or a provider without embeddings."""
+    ref = ref.strip()
+    if len(ref) > 200 or any(c.isspace() for c in ref):
+        raise ValueError("that isn't a model name")
+    env = _env(EMBED_ENV)
+    if ref == WORDS_ONLY:
+        ref = WORDS_ONLY if env else ""
+    elif ref and not can_embed(split_model(ref)[0]):
+        raise ValueError(f"{PROVIDERS[split_model(ref)[0]]['name']} offers no embedding models")
+    elif ref == env:
+        ref = ""
+    save(embed_model=ref)
+    return embed_model()
+
+def library_top_n() -> int:
+    """How many passages a library search returns (Settings page)."""
+    try:
+        n = int(saved().get("library_top_n") or TOP_N)
+    except (TypeError, ValueError):
+        return TOP_N
+    return n if n in TOP_N_CHOICES else TOP_N
+
+def set_library_top_n(n: int) -> None:
+    if n not in TOP_N_CHOICES:
+        raise ValueError(f"pick one of {', '.join(map(str, TOP_N_CHOICES))}")
+    save(library_top_n="" if n == TOP_N else n)   # nothing stored at the default
+
 def f916_url() -> str:
     """The 1F916 server to join: settings.json, then MISSION_LOOP_1F916_URL, then the public site. Once joined,
     the citizen's key file records its server and posts always go there (see agents/f916.api)."""
@@ -273,6 +329,66 @@ def set_chat_color(value: str) -> str:
         raise ValueError("not a colour")
     save(chat_color=value)
     return value
+
+# The cork board's look (board.py, ui.board_page): the surface, the cards, and what joins them. Saved only when
+# not the default (cork, sticky notes, red string), like the theme.
+BOARD_SURFACES = {"cork": "Cork", "paper": "Paper", "grid": "Grid", "dark": "Night", "fridge": "Fridge", "arcade": "Arcade"}
+BOARD_CARDS = {"sticky": "Sticky notes", "magnets": "Fridge magnets", "hologram": "Hologram", "pixel": "Pixel"}
+BOARD_STRINGS = {                                # kind -> its colours (a human may also pick any colour)
+    "string": {"Red": "#c0242b", "Black": "#2b2620", "Blue": "#2f5fb0", "Green": "#2f8a4a", "Gold": "#c99a1e"},
+    "laser": {"Red": "#ff3344", "Green": "#39ff88", "Blue": "#3fb8ff", "Violet": "#b45cff"},
+    "wire": {"Copper": "#c87533", "Steel": "#8d99a6", "Brass": "#b5a642"},
+    "pixel": {"Red": "#ff004d", "Yellow": "#ffec27", "Blue": "#29adff", "Green": "#00e436", "White": "#fff1e8"},
+}
+BOARD_STRING_NAMES = {"string": "String", "laser": "Laser", "wire": "Wire", "pixel": "Pixel"}
+BOARD_DEFAULT = {"surface": "cork", "cards": "sticky", "string": "string", "color": "#c0242b"}
+
+def board_style() -> dict:
+    """The board's surface, cards, string kind and string colour, each checked, with the defaults filled in."""
+    got = saved().get("board_style")
+    got = got if isinstance(got, dict) else {}
+    style = dict(BOARD_DEFAULT)
+    if got.get("surface") in BOARD_SURFACES:
+        style["surface"] = got["surface"]
+    if got.get("cards") in BOARD_CARDS:
+        style["cards"] = got["cards"]
+    if got.get("string") in BOARD_STRINGS:
+        style["string"] = got["string"]
+        style["color"] = next(iter(BOARD_STRINGS[style["string"]].values()))
+    if HEX.fullmatch(str(got.get("color") or "").lower()):
+        style["color"] = got["color"].lower()
+    return style
+
+def set_board_style(surface: str | None = None, cards: str | None = None, string: str | None = None,
+                    color: str | None = None) -> dict:
+    """Change any part of the board's look. A new string kind brings its own first colour unless a colour is given
+    or the current one is a human's own (in no kind's list). Raises ValueError for anything unknown."""
+    style = board_style()
+    if surface is not None:
+        if surface not in BOARD_SURFACES:
+            raise ValueError("not a board surface")
+        style["surface"] = surface
+    if cards is not None:
+        if cards not in BOARD_CARDS:
+            raise ValueError("not a card style")
+        style["cards"] = cards
+    if string is not None:
+        if string not in BOARD_STRINGS:
+            raise ValueError("not a string kind")
+        presets = {c for kind in BOARD_STRINGS.values() for c in kind.values()}
+        if string != style["string"] and style["color"] in presets and color is None:
+            style["color"] = next(iter(BOARD_STRINGS[string].values()))
+        style["string"] = string
+    if color is not None:
+        color = color.strip().lower() or next(iter(BOARD_STRINGS[style["string"]].values()))
+        if not HEX.fullmatch(color):
+            raise ValueError("not a colour")
+        style["color"] = color
+    changed = {k: v for k, v in style.items() if v != BOARD_DEFAULT[k]}
+    if changed.get("string") and style["color"] == next(iter(BOARD_STRINGS[style["string"]].values())):
+        changed.pop("color", None)                 # a kind's own first colour needs no saving
+    save(board_style=changed)
+    return style
 
 def ink_on(color: str) -> str:
     """Dark or white text, whichever reads better on the colour (WCAG relative luminance)."""

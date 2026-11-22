@@ -1,5 +1,5 @@
 import httpx, pytest
-import agents, doctor, orchestrator, settings, store, wayback
+import agents, doctor, library, orchestrator, settings, store, wayback
 from agents import bluesky, custom, f916, github, llm, providers, stubs, toolbox
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
@@ -23,6 +23,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(wayback, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(github, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(providers, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(library, "TRANSPORT", httpx.MockTransport(_no_network))
     providers.forget_models()                                     # no model list carries over between tests
     for spec in settings.PROVIDERS.values():                      # a real .env must never connect a cloud provider
         for var in (spec.get("key_env"), spec.get("url_env")):
@@ -38,7 +39,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
     for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL", "MISSION_LOOP_GITHUB_URL",
-                "MISSION_LOOP_GITHUB_CLIENT_ID"):
+                "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL"):
         monkeypatch.delenv(var, raising=False)           # nor may a real .env point tests at another server
     monkeypatch.setenv("MISSION_LOOP_SEARCH_MODEL", "small-test:1b")   # this test machine's config: the code has
     monkeypatch.setenv("MISSION_LOOP_MODEL", "big-test:30b")           # no models of its own

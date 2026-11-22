@@ -16,7 +16,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, clock, doctor, orchestrator, settings, stopping, store
+import activity, agents, board, clock, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -63,12 +63,15 @@ MESSAGES = {
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "every_saved": "Saved. The next loop you start rests that long between looks for work.",
+    "library_saved": "Library settings saved. The Theorist and the chat use them on their next search.",
+    "library_indexing": "Indexing the library in the background. Refresh in a minute to see how far it got.",
     "auto_on": "Auto mode on. Briefs and new epics are approved for you; articles still wait for you to publish them.",
     "auto_off": "Auto mode off. Every brief and new epic waits for you again.",
     "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
     "animations_off": "Animations off. The Missions page stays still.",
     "theme_saved": "Appearance saved.",
     "chat_color_saved": "Chat colour saved.",
+    "board_style_saved": "Board look saved.",
     "ollama_saved": "Ollama address saved. Workers use the Ollama at that address from their next task.",
     "ollama_connected": "Ollama connected, and each worker without a model got one of its models. Change them any time under Workers.",
     "ollama_ready": "Ollama is connected and every worker has a model. Press play to run the loop.",
@@ -100,6 +103,7 @@ ERRORS = {
     "link": "Those two can't be linked: pick another mission, at least one of them not published yet.",
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
+    "board_style": "Pick a surface, cards and string from the choices shown.",
     "chat_color": "That colour wasn't a #rrggbb colour.",
     "slug": "Short name: lowercase letters, numbers and dashes only.",
     "exists": "A mission with that short name already exists.",
@@ -107,6 +111,7 @@ ERRORS = {
     "state": "That mission isn't waiting for that action any more.",
     "running": "The loop is already running.",
     "every": "Give the rest between looks for work in whole minutes.",
+    "top_n": "Pick how many passages a library search returns from the list.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different, approved epic to move them to.",
@@ -272,6 +277,10 @@ def signature() -> str:
 
 UI_CSS = """
 main { max-width: 56rem; }
+.onboard { display:inline-flex; align-items:center; gap:.25rem; margin-left:.6rem; font-size:.82em; color:var(--muted);
+           text-decoration:none; cursor:pointer; white-space:nowrap; }
+.onboard:hover { color:var(--accent); }
+.onboard svg { width:.95em; height:.95em; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
 body { font-family: -apple-system, system-ui, sans-serif; font-size: 16px; }
 nav.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
           border-bottom:1px solid var(--rule); padding-bottom:1rem; margin-bottom:1.5rem; }
@@ -663,6 +672,9 @@ ICON_SETTINGS = ('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy
                  '21.9 13.6 19.1 14.2 18.5 15.5 20.1 17.9 17.9 20.1 15.5 18.5 14.2 19.1 13.6 21.9 10.4 21.9 9.8 19.1 '
                  '8.5 18.5 6.1 20.1 3.9 17.9 5.5 15.5 4.9 14.2 2.1 13.6 2.1 10.4 4.9 9.8 5.5 8.5 3.9 6.1 6.1 3.9 8.5 5.5z"/></svg>')
 
+ICON_BOARD = ('<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/>'
+              '<circle cx="8" cy="9" r="1.3"/><circle cx="16" cy="14" r="1.3"/><path d="m8 9 8 5"/></svg>')
+
 ICON_CHAT = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>')
 
 def heading(name: str, title: str, count: int | None = None, anchor: str = "", cls: str = "group") -> str:
@@ -758,9 +770,10 @@ async function refresh() {{
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
+            f'<a href="/board">{ICON_BOARD}Board</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a>'
             f'<a href="/about" target="_blank" title="How the desk works, on the published site">{icon("book")}About</a></span></nav>'
-            f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{script}</body></html>")
+            f"{body}</main>{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
 
 def flash(request: Request) -> str:
@@ -872,12 +885,30 @@ def finder_panel() -> str:
 def _when(at: str) -> str:
     return escape(at[:16].replace("T", " ")) + " UTC" if at else ""
 
+BY = {"human": "you", "chat": "the chat assistant", "theorist": "the Theorist"}   # who changed the line
+
 def theorist_notes() -> str:
     """The Theorist's last turn and how the line got here, folded away under the inspiration box."""
     last, history = store.last_theory(), store.inspiration_history(6)
     if not last and not history:
         return ""
     parts = []
+    if last.get("kind") == "board":        # a board turn, then the turn before it that looked across the desk
+        if last.get("failed"):
+            parts.append(f'<p class="muted">Last turn {_when(last["at"])} was a <a href="/board">board</a> turn and '
+                         f'failed: {escape(last["failed"])}</p>')
+        else:
+            moved = last.get("moved", [])
+            sized = sum(1 for mv in moved if mv.get("size") is not None)
+            what = (f"moved {len(moved)} note{'s' * (len(moved) != 1)}" + (f", resizing {sized}" if sized else "")
+                    if moved else "left every note where it was")
+            parts.append(f'<p class="muted">Last turn {_when(last["at"])} tidied the <a href="/board">board</a>: '
+                         f'{what}. {escape(last.get("why", ""))}</p>')
+            if last.get("notes"):
+                parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
+        last = last.get("ideas") or {}
+        if last:
+            parts.append('<p class="hint">The turn before that looked across the desk:</p>')
     if last.get("failed"):
         parts.append(f'<p class="muted">Last turn {_when(last["at"])} failed: {escape(last["failed"])}</p>')
     elif last:
@@ -897,11 +928,14 @@ def theorist_notes() -> str:
             made.append(f'linked {mission_link(a)} and {mission_link(b)}')
         if made:
             parts.append(f"<p>It {', and '.join(made)}.</p>")
+        if last.get("lookups"):
+            parts.append("<p>It searched the library for:</p><ul>" + "".join(f"<li>{escape(q)}</li>"
+                                                                            for q in last["lookups"]) + "</ul>")
         if last.get("notes"):
             parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
     if history:
         rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
-                       f'{"you" if h.get("by") == "human" else "the Theorist"}:</span> '
+                       f'{BY.get(h.get("by"), "the Theorist")}:</span> '
                        f'{escape(h.get("line") or "(cleared)")}</li>' for h in reversed(history))
         parts.append(f"<p>The line over time, newest first:</p><ul>{rows}</ul>")
     return f'<details><summary>{icon("bulb")}Theorist\'s notes</summary>{"".join(parts)}</details>'
@@ -1260,6 +1294,59 @@ def connection_section(conn: dict) -> str:
             "cloud provider needs only its API key. Keys stay on this machine, in <code>data/providers.json</code> "
             "or <code>.env</code>, and are never committed.</p>"
             f'{cards}<h3 class="sub">Add a provider</h3>{add_provider_forms()}')
+
+EMBEDDY = re.compile(r"embed|bge|minilm|e5-|gte|arctic|mxbai|nomic", re.I)   # an Ollama embedding model's name
+
+def library_section(conn: dict) -> str:
+    """The desk's library (library.py): which provider and model embed its passages, and how many a search returns."""
+    current, env = settings.embed_model(), settings._env(settings.EMBED_ENV)
+    pid, name = settings.split_model(current) if current else ("none", "")
+    choices = [("none", "No embedding model: rank by words only")] + [
+        (p, settings.PROVIDERS[p]["name"]) for p in settings.embed_providers()]
+    if pid not in dict(choices):           # set to a provider since disconnected: keep it visible
+        choices.append((pid, settings.PROVIDERS.get(pid, {}).get("name", pid) + " (not connected)"))
+    opts = "".join(f'<option value="{p}"{" selected" if p == pid else ""}>{escape(label)}</option>' for p, label in choices)
+    names = [(m["name"], "Ollama") for m in conn["models"] if EMBEDDY.search(m["name"])]
+    for p in settings.embed_providers()[1:]:
+        names += [(n, settings.PROVIDERS[p]["name"]) for n in providers.models(p, embed=True)[0]]
+    suggestions = "".join(f'<option value="{escape(n, quote=True)}" label="{escape(label, quote=True)}">'
+                          for n, label in names)
+    tops = "".join(f'<option value="{n}"{" selected" if n == settings.library_top_n() else ""}>{n}</option>'
+                   for n in settings.TOP_N_CHOICES)
+    source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and settings.saved().get("embed_model") in (None, "")
+              else "")
+    now = f" Embedding model: <code>{escape(current)}</code>{source}." if current else ""
+    return f"""{heading("book", "Library", anchor="library")}
+<p>The Theorist and Researcher Chat search the desk's library before they reason: every mission's objective, each
+brief's claims with the quotes they cite, counterpoints and sources, and every article section. It always ranks by
+words; an embedding model adds ranking by meaning. It keeps itself up to date and lives in <code>data/library.db</code>
+on this machine.</p>
+<div class="pubbox channel"><div class="head"><h3>Index</h3><span class="badge">On this machine</span></div>
+<p>{escape(library.summary())}.{now}</p>
+<form method="post" action="/settings/library" class="inline"><input type="hidden" name="do" value="index">
+  <button>Index now</button><span class="hint">embeds every new passage now instead of a minute's worth per search</span></form></div>
+<form method="post" action="/settings/library">
+  <input type="hidden" name="do" value="save">
+  <label for="embed_provider">Embedding provider <span class="hint">Ollama, or a connected provider with embeddings (Anthropic, DeepSeek and Groq have none)</span></label>
+  <select id="embed_provider" name="provider">{opts}</select>
+  <label for="embed_model">Embedding model <span class="hint">e.g. an Ollama embedding model you pulled, or the provider's own; checked before it is saved</span></label>
+  <input type="text" id="embed_model" name="model" maxlength="200" list="embed_models" value="{escape(name, quote=True)}" autocomplete="off">
+  <datalist id="embed_models">{suggestions}</datalist>
+  <label for="top_n">Passages per search (top N) <span class="hint">more gives the agents more to reason from and costs more of their context</span></label>
+  <select id="top_n" name="top_n">{tops}</select>
+  <p><button>Save</button></p>
+</form>"""
+
+def index_now() -> threading.Thread:
+    """Bring the whole library up to date in the background, embedding everything new (searches do a minute's worth)."""
+    def go():
+        try:
+            library.sync(time_limit=30 * 60)
+        except Exception as e:
+            print(f"library indexing failed: {type(e).__name__}: {e}", flush=True)
+    t = threading.Thread(target=go, name="library", daemon=True)
+    t.start()
+    return t
 
 def ollama_picks(conn: dict) -> dict[str, str]:
     """Which installed model each worker without one gets: the biggest to the Principal Investigator (writing), the
@@ -1642,6 +1729,7 @@ def settings_body(request: Request, error: str = "") -> str:
 {workers_section(conn, models)}
 {connection_section(conn)}
 {search_section()}
+{library_section(conn)}
 {heading("clock", "Loop")}
 <form method="post" action="/settings/loop-every" class="inline">
   <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
@@ -1651,6 +1739,7 @@ def settings_body(request: Request, error: str = "") -> str:
 </form>
 {heading("monitor", "Display")}
 {display_forms()}
+{board_style_form()}
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
@@ -1716,6 +1805,37 @@ async def save_loop_every(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="every")
     return go("/settings", done="every_saved")
+
+async def save_library(request: Request) -> Response:
+    """The Library section: index now, or save the embedding provider and model (checked with one embedding first)
+    and the top N."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "index":
+        index_now()
+        return go("/settings", done="library_indexing")
+    try:
+        top_n = int(str(form.get("top_n") or settings.TOP_N))
+        if top_n not in settings.TOP_N_CHOICES:
+            raise ValueError
+    except ValueError:
+        return go("/settings", error="top_n")
+    pid, model = str(form.get("provider") or "none"), str(form.get("model") or "").strip()[:200]
+    try:
+        if pid != "none" and pid not in settings.PROVIDERS:
+            raise ValueError("pick a provider")
+        if pid != "none" and not model:
+            raise ValueError("name the embedding model")
+        ref = settings.model_ref(pid, model) if pid != "none" else ""
+        if ref != settings.embed_model():                 # unchanged: store nothing, so .env keeps applying
+            if ref:
+                await run_in_threadpool(library.check, ref)
+            settings.set_embed_model(ref or settings.WORDS_ONLY)
+    except (ValueError, library.LibraryError) as e:
+        return page("Settings", settings_body(request, f"The embedding model was not saved: {e}"))
+    settings.set_library_top_n(top_n)
+    return go("/settings", done="library_saved")
 
 async def save_animations(request: Request) -> Response:
     if not same_origin(request):
@@ -1894,7 +2014,7 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
     or reject it."""
     active = store.all_epics("active")
-    theorist = {t.lower() for t in store.last_theory().get("epics", [])}
+    theorist = {t.lower() for t in store.last_ideas().get("epics", [])}
     epics = {e.slug: e for e in store.all_epics()}
     out = []
     for e in store.all_epics("proposed"):
@@ -1935,7 +2055,7 @@ def combine_proposals() -> list[str]:
         why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
         out.append(ask(
             "propose", c.topic, "Combine missions",
-            f'<div class="sub">The Theorist proposes combining these {len(c.members)} missions into one bigger '
+            f'<div class="sub">{"The chat assistant" if c.by == "chat" else "The Theorist"} proposes combining these {len(c.members)} missions into one bigger '
             f'mission. Approving queues it (its brief still comes to you) and stops these; any that reached writing '
             f'meanwhile carry on.{epic}</div>{why}<ul>{items}</ul>'
             f'<details><summary>Objective</summary><p>{escape(c.objective)}</p></details>',
@@ -1954,7 +2074,7 @@ def connections(m: Mission) -> str:
     for k in store.links_of(m.slug):
         other = store.get_mission(k.other(m.slug))
         state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
-        who = "the Theorist" if k.by == "theorist" else "you" if k.by == "human" else k.by
+        who = {"theorist": "the Theorist", "human": "you", "chat": "the chat assistant"}.get(k.by, k.by)
         why = f": {escape(k.why)}" if k.why else ""
         rows.append(f'<li class="link-row">Linked to {mission_link(k.other(m.slug))}{state} '
                     f'<span class="hint">by {escape(who)}</span>{why}'
@@ -2020,7 +2140,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
-            f'{" · " + escape(sub) if sub else ""}</span></div></a>')
+            f'{" · " + escape(sub) if sub else ""}</span>{board_link(m.slug)}</div></a>')
 
 # ---------- the publishing queue ----------
 
@@ -2486,7 +2606,7 @@ async def mission(request: Request) -> Response:
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request),
             f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
-            f'<span class="muted">{escape(m.slug)}</span></p>',
+            f'<span class="muted">{escape(m.slug)}</span> {board_link(m.slug, real=True)}</p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
         body.append(f'<p class="muted objective">{escape(m.objective)}</p>')
@@ -2812,6 +2932,533 @@ async def api_signature(request: Request) -> PlainTextResponse:
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
 
+# ---------- the cork board (board.py places the notes and finds the strings; this adds the words) ----------
+
+# A card is one link already, so its "On the board" is a span this sends to the board, zoomed onto the mission.
+BOARD_LINK_JS = """<script>
+(() => {
+  const go = e => {
+    const b = e.target.closest && e.target.closest("[data-board]");
+    if (!b || (e.type === "keydown" && e.key !== "Enter")) return;
+    e.preventDefault(); e.stopPropagation();
+    location.href = "/board?focus=" + encodeURIComponent(b.dataset.board);
+  };
+  document.addEventListener("click", go, true);
+  document.addEventListener("keydown", go, true);
+})();
+</script>"""
+
+def board_link(slug: str, real: bool = False) -> str:
+    """A small "On the board" link to the board, zoomed onto this mission (a span inside a card, which is a link)."""
+    if real:
+        return f'<a class="onboard" href="/board?focus={quote(slug)}">{ICON_BOARD}On the board</a>'
+    return (f'<span class="onboard" role="link" tabindex="0" data-board="{escape(slug, quote=True)}" '
+            f'title="Show it on the board">{ICON_BOARD}On the board</span>')
+
+PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
+         State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
+         State.COMBINED: "queued"}
+
+def paper(m: Mission) -> str:
+    """The sticky note's colour: the stage it is at, like the cards' tones."""
+    if m.state == State.BRIEF_READY:
+        return "writing" if m.approved else "review"
+    return PAPER.get(m.state, "queued")
+
+def _cut(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1].rsplit(" ", 1)[0] + "…"
+
+def board_state() -> dict:
+    """What the board shows: board.layout()'s notes and strings, with each note's words. /api/board serves it."""
+    data = board.layout()
+    missions = {m.slug: m for m in store.all_missions()}
+    epics = {e.slug: e for e in store.all_epics()}
+    live = {e["slug"]: settings.seat_worker(e["worker"]) for e in running_now()}   # slug -> whose crew visits it
+    strung: dict[str, int] = {}
+    for s in data["strings"]:
+        if s["kind"] != "epic":
+            for end in (s["a"], s["b"]):
+                strung[end] = strung.get(end, 0) + 1
+    members: dict[str, int] = {}
+    for m in missions.values():
+        if m.state != State.COMBINED:
+            key = m.epic if m.epic in epics else board.UNSORTED
+            members[key] = members.get(key, 0) + 1
+    for n in data["notes"]:
+        if n["kind"] == "mission":
+            m = missions[n["slug"]]
+            try:
+                brief, article = _brief(m.slug), _article(m.slug)
+            except ValueError:             # an artifact from an older schema: show the note without it
+                brief = article = None
+            thesis = brief.thesis if brief else m.brief_sources.thesis if m.brief_sources else ""
+            sources = len(brief.sources) if brief else 0
+            links = strung.get(n["id"], 0)
+            meta = [f"{sources} source{'s' * (sources != 1)}" if sources else "",
+                    f"{links} connection{'s' * (links != 1)}" if links else "",
+                    f"attempt {m.attempts} of {m.max_attempts}" if m.state == State.RESEARCHING and m.attempts else "",
+                    f"combined into {m.combined_into}" if m.combined_into else ""]
+            n.update(title=article.title if article else m.topic, short=_cut(article.title if article else m.topic, 90),
+                     thesis=_cut(thesis or m.objective or m.topic, board.PREVIEW_CHARS),
+                     thesis_label="Thesis" if thesis else "Objective", stage=label(m), paper=paper(m),
+                     epic=epics[m.epic].title if m.epic in epics else "", url=f"/m/{quote(m.slug)}",
+                     open="Open article" if article else "Open brief" if brief else "Open mission",
+                     meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED,
+                     worker=live.get(m.slug) if live.get(m.slug) in settings.WORKERS else "")
+        else:
+            count = members.get(n["slug"], 0)
+            e = epics.get(n["slug"])
+            n.update(title=e.title if e else "Unsorted", proposed=bool(e and e.status == "proposed"),
+                     count_text=f"{count} mission{'s' * (count != 1)}")
+    data.update(poll=board.POLL_SECONDS * 1000, size_min=board.SIZE_MIN, size_max=board.SIZE_MAX,
+                style=settings.board_style(), animations=settings.animations())
+    data["sig"] = hashlib.sha1(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return data
+
+async def api_board(request: Request) -> JSONResponse:
+    data = await run_in_threadpool(board_state)
+    if request.query_params.get("sig") == data["sig"]:
+        return JSONResponse({"same": True})
+    return JSONResponse(data)
+
+async def board_move(request: Request) -> JSONResponse:
+    """A human dragged or resized a note (assets/board.js)."""
+    if not same_origin(request):
+        return JSONResponse({"error": "cross-site"}, status_code=403)
+    try:
+        body = await request.json()
+        prefix, _, slug = str(body["id"]).partition(":")
+        kind = {"m": "mission", "e": "epic"}[prefix]
+        x, y, size = body["x"], body["y"], body.get("size")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x, y)) or \
+                (size is not None and (isinstance(size, bool) or not isinstance(size, (int, float)))):
+            raise ValueError("x, y and size must be numbers")
+        note = board.move(kind, slug, float(x), float(y), None if size is None else float(size))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse(note.model_dump())
+
+def board_style_panel(style: dict) -> str:
+    """The board's own gear: surface, cards, string and its colour, changed in place (assets/board.js)."""
+    def seg(key: str, options: dict) -> str:
+        return (f'<div class="seg" data-key="{key}">' + "".join(
+            f'<button type="button" data-value="{v}" class="{"on" if style[key] == v else ""}">{escape(n)}</button>'
+            for v, n in options.items()) + "</div>")
+    dots = "".join(f'<button type="button" class="dot{" on" if style["color"] == c else ""}" data-kind="{kind}" '
+                   f'data-value="{c}" style="--c:{c}" title="{escape(name)}" aria-label="{escape(name)}"'
+                   f'{"" if kind == style["string"] else " hidden"}></button>'
+                   for kind, colors in settings.BOARD_STRINGS.items() for name, c in colors.items())
+    return (f'<div class="board-style" hidden><div class="lbl">Surface</div>{seg("surface", settings.BOARD_SURFACES)}'
+            f'<div class="lbl">Cards</div>{seg("cards", settings.BOARD_CARDS)}'
+            f'<div class="lbl">Joined by</div>{seg("string", settings.BOARD_STRING_NAMES)}'
+            f'<div class="lbl">Colour</div><div class="dots">{dots}'
+            f'<label class="dot own" title="Your own colour"><input type="color" value="{style["color"]}" '
+            f'aria-label="Your own colour"></label></div>'
+            f'<a class="more" href="/settings#board">Also on the Settings page</a></div>')
+
+def board_style_form() -> str:
+    """The same choices on the Settings page; each change saves at once."""
+    style = settings.board_style()
+    def choice(key: str, options: dict) -> str:
+        return "".join(f'<label><input type="radio" name="{key}" value="{v}"{" checked" if style[key] == v else ""} '
+                       f'onchange="this.form.requestSubmit()">{escape(n)}</label>' for v, n in options.items())
+    colors = settings.BOARD_STRINGS[style["string"]]
+    swatches = "".join(
+        f'<label class="swatch" style="--c:{c};--ink:{settings.ink_on(c)}"><input type="radio" name="color" value="{c}"'
+        f'{" checked" if style["color"] == c else ""} onchange="this.form.requestSubmit()"><span class="dab"></span>'
+        f'{escape(n)}</label>' for n, c in colors.items())
+    return f"""<form method="post" action="/settings/board-style" class="actions display" id="board">
+  <h3>{ICON_BOARD}Board</h3>
+  <p class="hint">How the <a href="/board">board</a> looks: its surface, its cards, and what joins them. The gear on the
+  board changes the same thing.</p>
+  <div class="choice" role="radiogroup" aria-label="Surface">{choice("surface", settings.BOARD_SURFACES)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="Cards">{choice("cards", settings.BOARD_CARDS)}</div>
+  <p></p><div class="choice" role="radiogroup" aria-label="Joined by">{choice("string", settings.BOARD_STRING_NAMES)}</div>
+  <p></p><div class="swatches" role="radiogroup" aria-label="Colour">{swatches}</div>
+  <noscript><p><button>Save</button></p></noscript>
+</form>"""
+
+def _board_style_from(values) -> dict:
+    get = lambda k: (str(values.get(k)) if values.get(k) is not None else None)
+    return settings.set_board_style(surface=get("surface"), cards=get("cards"), string=get("string"), color=get("color"))
+
+async def board_style_save(request: Request) -> JSONResponse:
+    """The board's gear changed its look (assets/board.js)."""
+    if not same_origin(request):
+        return JSONResponse({"error": "cross-site"}, status_code=403)
+    try:
+        return JSONResponse(_board_style_from(await request.json()))
+    except (ValueError, AttributeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+async def save_board_style(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    values = {k: form.get(k) for k in ("surface", "cards", "string", "color") if form.get(k)}
+    if "string" in values and values["string"] != settings.board_style()["string"]:
+        values.pop("color", None)              # a new kind brings its own first colour
+    try:
+        _board_style_from(values)
+    except ValueError:
+        return go("/settings", error="board_style")
+    return go("/settings", done="board_style_saved")
+
+_MENTIONS_FOUND = False                    # an older desk's mentions are found the first time a board opens
+
+async def board_page(request: Request) -> Response:
+    global _MENTIONS_FOUND
+    if not _MENTIONS_FOUND:
+        _MENTIONS_FOUND = True             # once per start, even if it fails: the board shows without them
+        try:
+            await run_in_threadpool(board.find_all_mentions)
+        except Exception as e:
+            print(f"board: finding mentions failed ({type(e).__name__}: {e})", flush=True)
+    data = await run_in_threadpool(board_state)
+    focus = request.query_params.get("focus", "")
+    raw = json.dumps(data).replace("<", "\\u003c")   # no "</script>" or "<!--" can end the data block
+    empty = "" if data["notes"] else ('<p class="board-empty">Nothing on the board yet. '
+                                      '<a href="/">Add a mission</a> and it shows up here.</p>')
+    style = data["style"]
+    looks = (f'surface-{style["surface"]} cards-{style["cards"]} str-{style["string"]}'
+             + (" animate" if data["animations"] else ""))
+    body = (f'<style>{BOARD_CSS}</style>'
+            f'<div class="board-wrap {looks}" id="board" style="--string:{style["color"]}" '
+            f'data-focus="{escape(focus, quote=True)}">'
+            f'<div class="world"><svg class="strings" aria-hidden="true"></svg></div>{empty}'
+            f'<div class="board-crumb" hidden></div>'
+            f'<div class="board-pop" hidden></div>'
+            f'<div class="board-legend"><span><i class="e"></i>Epic</span><span><i class="l"></i>Link</span>'
+            f'<span><i class="m"></i>Same source or mention</span></div>'
+            f'<div class="board-zoom"></div>'
+            f'<div class="board-tools"><button type="button" data-tool="out" title="Zoom out" aria-label="Zoom out">−</button>'
+            f'<button type="button" data-tool="in" title="Zoom in" aria-label="Zoom in">+</button>'
+            f'<button type="button" data-tool="fit" title="Fit everything" aria-label="Fit everything">'
+            f'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>'
+            f'<button type="button" data-tool="style" title="Board style" aria-label="Board style" '
+            f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
+            f'</div><script type="application/json" id="board-data">{raw}</script>'
+            f'<script src="/assets/board.js" defer></script>{RESEARCHERS if data["animations"] else ""}')
+    return page("Board", body)
+
+BOARD_CSS = """
+body:has(.board-wrap) { overflow-x:hidden; }
+body:has(.board-wrap) nav.top { margin-bottom:1rem; }
+.board-wrap { --string:#c0242b; position:relative; width:calc(100vw - 2rem); margin-left:calc(50% - 50vw + 1rem);
+  height:calc(100vh - 8rem); min-height:420px; overflow:hidden; border-radius:6px; touch-action:none; user-select:none;
+  cursor:grab; background-color:#b98a57;
+  background-image:
+    radial-gradient(rgba(70,40,15,.28) 1px, transparent 1.4px),
+    radial-gradient(rgba(255,230,190,.18) 1px, transparent 1.6px),
+    radial-gradient(rgba(90,55,20,.22) 1.5px, transparent 2px),
+    radial-gradient(ellipse at 30% 20%, rgba(255,220,170,.25), transparent 60%),
+    radial-gradient(ellipse at 80% 90%, rgba(60,30,10,.25), transparent 55%);
+  background-size:7px 7px, 11px 13px, 17px 19px, 100% 100%, 100% 100%;
+  background-position:0 0, 3px 5px, 8px 2px, 0 0, 0 0;
+  box-shadow:inset 0 0 0 12px #6e4a2a, inset 0 0 0 14px #4c321b, inset 0 0 60px rgba(0,0,0,.35); }
+.board-wrap:active { cursor:grabbing; }
+.board-wrap .world { position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
+.board-wrap svg.strings { position:absolute; left:0; top:0; width:1px; height:1px; overflow:visible; }
+.board-wrap .str path { fill:none; stroke-linecap:round; }
+.board-wrap .str .line { stroke:var(--string); stroke-width:2.4; filter:drop-shadow(1px 3px 1.5px rgba(0,0,0,.35)); }
+.board-wrap .str.link .line { stroke-width:1.8; }
+.board-wrap .str.mention .line { stroke-width:1.3; stroke-dasharray:5 4; opacity:.8; }
+.board-wrap .str .hit { stroke:transparent; stroke-width:12; pointer-events:stroke; }
+.board-wrap .str.epic .hit { pointer-events:none; }
+.board-wrap .faded { opacity:.2; filter:saturate(.3); transition:opacity .3s; }
+.board-wrap .note { border:none; margin:0; }                /* not the site's .note */
+.board-wrap .note { --s:1; position:absolute; transform:translate(-50%,-50%) rotate(var(--r,0deg));
+  width:calc(160px * var(--s)); padding:calc(20px * var(--s)) calc(13px * var(--s)) calc(11px * var(--s));
+  font-size:calc(13px * var(--s)); line-height:1.3; background:var(--paper,#fff3a3); color:#2b2620; border-radius:2px;
+  box-shadow:0 1px 1px rgba(0,0,0,.15), 0 8px 14px -6px rgba(0,0,0,.45); cursor:pointer; transition:opacity .3s, filter .3s; }
+.board-wrap .note.lifted { box-shadow:0 2px 3px rgba(0,0,0,.2), 0 18px 26px -8px rgba(0,0,0,.5); z-index:2; cursor:grabbing; }
+.board-wrap .note .pin { position:absolute; top:6px; left:50%; width:14px; height:14px; margin-left:-7px; border-radius:50%;
+  background:radial-gradient(circle at 35% 30%, #ff8a8a, #c0242b 55%, #6d0f13); box-shadow:1px 3px 3px rgba(0,0,0,.45); }
+.board-wrap .note .t { font-family:Georgia, serif; font-weight:600; }
+.board-wrap .note .stage { margin-top:.6em; font-size:.8em; letter-spacing:.04em; text-transform:uppercase; color:rgba(0,0,0,.55); }
+.board-wrap .note .stage::before { content:""; display:inline-block; width:.55em; height:.55em; border-radius:50%;
+  margin-right:.4em; background:var(--dot,#888); }
+.board-wrap .note .stamp { display:inline-block; margin-top:.6em; font:700 .75em/1 system-ui, sans-serif; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--dot); border:1.5px solid var(--dot); padding:3px 5px; border-radius:3px;
+  transform:rotate(-4deg); opacity:.85; }
+.board-wrap .note .now { position:absolute; top:-10px; right:-8px; background:#2f8a4a; color:#fff;
+  font:600 9.5px/1 system-ui, sans-serif; padding:3px 6px; border-radius:999px; }
+.board-wrap .note.live { outline:2.5px solid #2f8a4a; outline-offset:3px; }
+.board-wrap .note .grip { position:absolute; right:0; bottom:0; width:14px; height:14px; cursor:nwse-resize; opacity:0;
+  background:linear-gradient(135deg, transparent 50%, rgba(0,0,0,.25) 50%); }
+.board-wrap .note:hover .grip { opacity:1; }
+.board-wrap .queued   { --paper:#eef1f4; --dot:#7d8792; }
+.board-wrap .research { --paper:#fff3a3; --dot:#b08f00; }
+.board-wrap .review   { --paper:#cfe6ff; --dot:#2f6fd0; }
+.board-wrap .writing  { --paper:#ffe1bf; --dot:#d9822b; }
+.board-wrap .publish  { --paper:#d4f2cf; --dot:#2f8a4a; }
+.board-wrap .done     { --paper:#fffdf8; --dot:#2f8a4a; }
+.board-wrap .parked   { --paper:#ffd6d6; --dot:#c0242b; }
+.board-wrap .note.combined { opacity:.55; filter:saturate(.5); }
+.board-wrap .note.combined .stamp { --dot:#6b6b70; }
+.board-wrap .note.epic { display:block; white-space:normal; font:400 calc(13px * var(--s))/1.3 -apple-system, system-ui, sans-serif;
+  letter-spacing:normal; border:none; color:#2b2620; }      /* not the site's .epic pill */
+.board-wrap .note.epic { --paper:#fffaf0; text-align:center; padding-top:calc(24px * var(--s));
+  background-image:repeating-linear-gradient(to bottom, transparent 0 1.6em, rgba(60,110,200,.18) 1.6em calc(1.6em + 1px));
+  background-position:0 calc(3.1em); }
+.board-wrap .note.epic::before { content:""; position:absolute; top:calc(2.9em); left:0; right:0; height:1.5px; background:rgba(200,50,50,.45); }
+.board-wrap .note.epic .k { font:600 .62em/1 system-ui, sans-serif; letter-spacing:.14em; color:#8a2b2b; text-transform:uppercase; }
+.board-wrap .note.epic .t { font-size:1.45em; margin-top:.75em; line-height:1.15; }
+.board-wrap .note.epic .n { margin-top:.5em; font-size:.85em; color:#6b6b70; }
+.board-wrap .note.epic .pin { width:18px; height:18px; margin-left:-9px; top:4px;
+  background:radial-gradient(circle at 35% 30%, #fff1a6, #e0b100 55%, #7a5c00); }
+.board-wrap .note.epic.proposed { outline:2px dashed rgba(138,43,43,.7); outline-offset:4px; }
+.board-wrap .note.unsorted { background:none; box-shadow:none; text-align:center; width:200px; cursor:default; color:rgba(40,22,8,.7); }
+.board-wrap .note.unsorted .t { font-style:italic; font-size:1.3em; }
+.board-wrap .note.unsorted .n { font-size:.85em; }
+.board-pop { position:absolute; width:320px; max-width:calc(100% - 24px); background:var(--bg); color:var(--fg); border-radius:12px;
+  padding:14px 16px 12px; box-shadow:0 18px 40px -10px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.06); font-size:13.5px;
+  z-index:4; cursor:auto; user-select:text; }
+.board-pop .pop-row { display:flex; justify-content:space-between; align-items:center; gap:.6rem; }
+.board-pop .tag { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--quote); font-weight:600; }
+.board-pop .tag.review { background:#cfe6ff; color:#1f4f99; } .board-pop .tag.publish { background:#d4f2cf; color:#1e6b34; }
+.board-pop .tag.parked { background:#ffd6d6; color:#8f1a1f; } .board-pop .tag.research { background:#fff3a3; color:#6d5700; }
+.board-pop .tag.writing { background:#ffe1bf; color:#8a4b0f; } .board-pop .tag.done { background:#e8f5e4; color:#1e6b34; }
+.board-pop .epicpill { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--rule); color:var(--muted); }
+.board-pop h3 { font-family:Georgia, serif; font-size:16px; line-height:1.3; margin:.55rem 0 .45rem; }
+.board-pop .lbl { font:600 10.5px/1 system-ui, sans-serif; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-top:.5rem; }
+.board-pop p { margin:.3rem 0 .6rem; line-height:1.45; }
+.board-pop .meta { font-size:12px; color:var(--muted); }
+.board-pop .open { flex:none; font-size:12.5px; font-weight:600; color:#fff; background:var(--accent); border-radius:8px;
+  padding:.38rem .7rem; text-decoration:none; white-space:nowrap; }
+.board-wrap .deg { display:inline-flex; gap:4px; }
+.board-wrap .deg button { min-width:30px; border:1px solid var(--rule); background:var(--bg); color:var(--fg); border-radius:7px;
+  padding:.2rem .45rem; font:600 12px system-ui, sans-serif; cursor:pointer; }
+.board-wrap .deg button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.board-pop .deg { margin:.45rem 0 .2rem; }
+.board-crumb, .board-legend, .board-tools button { background:color-mix(in srgb, var(--bg) 95%, transparent);
+  box-shadow:0 4px 12px rgba(0,0,0,.3); border-radius:10px; z-index:3; }
+.board-crumb { position:absolute; left:24px; top:24px; padding:.4rem .7rem; font-size:12.5px; display:flex; gap:.5rem;
+  align-items:center; cursor:auto; }
+.board-crumb[hidden] { display:none; }
+.board-crumb b { font-family:Georgia, serif; } .board-crumb .x { color:var(--muted); }
+.board-crumb .clear { border:none; background:none; color:var(--muted); cursor:pointer; font-size:13px; }
+.board-legend { position:absolute; left:24px; bottom:24px; padding:.5rem .8rem; font-size:11.5px; display:flex; gap:1rem; cursor:auto; }
+.board-legend span { display:inline-flex; align-items:center; gap:.35rem; }
+.board-legend i { display:inline-block; width:24px; border-top:2.4px solid var(--string); }
+.board-legend i.l { border-top-width:1.8px; } .board-legend i.m { border-top:1.4px dashed var(--string); }
+.board-zoom { position:absolute; right:206px; top:36px; font:600 11px system-ui, sans-serif; color:rgba(255,255,255,.9);
+  text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:3; }
+.board-tools { position:absolute; right:24px; top:24px; display:flex; gap:6px; z-index:3; }
+.board-tools button { width:38px; height:38px; border:none; display:grid; place-items:center; font:600 18px system-ui, sans-serif;
+  color:var(--fg); cursor:pointer; }
+.board-tools svg { width:18px; height:18px; stroke:var(--fg); fill:none; stroke-width:1.8; }
+.board-empty { position:absolute; inset:0; display:grid; place-items:center; margin:0; color:#fff;
+  font:italic 1.2rem Georgia, serif; text-shadow:0 1px 3px rgba(0,0,0,.6); }
+.board-empty a { color:#fff; }
+@media (max-width: 640px) { .board-legend { display:none; } .board-wrap { height:calc(100vh - 11rem); } }/* ---------- surfaces (cork is the default above) ---------- */
+.board-wrap.surface-paper { background-color:#f4efe4; border-radius:4px;
+  background-image:radial-gradient(rgba(120,100,70,.09) 1px, transparent 1.5px), radial-gradient(rgba(120,100,70,.06) 1px, transparent 1.6px),
+    radial-gradient(ellipse at 20% 10%, rgba(255,255,255,.7), transparent 55%), radial-gradient(ellipse at 90% 100%, rgba(150,120,70,.14), transparent 60%);
+  background-size:9px 9px, 13px 11px, 100% 100%, 100% 100%; background-position:0 0, 4px 6px, 0 0, 0 0;
+  box-shadow:inset 0 0 0 1px #d9d0bf, inset 0 0 50px rgba(120,90,40,.15); }
+.board-wrap.surface-grid { background-color:#fbfcff;
+  background-image:linear-gradient(rgba(60,110,200,.22) 1px, transparent 1px), linear-gradient(90deg, rgba(60,110,200,.22) 1px, transparent 1px),
+    linear-gradient(rgba(60,110,200,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(60,110,200,.09) 1px, transparent 1px);
+  background-size:calc(var(--gz,1) * 100px) calc(var(--gz,1) * 100px), calc(var(--gz,1) * 100px) calc(var(--gz,1) * 100px),
+    calc(var(--gz,1) * 20px) calc(var(--gz,1) * 20px), calc(var(--gz,1) * 20px) calc(var(--gz,1) * 20px);
+  background-position:var(--gx,0) var(--gy,0); box-shadow:inset 0 0 0 1px #c9d6ee; }
+.board-wrap.surface-dark { background-color:#0d1220;
+  background-image:radial-gradient(rgba(130,180,255,.22) 1px, transparent 1.5px), radial-gradient(ellipse at 50% 0%, rgba(70,110,200,.22), transparent 65%);
+  background-size:calc(var(--gz,1) * 28px) calc(var(--gz,1) * 28px), 100% 100%; background-position:var(--gx,0) var(--gy,0), 0 0;
+  box-shadow:inset 0 0 90px rgba(0,0,0,.7); }
+.board-wrap.surface-fridge { background-color:#eceff1; border-radius:18px;
+  background-image:linear-gradient(100deg, transparent 18%, rgba(255,255,255,.8) 30%, transparent 42%),
+    linear-gradient(100deg, transparent 58%, rgba(255,255,255,.45) 64%, transparent 70%), linear-gradient(180deg, #f8f9fa, #dfe3e6);
+  box-shadow:inset 0 0 0 10px #d3d8dc, inset 0 0 0 11px #b6bcc2, inset 0 -40px 70px rgba(0,0,0,.07); }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-zoom { color:#555; text-shadow:none; }
+.board-wrap.surface-dark .note.unsorted, .board-wrap.surface-dark .board-empty { color:#cfe2ff; }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty, .board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .board-empty a { color:#555; text-shadow:none; }
+.board-wrap:is(.surface-paper, .surface-grid, .surface-fridge) .note.unsorted { color:#6b6b70; }
+
+/* ---------- what joins them: string (default), laser, wire ---------- */
+.board-wrap.str-laser .str .line { stroke-width:1.7; filter:drop-shadow(0 0 2px var(--string)) drop-shadow(0 0 7px var(--string)); }
+.board-wrap.str-laser .str .core { stroke:#fff; stroke-width:.6; opacity:.9; }
+.board-wrap.str-laser .str.mention .line, .board-wrap.str-laser .str.mention .core { stroke-dasharray:6 6; }
+.board-wrap.str-laser.animate .str .line { animation:laser 2.6s ease-in-out infinite alternate; }
+@keyframes laser { from { opacity:.65; } to { opacity:1; } }
+.board-wrap.str-wire .str .line { stroke-width:2; filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4)); }
+.board-wrap.str-wire .str .core { stroke:rgba(255,255,255,.6); stroke-width:.7; transform:translate(-.4px, -.5px); }
+.board-wrap.str-wire .str.mention .line { stroke-dasharray:none; stroke-width:1.2; opacity:.75; }
+.board-wrap.str-laser .board-legend i { box-shadow:0 0 6px var(--string); }
+
+/* ---------- cards: fridge magnets ---------- */
+.board-wrap.cards-magnets .note { width:auto; max-width:calc(230px * var(--s)); padding:0; background:none; box-shadow:none;
+  font-size:calc(13px * var(--s)); }
+.board-wrap.cards-magnets .note.lifted { filter:drop-shadow(0 14px 12px rgba(0,0,0,.35)); }
+.board-wrap.cards-magnets .alpha { display:flex; gap:calc(2px * var(--s)); justify-content:center; }
+.board-wrap.cards-magnets .alpha b { display:inline-block; font:900 calc(34px * var(--s))/1 "Arial Rounded MT Bold", "Nunito", "Trebuchet MS", system-ui, sans-serif;
+  color:hsl(var(--h) 80% 52%); transform:rotate(var(--r)); -webkit-text-stroke:calc(1px * var(--s)) hsl(var(--h) 75% 38%);
+  text-shadow:0 1px 0 hsl(var(--h) 80% 70%), 1px 3px 0 hsl(var(--h) 70% 32%), 2px 6px 6px rgba(0,0,0,.35); }
+.board-wrap.cards-magnets .tape { margin:calc(6px * var(--s)) auto 0; width:max-content; max-width:calc(200px * var(--s)); padding:2px 7px;
+  background:#1d1d1f; color:#f4f4f4; font:600 .72em/1.3 "Courier New", monospace; letter-spacing:.06em; text-transform:uppercase;
+  border-radius:2px; box-shadow:1px 2px 3px rgba(0,0,0,.35); text-align:center; }
+.board-wrap.cards-magnets .tiles { display:flex; flex-wrap:wrap; gap:calc(4px * var(--s)); justify-content:center; width:calc(200px * var(--s)); }
+.board-wrap.cards-magnets .tiles i { font:500 calc(13px * var(--s))/1 Georgia, "Times New Roman", serif; font-style:normal; color:#1d1d1f;
+  background:#fdfdfb; padding:calc(4px * var(--s)) calc(6px * var(--s)); transform:rotate(var(--r));
+  box-shadow:0 1px 0 #d9d7d0, 1px 3px 4px rgba(0,0,0,.3); }
+.board-wrap.cards-magnets .tiles i.tag { background:var(--dot,#555); color:#fff; font:700 calc(9px * var(--s))/1.2 system-ui, sans-serif;
+  letter-spacing:.08em; text-transform:uppercase; align-self:center; }
+.board-wrap.cards-magnets .postcard { width:calc(210px * var(--s)); background:#fffdf7; padding:calc(6px * var(--s));
+  box-shadow:0 1px 1px rgba(0,0,0,.2), 2px 8px 14px -4px rgba(0,0,0,.45); border-radius:3px; }
+.board-wrap.cards-magnets .postcard .photo { height:calc(58px * var(--s)); border-radius:2px; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.45); overflow:hidden;
+  background:linear-gradient(180deg, hsl(var(--h) 75% 70%) 0 45%, hsl(calc(var(--h) + 30) 60% 45%) 45% 100%); }
+.board-wrap.cards-magnets .postcard .greet { font:italic .7em Georgia, serif; }
+.board-wrap.cards-magnets .postcard .place { font:900 1.25em/1 "Arial Black", Impact, system-ui, sans-serif; letter-spacing:.02em;
+  text-transform:uppercase; text-align:center; padding:0 .3em; }
+.board-wrap.cards-magnets .postcard .back { position:relative; padding:calc(7px * var(--s)) calc(44px * var(--s)) calc(4px * var(--s)) calc(3px * var(--s)); }
+.board-wrap.cards-magnets .postcard .back .t { font:italic 600 1em/1.25 "Bradley Hand", "Segoe Print", "Comic Sans MS", cursive; color:#253a6b; }
+.board-wrap.cards-magnets .postcard .stampbox { position:absolute; right:calc(4px * var(--s)); top:calc(6px * var(--s)); width:calc(30px * var(--s));
+  height:calc(36px * var(--s)); background:repeating-linear-gradient(45deg, var(--dot) 0 3px, #fff 3px 6px); border:2px dotted #fff;
+  outline:1px solid var(--dot); }
+.board-wrap.cards-magnets .postcard .postmark { position:absolute; right:calc(14px * var(--s)); top:calc(32px * var(--s));
+  font:700 .55em/1 system-ui, sans-serif; letter-spacing:.06em; text-transform:uppercase; color:rgba(30,60,120,.65);
+  border:1.5px solid rgba(30,60,120,.5); border-radius:50%; padding:.7em .4em; transform:rotate(-14deg); }
+.board-wrap.cards-magnets .souvenir { width:calc(190px * var(--s)); padding:calc(10px * var(--s)) calc(12px * var(--s)) calc(12px * var(--s));
+  text-align:center; color:#fff; border-radius:calc(22px * var(--s)); border:calc(4px * var(--s)) solid #fff;
+  background:radial-gradient(circle at 30% 20%, hsl(var(--h) 80% 62%), hsl(var(--h) 70% 38%));
+  box-shadow:0 0 0 1px rgba(0,0,0,.15), 2px 10px 16px -4px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.35); }
+.board-wrap.cards-magnets .souvenir .horseshoe { width:calc(34px * var(--s)); height:auto; fill:#e23b3b; stroke:#fff; stroke-width:1.5; }
+.board-wrap.cards-magnets .souvenir .horseshoe .tip { fill:#d9dde2; }
+.board-wrap.cards-magnets .souvenir .k { font:700 .6em/1 system-ui, sans-serif; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin-top:.3em; }
+.board-wrap.cards-magnets .souvenir .t { font:900 1.5em/1.05 "Arial Black", Impact, system-ui, sans-serif; margin-top:.25em;
+  text-shadow:0 2px 0 rgba(0,0,0,.25); }
+.board-wrap.cards-magnets .souvenir .n { font-size:.8em; color:#fff; opacity:.9; margin-top:.3em; }
+.board-wrap.cards-magnets .note.epic { padding:0; background:none; }
+.board-wrap.cards-magnets .note.epic::before { display:none; }
+.board-wrap.cards-magnets .note.epic.proposed .souvenir { border-style:dashed; }
+.board-wrap.cards-magnets .note.epic.proposed { outline:none; }
+.board-wrap.cards-magnets .note.live { outline:none; }
+.board-wrap.cards-magnets .note.live > :first-child { outline:2.5px solid #2f8a4a; outline-offset:5px; border-radius:4px; }
+.board-wrap.cards-magnets .note .now { top:-14px; }
+
+/* ---------- cards: hologram ---------- */
+.board-wrap.cards-hologram .note { --holo:#7fd8ff; color:#e8fbff; background:linear-gradient(160deg, color-mix(in srgb, var(--holo) 22%, transparent),
+  color-mix(in srgb, var(--holo) 8%, transparent)), repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px);
+  border:1px solid color-mix(in srgb, var(--holo) 80%, transparent); border-radius:6px; backdrop-filter:blur(2px);
+  box-shadow:0 0 14px color-mix(in srgb, var(--holo) 45%, transparent), inset 0 0 18px color-mix(in srgb, var(--holo) 25%, transparent);
+  text-shadow:0 0 6px color-mix(in srgb, var(--holo) 70%, transparent); }
+.board-wrap.cards-hologram .note .t { font-family:"SF Mono", Menlo, Consolas, monospace; font-weight:600; letter-spacing:.01em; }
+.board-wrap.cards-hologram .note .stage, .board-wrap.cards-hologram .note .stamp { color:var(--holo); border-color:var(--holo); }
+.board-wrap.cards-hologram .note .stage::before { background:var(--holo); box-shadow:0 0 6px var(--holo); }
+.board-wrap.cards-hologram .note .pin { width:10px; height:10px; margin-left:-5px; top:6px; background:var(--holo);
+  box-shadow:0 0 6px var(--holo), 0 0 14px var(--holo); }
+.board-wrap.cards-hologram .note::after { content:""; position:absolute; inset:5px; pointer-events:none;
+  background:linear-gradient(var(--holo), var(--holo)) top left / 10px 1.5px, linear-gradient(var(--holo), var(--holo)) top left / 1.5px 10px,
+    linear-gradient(var(--holo), var(--holo)) bottom right / 10px 1.5px, linear-gradient(var(--holo), var(--holo)) bottom right / 1.5px 10px;
+  background-repeat:no-repeat; opacity:.9; }
+.board-wrap.cards-hologram .queued { --holo:#9fb7d4; } .board-wrap.cards-hologram .research { --holo:#ffe066; }
+.board-wrap.cards-hologram .review { --holo:#5ab0ff; } .board-wrap.cards-hologram .writing { --holo:#ffa94d; }
+.board-wrap.cards-hologram .publish { --holo:#4cff9a; } .board-wrap.cards-hologram .done { --holo:#b8f3ff; }
+.board-wrap.cards-hologram .parked { --holo:#ff5c7a; }
+.board-wrap.cards-hologram .note.epic { --holo:#d38bff; background-image:linear-gradient(160deg, rgba(211,139,255,.28), rgba(211,139,255,.08)),
+  repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 3px); }
+.board-wrap.cards-hologram .note.epic::before { background:var(--holo); opacity:.6; }
+.board-wrap.cards-hologram .note.epic { color:#e8fbff; }
+.board-wrap.cards-hologram .note.epic .k, .board-wrap.cards-hologram .note.epic .n { color:var(--holo); }
+.board-wrap.cards-hologram .note.unsorted { --holo:transparent; border:none; box-shadow:none; background:none; color:#cfe2ff; }
+.board-wrap.cards-hologram .note.unsorted::after { display:none; }
+.board-wrap.cards-hologram .note.live { outline-color:#4cff9a; box-shadow:0 0 22px #4cff9a; }
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note.epic {    /* light boards: dark ink */
+  color:color-mix(in srgb, var(--holo) 25%, #0b1b2b); text-shadow:none;
+  background-color:color-mix(in srgb, var(--holo) 14%, rgba(255,255,255,.5)); }
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note .stage,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note .stamp,
+.board-wrap.cards-hologram:is(.surface-paper, .surface-grid, .surface-fridge) .note.epic :is(.k, .n) {
+  color:color-mix(in srgb, var(--holo) 55%, #0b1b2b); border-color:currentColor; }
+.board-wrap.cards-hologram.animate .note:not(.unsorted) { animation:holo 7s infinite; }
+.board-wrap.cards-hologram.animate .note:nth-child(3n) { animation-delay:-2.3s; }
+.board-wrap.cards-hologram.animate .note:nth-child(3n+1) { animation-delay:-4.6s; }
+@keyframes holo { 0%, 92%, 100% { opacity:1; } 93% { opacity:.72; } 94% { opacity:1; } 96% { opacity:.85; } }
+@media (prefers-reduced-motion: reduce) { .board-wrap .note, .board-wrap .str .line { animation:none !important; } }
+
+/* ---------- the gear's panel ---------- */
+.board-style { position:absolute; right:24px; top:72px; width:300px; max-width:calc(100% - 48px); z-index:5; cursor:auto;
+  background:var(--bg); color:var(--fg); border-radius:12px; padding:12px 14px; box-shadow:0 18px 40px -10px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.06); }
+.board-style[hidden] { display:none; }
+.board-style .lbl { font:600 10.5px/1 system-ui, sans-serif; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:.7rem 0 .35rem; }
+.board-style .lbl:first-child { margin-top:0; }
+.board-style .seg { display:flex; flex-wrap:wrap; gap:4px; }
+.board-style .seg button { border:1px solid var(--rule); background:var(--bg); color:var(--fg); border-radius:999px; padding:.28rem .65rem;
+  font:600 12px system-ui, sans-serif; cursor:pointer; }
+.board-style .seg button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.board-style .dots { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.board-style .dot { width:26px; height:26px; border-radius:50%; border:none; padding:0; background:var(--c); cursor:pointer;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.15); }
+.board-style .dot[hidden] { display:none; }
+.board-style .dot.on { box-shadow:inset 0 0 0 1px rgba(0,0,0,.15), 0 0 0 2px var(--bg), 0 0 0 4px var(--fg); }
+.board-style .dot.own { position:relative; overflow:hidden; background:conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.board-style .dot.own input { position:absolute; inset:-6px; width:40px; height:40px; opacity:0; cursor:pointer; }
+.board-style .more { display:block; margin-top:.8rem; font-size:12px; }
+.board-tools button svg { width:18px; height:18px; fill:none; stroke:var(--fg); stroke-width:1.8; }
+/* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
+.board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
+  pointer-events:none; image-rendering:pixelated; }
+.board-wrap:not(.cards-sticky) .note[data-lab] { --r:0deg !important; }   /* level ground to walk on */
+/* sticky notes: the researcher stands inside the card on its bottom edge and tilts with it */
+.board-wrap.cards-sticky .note canvas.lab-stage { bottom:0; }
+.board-wrap.cards-sticky .note[data-lab] { padding-bottom:calc(11px * var(--s) + 46px); }
+
+/* ---------- surface: arcade ---------- */
+.board-wrap.surface-arcade { background-color:#1d2b53; border-radius:0;
+  background-image:linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 125%, rgba(126,37,83,.6), transparent 62%);
+  background-size:calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), 100% 100%;
+  background-position:var(--gx,0) var(--gy,0), var(--gx,0) var(--gy,0), 0 0;
+  box-shadow:inset 0 0 0 6px #000, inset 0 0 0 10px #5f574f, inset 0 0 0 12px #000; }
+.board-wrap.surface-arcade .note.unsorted, .board-wrap.surface-arcade .board-empty { color:#fff1e8; }
+
+/* ---------- strings: pixel (right-angle elbows) ---------- */
+.board-wrap.str-pixel .str path { stroke-linecap:square; stroke-linejoin:miter; }
+.board-wrap.str-pixel .str .line { stroke-width:3; filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel .str.link .line { stroke-width:2.5; }
+.board-wrap.str-pixel .str.mention .line { stroke-width:2; stroke-dasharray:6 6; opacity:.9; }
+.board-wrap.str-pixel .board-legend i { border-top-width:3px; }
+
+/* ---------- cards: pixel (flat 8-bit colours, stepped borders, hard shadows) ---------- */
+.board-wrap.cards-pixel .note { --px:calc(3px * var(--s)); --ink:#1d1d1f; transform:translate(-50%,-50%);
+  background:var(--pix,#c2c3c7); color:var(--ink); border-radius:0; letter-spacing:.01em;
+  font:700 calc(12px * var(--s))/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding:calc(17px * var(--s)) calc(12px * var(--s)) calc(10px * var(--s));
+  box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink), calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink),
+    inset var(--px) var(--px) 0 0 rgba(255,255,255,.5), inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 0 rgba(0,0,0,.18),
+    calc(3 * var(--px)) calc(3 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note.lifted { box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink),
+  calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink), calc(5 * var(--px)) calc(5 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note .t { font-family:inherit; font-weight:800; }
+.board-wrap.cards-pixel .note .pin { border-radius:0; width:calc(8px * var(--s)); height:calc(8px * var(--s)); top:calc(5px * var(--s));
+  margin-left:calc(-4px * var(--s)); background:#ff004d; box-shadow:0 0 0 2px var(--ink), 2px 2px 0 2px rgba(0,0,0,.3); }
+.board-wrap.cards-pixel .note .stage { color:rgba(0,0,0,.7); font-size:.78em; }
+.board-wrap.cards-pixel .note .stage::before { border-radius:0; background:var(--ink); }
+.board-wrap.cards-pixel .note .stamp { transform:none; border-radius:0; border-width:2px; color:var(--ink); border-color:var(--ink);
+  background:rgba(255,255,255,.55); opacity:1; }
+.board-wrap.cards-pixel .note .now { border-radius:0; background:#00e436; color:#1d1d1f; font:800 9.5px/1 ui-monospace, Menlo, monospace;
+  box-shadow:0 0 0 2px #1d1d1f, 2px 2px 0 2px rgba(0,0,0,.35); top:-12px; }
+.board-wrap.cards-pixel .note.live { outline:3px dashed #00e436; outline-offset:6px; }
+.board-wrap.cards-pixel .queued   { --pix:#c2c3c7; } .board-wrap.cards-pixel .research { --pix:#ffec27; }
+.board-wrap.cards-pixel .review   { --pix:#29adff; } .board-wrap.cards-pixel .writing  { --pix:#ffa300; }
+.board-wrap.cards-pixel .publish  { --pix:#00e436; } .board-wrap.cards-pixel .done     { --pix:#fff1e8; }
+.board-wrap.cards-pixel .parked   { --pix:#ff77a8; }
+.board-wrap.cards-pixel .note.epic { --pix:#7e2553; --ink:#000; color:#fff1e8; background-image:none;
+  font:700 calc(13px * var(--s))/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.board-wrap.cards-pixel .note.epic::before { display:none; }
+.board-wrap.cards-pixel .note.epic .k { color:#ffec27; font:800 .7em/1 ui-monospace, Menlo, monospace; letter-spacing:.2em; }
+.board-wrap.cards-pixel .note.epic .t { font-family:inherit; font-weight:800; font-size:1.4em; }
+.board-wrap.cards-pixel .note.epic .n { color:#fff1e8; opacity:.85; }
+.board-wrap.cards-pixel .note.epic .pin { background:#ffec27; }
+.board-wrap.cards-pixel .note.epic.proposed { outline:3px dashed #ffec27; outline-offset:6px; }
+.board-wrap.cards-pixel .note.unsorted { background:none; box-shadow:none; }
+.board-wrap.cards-pixel .note .grip { background:linear-gradient(135deg, transparent 50%, var(--ink) 50%); }
+"""
+
 # ---------- actions (POST, then redirect back) ----------
 
 def same_origin(request: Request) -> bool:
@@ -3052,8 +3699,10 @@ app = Starlette(routes=[
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
+    Route("/settings/board-style", save_board_style, methods=["POST"]),
     Route("/auto", save_auto, methods=["POST"]),
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
+    Route("/settings/library", save_library, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),
@@ -3065,6 +3714,9 @@ app = Starlette(routes=[
     Route("/settings/custom-channel", add_custom_channel, methods=["POST"]),
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
+    Route("/board", board_page),
+    Route("/board/move", board_move, methods=["POST"]),
+    Route("/board/style", board_style_save, methods=["POST"]),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
@@ -3073,6 +3725,7 @@ app = Starlette(routes=[
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),
+    Route("/api/board", api_board),
     Mount("/assets", StaticFiles(directory=ASSETS)),
     Mount("/site", StaticFiles(directory="site", html=True, check_dir=False)),
 ])

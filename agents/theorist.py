@@ -3,6 +3,12 @@ Investigator's model, no tools: it reads the whole desk (every epic with its mis
 the latest published articles and the possibilities they left open, and how the inspiration line got here)
 and looks for patterns inside an epic and themes emerging across epics.
 
+Before it answers it searches the desk's library (library.py, through its MCP server "library"): code first looks up
+the inspiration line itself, then the Theorist may run up to LOOKUPS searches of its own for what a pattern it
+suspects rests on (the claims, quotes and article sections behind the desk's one-line summaries). What it found goes
+with the request for its theory. A library that fails or runs out of time never stops the Theorist; it answers from
+the desk alone and says so.
+
 It may evolve the inspiration line, propose up to MAX_EPICS new epics and propose at most one new mission. It
 also connects dots: it may propose combining 2 to MAX_MEMBERS open missions into one bigger mission (at most one
 combine a turn), and link up to MAX_LINKS pairs while keeping them separate: two open missions, or an open
@@ -10,12 +16,14 @@ mission and a published article. Code holds it to that: the line may only ask qu
 KEEP of the current line's words (an evolution, not a rewrite), a new epic needs MIN_EPIC_MISSIONS missions, a
 new mission must not repeat one the desk has, a combine takes only missions not yet being written, and a link
 needs an open mission and a reason. The orchestrator applies what is left (orchestrator.apply_theory)."""
-import asyncio, re
+import asyncio, math, re
+from pathlib import Path
 from pydantic import BaseModel, ValidationError
-import store
+import board, store, trail
 from contracts import Mission, State, ResearchBrief, Article, COMBINABLE, epic_title, is_open, words
 from agents import llm
 from agents.finder import too_similar
+from agents.toolbox import Toolbox
 import stopping
 
 KEEP = 0.5                                 # share of the current line's meaningful words the new line keeps
@@ -32,6 +40,11 @@ MAX_HISTORY = 6                            # past versions of the line shown
 MAX_MEMBERS = 4                            # missions one combine folds together
 MAX_LINKS = 3                              # links a turn
 MAX_WHY = 300                              # characters of a link's or a combine's reason
+LOOKUPS = 4                                # library searches the Theorist may run itself, after code's first
+LOOKUP_TIME = 4 * 60                       # seconds for the whole lookup phase
+FINDINGS_CHARS = 14_000                    # what it found, as it goes with the request (about 4.5k tokens)
+LIBRARY, SEARCH = "library", "search_library"   # the MCP server in mcp.json and its tool
+CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"
 
 STAGES = {State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_READY: "brief in review",
           State.AWAITING_COMMENTS: "writing next", State.WRITING: "writing", State.ARTICLE_READY: "article in review",
@@ -83,6 +96,10 @@ Reply with JSON matching the schema:
   each one's research sees the other. mission: an open mission's slug (not published). to: the slug of another
   open mission, or of a published article it builds on, answers or tests. why: one sentence naming the shared
   thread (actor, mechanism, number, date, money trail). Never a pair already linked.
+
+The desk's library holds the work behind each one-line summary below: every brief's claims with the exact quotes
+they cite, counterpoints, sources and article sections. What you found there comes with the request. A pattern may
+rest on a passage: name its mission slug. The passages are the desk's own past work, not new evidence.
 
 Do not propose anything whose premise accuses a private person of wrongdoing or blames people for their race,
 religion or ethnicity.
@@ -136,6 +153,8 @@ class Theory(TheoryReply):
     """The reply after code has checked it, with what code dropped and the line it was based on."""
     based_on: str = ""                     # the line as the Theorist read it; a human edit meanwhile wins
     dropped: list[str] = []
+    lookups: list[str] = []                # what it searched the library for, code's first search included
+    library: str = ""                      # why it answered without (part of) the library, if it did
 
 def _clean(text: str, limit: int = MAX_WHY) -> str:
     return " ".join(text.split())[:limit]
@@ -198,7 +217,7 @@ def desk_text(missions: list[Mission]) -> str:
 def history_text(history: list[dict]) -> str:
     rows = []
     for h in history[-MAX_HISTORY:]:
-        who = "the editor" if h.get("by") == "human" else "you, the Theorist"
+        who = {"human": "the editor", "chat": "the chat assistant, for the editor"}.get(h.get("by"), "you, the Theorist")
         why = f" (why: {h['why']})" if h.get("why") else ""
         rows.append(f'- {h.get("at", "")[:10]}, {who}: "{h.get("line", "")}"{why}')
     return "\n".join(rows) or "- the editor wrote it; it has not changed since"
@@ -251,25 +270,15 @@ def settle(reply: TheoryReply, line: str, missions: list[Mission]) -> Theory:
         dropped.append(f"new mission dropped: the desk already has one like it ({mission.topic.strip()})")
         mission = None
 
-    known = {m.slug for m in missions}
     epics: list[NewEpic] = []
     for e in reply.new_epics:
-        title = epic_title(e.title)
-        if not title:
-            dropped.append(f"new epic dropped: {e.title.strip()!r} is not a 1 to 4 word title")
+        joins = bool(mission and epic_title(mission.epic).lower() == epic_title(e.title).lower())
+        if len(epics) == MAX_EPICS and epic_title(e.title):
+            dropped.append(f"new epic dropped: {epic_title(e.title)}, at most {MAX_EPICS} at a time")
             continue
-        if store.find_epic(title) or title.lower() in (k.title.lower() for k in epics):
-            dropped.append(f"new epic dropped: {title} already exists")
-            continue
-        members = [s for s in dict.fromkeys(s.strip() for s in e.missions) if s in known]
-        joins = bool(mission and epic_title(mission.epic).lower() == title.lower())
-        if len(members) + joins < MIN_EPIC_MISSIONS:
-            dropped.append(f"new epic dropped: {title} needs at least {MIN_EPIC_MISSIONS} missions")
-            continue
-        if len(epics) == MAX_EPICS:
-            dropped.append(f"new epic dropped: {title}, at most {MAX_EPICS} at a time")
-            continue
-        epics.append(NewEpic(title=title, why=" ".join(e.why.split()), missions=members))
+        kept = settle_epic(e, missions, dropped, epics, joins)
+        if kept:
+            epics.append(kept)
 
     if mission:
         home = epic_title(mission.epic)
@@ -281,6 +290,25 @@ def settle(reply: TheoryReply, line: str, missions: list[Mission]) -> Theory:
     links = settle_links(reply.links, missions, combine, dropped)
     return Theory(patterns=patterns, inspiration=new_line, why=" ".join(reply.why.split()), new_epics=epics,
                   new_mission=mission, combine=combine, links=links, based_on=line, dropped=dropped)
+
+def settle_epic(e: NewEpic, missions: list[Mission], dropped: list[str], taken: list[NewEpic] = (),
+                joins: bool = False) -> NewEpic | None:
+    """A new epic with a 1 to 4 word title no epic has (nor one of taken, this turn's), holding at least
+    MIN_EPIC_MISSIONS known missions (joins: one more is coming, the new mission). Used for the Theorist's and the
+    chat assistant's proposals."""
+    title = epic_title(e.title)
+    if not title:
+        dropped.append(f"new epic dropped: {e.title.strip()!r} is not a 1 to 4 word title")
+        return None
+    if store.find_epic(title) or title.lower() in (k.title.lower() for k in taken):
+        dropped.append(f"new epic dropped: {title} already exists")
+        return None
+    known = {m.slug for m in missions}
+    members = [s for s in dict.fromkeys(s.strip() for s in e.missions) if s in known]
+    if len(members) + joins < MIN_EPIC_MISSIONS:
+        dropped.append(f"new epic dropped: {title} needs at least {MIN_EPIC_MISSIONS} missions")
+        return None
+    return NewEpic(title=title, why=" ".join(e.why.split()), missions=members)
 
 def _epic_for(name: str, new_epics: list[NewEpic], members: list[Mission]) -> str:
     """The combined mission's epic: one of this turn's new epics, an active epic, else the one its members share."""
@@ -368,11 +396,89 @@ def settle_links(links: list[NewLink], missions: list[Mission], combine: NewComb
         kept.append(NewLink(mission=a.slug, to=b.slug, why=_clean(k.why)))
     return kept
 
+# ---------- the library: what it looks up before it answers ----------
+
+LOOK = """Before you give your theory, look inside the desk's library. {tool} searches every mission's brief
+(claims with their quotes, counterpoint, sources), article sections and objective, by meaning and words. Here is
+what it returns for the inspiration line itself:
+
+{first}
+
+Search it up to {n} more times for what you need: the actor, mechanism, number, date or money trail a pattern you
+suspect rests on, or whether two missions really share one. Optional filters: epic (a title), mission (a slug).
+When you have what you need, reply with the single word done."""
+
+FINDINGS = """What you found in the desk's library (the desk's own past work, not new evidence):
+
+{found}
+
+Give your theory as JSON matching the schema."""
+
+async def look_up(system: str, line: str, toolbox_factory) -> tuple[list[tuple[str, str]], str]:
+    """The lookup phase: code searches the library for the line, then the model may search LOOKUPS more times, in
+    LOOKUP_TIME. Returns ([(query, result)], note); the note says why it stopped short ("" when it didn't). Never
+    raises: a library that won't start or a model that gets stuck leaves what was found so far."""
+    found: list[tuple[str, str]] = []
+    try:
+        async with asyncio.timeout(LOOKUP_TIME), toolbox_factory() as tb:
+            tools = [t for t in tb.tools if t["function"]["name"] == SEARCH]
+            first = await tb.call(SEARCH, {"query": line})
+            trail.record("tool_result", f"{SEARCH}: {first}")
+            found.append((line, first))
+            messages = [{"role": "system", "content": system},
+                        {"role": "user", "content": LOOK.format(tool=SEARCH, first=first, n=LOOKUPS)}]
+            calls = 0
+            while calls < LOOKUPS and tools and not stopping.requested():
+                try:
+                    msg = await llm.chat(messages, tools=tools)
+                except (llm.Cut, llm.Overrun):     # stopped or stuck: answer from what it found
+                    break
+                if not msg.tool_calls or stopping.requested():
+                    break
+                messages.append(msg)
+                for tc in msg.tool_calls:          # every call gets an answer, or some chat templates break
+                    args = {k: str(v) for k, v in dict(tc.function.arguments or {}).items()
+                            if k in ("query", "epic", "mission")}
+                    if tc.function.name != SEARCH or calls >= LOOKUPS or not args.get("query", "").strip():
+                        messages.append({"role": "tool", "tool_name": tc.function.name,
+                                         "content": f"Not run: only {SEARCH} with a query, at most {LOOKUPS} times."})
+                        continue
+                    calls += 1
+                    result = await tb.call(SEARCH, args)
+                    trail.record("tool_result", f"{SEARCH}: {result}")
+                    found.append((args["query"], result))
+                    messages.append({"role": "tool", "tool_name": SEARCH, "content": result})
+    except TimeoutError:
+        return found, f"library: the lookups ran out of time after {len(found)} search(es)"
+    except Exception as e:                  # the library server didn't start, or a call broke: carry on without it
+        return found, f"library not searched: {type(e).__name__}: {e}"[:300]
+    return found, ""
+
+def findings_text(found: list[tuple[str, str]]) -> str:
+    """Each search and what it returned, shared out within FINDINGS_CHARS."""
+    if not found:
+        return ""
+    each = FINDINGS_CHARS // len(found)
+    parts = []
+    for query, result in found:
+        text = result if len(result) <= each else result[:each].rsplit("\n", 1)[0] + "\n[more passages cut]"
+        parts.append(f'Search: "{query}"\n{text}')
+    return "\n\n".join(parts)
+
+def library_toolbox():
+    return Toolbox([LIBRARY], config_path=CONFIG)
+
 # ---------- the call ----------
 
-async def run_theorist(line: str, history: list[dict], missions: list[Mission], now=None) -> Theory:
-    messages = [{"role": "system", "content": prompt(line, history, missions, now)},
-                {"role": "user", "content": "Give your theory as JSON matching the schema."}]
+async def run_theorist(line: str, history: list[dict], missions: list[Mission], now=None,
+                       toolbox_factory=None) -> Theory:
+    """The Theorist's turn. toolbox_factory opens the library (theorize passes library_toolbox); None answers from
+    the desk alone, with no lookups."""
+    system = prompt(line, history, missions, now)
+    found, note = await look_up(system, line, toolbox_factory) if toolbox_factory else ([], "")
+    findings = findings_text(found)
+    request = FINDINGS.format(found=findings) if findings else "Give your theory as JSON matching the schema."
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": request}]
     schema = TheoryReply.model_json_schema()
     reply, error = None, None
     for attempt in range(2):               # one repair round: malformed JSON, or a line it may not write
@@ -400,11 +506,143 @@ async def run_theorist(line: str, history: list[dict], missions: list[Mission], 
                       + "\nReturn the whole JSON again with the line fixed."}]
     if reply is None:
         raise TheoryFailed(f"model could not produce a valid theory: {error}")
-    return settle(reply, line, missions)
+    theory = settle(reply, line, missions)
+    theory.lookups, theory.library = [q for q, _ in found], note
+    return theory
 
 def theorize(now=None) -> Theory:
-    """Sync entry point the orchestrator calls. Reads the desk from the store; changes nothing."""
+    """Sync entry point the orchestrator calls. Reads the desk (and its library) from the store; changes nothing."""
     line = store.get_inspiration()
     if not line:
         raise TheoryFailed("no inspiration line to evolve")
-    return asyncio.run(run_theorist(line, store.inspiration_history(), store.all_missions(), now))
+    return asyncio.run(run_theorist(line, store.inspiration_history(), store.all_missions(), now,
+                                    toolbox_factory=library_toolbox))
+
+
+# ---------- board turns: every BOARD_EVERY-th turn only arranges the cork board (#69) ----------
+
+MAX_MOVES = 12                             # notes a board turn may move or resize
+BOARD_MARGIN = 800                         # px a note may go past the board's current edges
+GRID_COLS, GRID_ROWS = 60, 22              # the rough picture of the board the Theorist sees
+
+BOARD_SYSTEM = """You are the Theorist of an investigative research desk. This turn you do one thing only: arrange
+the desk's cork board so a human reading it sees how the work hangs together. You change nothing else: no
+missions, epics, links or inspiration.
+
+The board is a 2D map in pixels; x grows to the right, y grows downwards. Each note is a mission or an epic. A
+note at size 1.0 is about 160 px wide and 110 px tall; sizes run from {size_min} to {size_max}. Strings join an
+epic to its missions, linked missions, and missions that cite the same page or name each other.
+
+Make the board read well:
+- Keep each epic's missions round it, the closest work nearest; put epics whose missions are strung together
+  near each other, and keep unrelated epics apart.
+- Make a note bigger when it matters more: published or nearly published, strongly connected, or central to a
+  pattern you see; smaller when it is a side question.
+- Leave room between notes (at least {gap} px between centres) so nothing hides another, and keep crossings of
+  strings few.
+- Move only what helps; leave a note alone when it already sits well. At most {max_moves} notes.
+
+Reply with "moves": each {{"id": a note id from the list, "x", "y", "size"}} (size may be null to keep it), and
+"why": one or two sentences on what you arranged and why."""
+
+class NoteMove(BaseModel):
+    id: str                                # a note id: "m:<slug>" or "e:<slug>"
+    x: float
+    y: float
+    size: float | None = None
+
+class BoardReply(BaseModel):
+    """What the model writes on a board turn."""
+    moves: list[NoteMove] = []
+    why: str = ""
+
+class BoardTidy(BoardReply):
+    """A board turn after code has checked it."""
+    dropped: list[str] = []
+
+def board_picture(notes: list[dict]) -> str:
+    """The board as a rough character grid, no style: E an epic, a letter per mission stage, + two in one cell."""
+    if not notes:
+        return "(the board is empty)"
+    xs, ys = [n["x"] for n in notes], [n["y"] for n in notes]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    grid = [[" "] * GRID_COLS for _ in range(GRID_ROWS)]
+    for n in notes:
+        c = round((n["x"] - x0) / max(1, x1 - x0) * (GRID_COLS - 1))
+        r = round((n["y"] - y0) / max(1, y1 - y0) * (GRID_ROWS - 1))
+        mark = "E" if n["kind"] != "mission" else n.get("mark", "o")
+        grid[r][c] = mark if grid[r][c] == " " else "+"
+    rows = ["|" + "".join(row) + "|" for row in grid]
+    edge = "+" + "-" * GRID_COLS + "+"
+    return "\n".join([f"x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}", edge, *rows, edge,
+                      "E epic or Unsorted, q queued, r researching, b brief, w writing, a article in review, "
+                      "p published, x parked, c combined, + two notes in one cell"])
+
+MARKS = {State.QUEUED: "q", State.RESEARCHING: "r", State.BRIEF_READY: "b", State.AWAITING_COMMENTS: "w",
+         State.WRITING: "w", State.ARTICLE_READY: "a", State.DONE: "p", State.PARKED: "x", State.COMBINED: "c"}
+
+def board_desk() -> dict:
+    """board.layout() with what the Theorist needs to read each note: its title and stage."""
+    data = board.layout()
+    missions = {m.slug: m for m in store.all_missions()}
+    epics = {e.slug: e for e in store.all_epics()}
+    for n in data["notes"]:
+        if n["kind"] == "mission":
+            m = missions[n["slug"]]
+            n.update(title=m.topic, stage=STAGES[m.state], mark=MARKS[m.state])
+        else:
+            e = epics.get(n["slug"])
+            n.update(title=e.title if e else "Unsorted (missions in no epic)", stage="epic" if e else "label")
+    return data
+
+def board_text(data: dict) -> str:
+    """The board for the prompt: every note with its place and size, every string, and the rough picture."""
+    rows = [f"- {n['id']} | {n['stage']} | {n['title']} | x={n['x']:.0f} y={n['y']:.0f} size={n['size']:.2f}"
+            for n in data["notes"]]
+    strings = [f"- {s['a']} -- {s['b']} ({s['kind']}{': ' + s['why'] if s.get('why') else ''})" for s in data["strings"]]
+    return ("Notes:\n" + "\n".join(rows) + "\n\nStrings:\n" + ("\n".join(strings) or "- none")
+            + "\n\nThe board now:\n" + board_picture(data["notes"]))
+
+def settle_board(reply: BoardReply, data: dict) -> BoardTidy:
+    """Code holds a board turn to the board: known notes only, each once, at most MAX_MOVES, sizes in range,
+    positions near the board, and no note dropped on top of another (it is nudged to the nearest free spot)."""
+    notes = {n["id"]: n for n in data["notes"]}
+    if not notes:
+        return BoardTidy(why=_clean(reply.why), dropped=[f"{len(reply.moves)} move(s): the board is empty"] if reply.moves else [])
+    xs, ys = [n["x"] for n in notes.values()], [n["y"] for n in notes.values()]
+    box = (min(xs) - BOARD_MARGIN, max(xs) + BOARD_MARGIN, min(ys) - BOARD_MARGIN, max(ys) + BOARD_MARGIN)
+    where = {i: (n["x"], n["y"]) for i, n in notes.items()}
+    kept, dropped = [], []
+    for mv in reply.moves:
+        if mv.id not in notes:
+            dropped.append(f"{mv.id}: no such note")
+        elif any(k.id == mv.id for k in kept):
+            dropped.append(f"{mv.id}: moved twice")
+        elif len(kept) >= MAX_MOVES:
+            dropped.append(f"{mv.id}: at most {MAX_MOVES} moves a turn")
+        elif not all(map(math.isfinite, (mv.x, mv.y))) or (mv.size is not None and not math.isfinite(mv.size)):
+            dropped.append(f"{mv.id}: not a number")
+        else:
+            x, y = min(box[1], max(box[0], mv.x)), min(box[3], max(box[2], mv.y))
+            others = [xy for i, xy in where.items() if i != mv.id]
+            if not board._far(x, y, others, board.MIN_GAP):
+                x, y = board._spot(x, y, board.MIN_GAP / 3, others, board.MIN_GAP)
+            size = None
+            if mv.size is not None and notes[mv.id]["kind"] != "unsorted":
+                size = round(min(board.SIZE_MAX, max(board.SIZE_MIN, mv.size)), 2)
+            where[mv.id] = (round(x, 1), round(y, 1))
+            kept.append(NoteMove(id=mv.id, x=round(x, 1), y=round(y, 1), size=size))
+    return BoardTidy(moves=kept, why=_clean(reply.why), dropped=dropped)
+
+async def run_board(data: dict, now=None) -> BoardTidy:
+    today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
+    system = today + BOARD_SYSTEM.format(size_min=board.SIZE_MIN, size_max=board.SIZE_MAX, gap=board.MIN_GAP,
+                                         max_moves=MAX_MOVES)
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": board_text(data) + "\n\nArrange the board. Reply as JSON matching the schema."}]
+    reply = await llm.ask(messages, BoardReply, "theorist", TheoryFailed)
+    return settle_board(reply, data)
+
+def tidy_board(now=None) -> BoardTidy:
+    """Sync entry point the orchestrator calls on a board turn. Reads the board; changes nothing (apply_board does)."""
+    return asyncio.run(run_board(board_desk(), now))

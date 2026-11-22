@@ -1,14 +1,17 @@
 """Researcher Chat: answers a human's questions about what the loop is doing, and looks things up on the web.
 It is not one of the workers.
 
-Small on purpose: a short prompt, a few tools (all read-only but add_mission and set_mission_epic), a handful of
-tool calls, short tool results and only the last couple of turns the page sends back. It keeps no memory and
-saves nothing.
+Small on purpose: a short prompt, a few tools, a handful of tool calls, short tool results and only the last couple
+of turns the page sends back. It keeps no memory and saves nothing.
 
-Every tool comes from MCP servers in mcp.json: "loop" (status_tools.py), and the researcher's own web tools,
-"fetch" and "pages" (page_tools.py: find_in_page, page_links, wayback_versions), plus "search" (Brave web and
-news search) when a Brave key is set. Nothing here can change an existing mission's work: add_mission only
-queues a new one and set_mission_epic only moves a mission between epics. By default it runs on the Research
+Every tool comes from MCP servers in mcp.json: "loop" (status_tools.py), "library" (library_tools.py: search_library,
+the desk's own work by meaning and words, the same library the Theorist searches), and the researcher's own web
+tools, "fetch" and "pages" (page_tools.py: find_in_page, page_links, wayback_versions), plus "search" (Brave web and
+news search) when a Brave key is set. It can do everything the Theorist can: read the desk as the Theorist does
+(desk_overview), search the library, change the inspiration line, propose epics and combines (they wait for the
+human), link missions, queue a mission and ask for the Theorist's turn, through the Theorist's own checks. Nothing
+here can change an existing mission's work: add_mission only queues a new one and set_mission_epic only moves a
+mission between epics. By default it runs on the Research
 Assistant's model with the loop's options (settings.chat_model; config, never a name in code), so Ollama uses
 the copy already loaded instead of reloading the model under a running agent. The human may pick another
 installed model; that one is loaded beside it.
@@ -51,27 +54,29 @@ MAX_TOOL_CALLS = 8                         # a web question takes a search, a pa
 TIME_LIMIT = 180                           # seconds for the whole answer
 MAX_TOOL_CHARS = 2500                      # the context stays small even if a tool says a lot
 MAX_WEB_CHARS = 4000                       # a web page or search gets a little more: its start is mostly menus
-LOOP_SERVER, WEB_SERVERS = "loop", ["fetch", "pages"]
+MAX_DESK_CHARS = 6000                      # the Theorist's view of the whole desk
+LOOP_SERVER, LIBRARY_SERVER, WEB_SERVERS = "loop", "library", ["fetch", "pages"]
+ROOMY = {"desk_overview": MAX_DESK_CHARS}  # loop tools that may say more than MAX_TOOL_CHARS
 BIG_MODEL = 20                             # billions of parameters: from here a model is a tenured researcher
 MAX_TURNS = 4                              # earlier messages the page may send back for follow-ups
 MAX_MESSAGE_CHARS = 600
 
 SYSTEM = """You are Researcher Chat, the research desk's assistant in the Mission Loop app. You answer the human's
-questions about the loop, look things up on the web, and can queue missions. A mission is a question or claim to
-research. It goes queued -> researching (the Research Assistant, a small model, searches and reads sources; the
-Principal Investigator, a big model, writes a brief; a validator checks it, 3 attempts) -> brief ready (the human
-approves or sends it back) -> writing (the PI writes the article; a check, 3 attempts) -> article ready (the
-human approves) -> published on the local site, then to the channels set up (1F916, Bluesky, GitHub Pages). A
-mission failing every attempt is parked; the human can requeue it or push its draft through. The mission finder
-adds missions from the human's inspiration line. Missions sit in epics, short themes. Claims are facts (what the
-record shows) or possibilities (labelled, not verified).
+questions about the loop and the desk's findings, look things up on the web, and can do whatever the Theorist does.
+A mission is a question to research: queued -> researching (the Research Assistant, a small model, reads sources;
+the Principal Investigator, a big model, writes a brief; a validator checks it) -> brief ready (the human approves)
+-> writing (a check) -> article ready (the human approves) -> published on the local site and channels. A mission
+failing every attempt is parked; the human can requeue it or push its draft through. Claims are facts (what the
+record shows) or possibilities (labelled, not verified). The mission finder adds missions from the human's inspiration line; the Theorist
+looks across the desk, evolves the line, proposes epics (themes), missions and combines, and links missions.
 Loop tools: loop_status, list_missions, mission_status, agent_steps, search_missions, publication_status,
-list_epics, theorist_notes, setup_status (call it for setup questions or when nothing happens). Web tools: search the web or news, fetch a page, find_in_page for exact sentences in
-a long page, wayback_versions for old copies. Use the loop tools for anything about the loop and the web tools
-for the world outside it; link every page you rely on as [title](url) and never invent a URL.
-Call add_mission only when asked for a new mission; search_missions first so you don't add a duplicate, then say
-its brief still needs their approval. Call set_mission_epic only when asked to move a mission; prefer an existing
-epic. Approve, send back, publish, start and stop are buttons in the UI, not your tools; say so if asked.
+list_epics, theorist_notes, desk_overview, setup_status (setup questions, or when
+nothing happens). search_library finds what the desk's briefs and articles say (claims,
+quotes, sections). Web tools: search, fetch, find_in_page, wayback_versions. Link every web page you rely on as
+[title](url); never invent a URL.
+Change things only when asked: add_mission (search_missions first), set_mission_epic, set_inspiration,
+propose_epic, propose_combine, link_missions, ask_theorist. Proposals and new briefs wait for the human.
+Approve, publish, start and stop are UI buttons, not your tools.
 Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know."""
 
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
@@ -141,10 +146,13 @@ def web_search() -> bool:
     return not server_status(["search"], CONFIG)["search"]
 
 def servers() -> list[str]:
-    return [LOOP_SERVER, *WEB_SERVERS, *(["search"] if web_search() else [])]
+    return [LOOP_SERVER, LIBRARY_SERVER, *WEB_SERVERS, *(["search"] if web_search() else [])]
 
 def _limit(tb, name: str) -> int:
-    """Loop answers stay short; a web page or search result gets a little more room."""
+    """Loop answers stay short; a library search, web page or search result gets a little more room, and the
+    whole desk more still."""
+    if name in ROOMY:
+        return ROOMY[name]
     server = getattr(tb, "server", {}).get(name)
     return MAX_WEB_CHARS if server and server != LOOP_SERVER else MAX_TOOL_CHARS
 
