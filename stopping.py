@@ -2,7 +2,7 @@
 
 The model may finish the turn it is on (up to TURN_GRACE seconds after the press), then it writes out
 its result straight away. Everything has to be out by GRACE seconds after the press: whatever has been
-written by then is kept as a draft, unchecked, and the loop stops. The next pass checks that draft
+written by then is kept as a draft, unchecked, and the loop stops. The next start checks that draft
 first, so a bad one is caught by the validator like any other attempt.
 """
 import json, time

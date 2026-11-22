@@ -36,7 +36,7 @@ class Mission(BaseModel):
     rejected_brief: "RejectedBrief | None" = None  # last brief the validator failed; retries revise it
     rejected_article: "RejectedArticle | None" = None  # last article the check failed
     gathered: bool = False                 # the Research Assistant's sources are saved (artifact "evidence"); brief next
-    interrupted_brief: "ResearchBrief | None" = None   # written out when stop was pressed; checked next pass
+    interrupted_brief: "ResearchBrief | None" = None   # written out when stop was pressed; checked when the loop starts again
     interrupted_article: "Article | None" = None       # same for the writer
     unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
     unchecked_article: str = ""            # same for a failed article
