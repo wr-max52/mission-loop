@@ -4,6 +4,7 @@ import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
 from agents import f916, publisher
+from agents.channel import NoAllowance, Refused
 from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ChannelPost, epic_title, slugify)
 from render import brief_markdown, article_markdown, article_html
@@ -257,7 +258,7 @@ def find_new_missions(now) -> int:
 
 # ---------- publishing channels beyond the local site ----------
 
-CHANNEL_NAMES = {"site": "Local site", "1f916": "1F916"}
+CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME}
 
 def channels(m: Mission) -> dict[str, ChannelPost]:
     """Everywhere this mission was published. Missions published before channels were recorded
@@ -267,47 +268,51 @@ def channels(m: Mission) -> dict[str, ChannelPost]:
         found["site"] = ChannelPost(at=m.published_at, where=f"site/{m.slug}/index.html")
     return found
 
-def f916_queue() -> list[Mission]:
-    """Published articles not yet on 1F916: newest first, and any the site refused after the rest."""
-    waiting = [m for m in store.all_missions() if m.state == State.DONE and "1f916" not in m.channels]
-    return sorted(waiting, key=lambda m: ("1f916" in m.channel_errors,
-                                          -(m.published_at.timestamp() if m.published_at else 0)))
+def queue(channel) -> list[dict]:
+    """Feed entries this channel hasn't posted yet: newest first, and any it refused after the rest.
+    An entry still waiting for its text (published before the feed) waits for the next refresh_feed."""
+    missions = {m.slug: m for m in store.all_missions()}
+    waiting = [e for e in publisher.entries() if e.get("text") and e["slug"] in missions
+               and channel.KEY not in missions[e["slug"]].channels]
+    return sorted(waiting, key=lambda e: channel.KEY in missions[e["slug"]].channel_errors)
 
-def post_to_1f916(now, max_tries: int = 3) -> int:
-    """1F916 allows one post a day. Post the newest waiting article if today's post is still free.
-    A refused article costs nothing, so the next one is tried. Returns 1 if something was posted."""
-    if not agents.f916_enabled() or STOP_FLAG.exists():
+def post_to_channels(now, max_tries: int = 3) -> int:
+    """Every channel that is set up posts from the feed, as far as its allowance goes."""
+    if STOP_FLAG.exists():
         return 0
-    until = f916.spent_until()
-    if until and now < until:
-        return 0
-    for m in f916_queue()[:max_tries]:
+    return sum(post_to(c, now, max_tries) for c in agents.CHANNELS if c.enabled())
+
+def post_to(channel, now, max_tries: int = 3) -> int:
+    """Post waiting entries until the channel has no allowance left. A refused entry costs nothing, so the
+    next one is tried; any other failure stops this channel until the next pass. Returns how many posted."""
+    posted = 0
+    for entry in queue(channel)[:max_tries]:
+        until = channel.wait_until()
+        if until and now < until:
+            break
+        m = store.get_mission(entry["slug"])
         try:
-            activity.begin(m.slug, "1f916")
-            where = agents.post_1f916(m, _brief(m), _article(m), now)
-        except f916.NoAllowance as e:
-            if e.daily:
-                f916.save_state({"spent_until": f916.next_utc_day(now).isoformat(), "note": str(e)})
-            print(f"1F916: no post allowance now ({e})", flush=True)
-            return 0
-        except f916.Refused as e:
-            m.channel_errors["1f916"] = str(e)
+            activity.begin(m.slug, channel.KEY)
+            where = channel.post(entry, now)
+        except NoAllowance as e:
+            print(f"{channel.NAME}: no post allowance now ({e})", flush=True)
+            break
+        except Refused as e:
+            m.channel_errors[channel.KEY] = str(e)
             store.save_mission(m)
-            store.log_event(m.slug, now, m.state.value, m.state.value, f"1F916 refused the post: {e}")
+            store.log_event(m.slug, now, m.state.value, m.state.value, f"{channel.NAME} refused the post: {e}")
             continue
         except Exception as e:             # bad key, network, site down: nothing is lost, try next pass
-            f916.save_state({"note": f"{type(e).__name__}: {e}"})
-            print(f"1F916 posting failed: {type(e).__name__}: {e}", flush=True)
-            return 0
+            print(f"{channel.NAME} posting failed: {type(e).__name__}: {e}", flush=True)
+            break
         finally:
             activity.clear()
-        m.channels["1f916"] = ChannelPost(at=now, where=where)
-        m.channel_errors.pop("1f916", None)
+        m.channels[channel.KEY] = ChannelPost(at=now, where=where)
+        m.channel_errors.pop(channel.KEY, None)
         store.save_mission(m)
-        store.log_event(m.slug, now, m.state.value, m.state.value, f"posted to 1F916: {where}")
-        f916.save_state({"spent_until": f916.next_utc_day(now).isoformat(), "note": f"posted {m.slug}"})
-        return 1
-    return 0
+        store.log_event(m.slug, now, m.state.value, m.state.value, f"posted to {channel.NAME}: {where}")
+        posted += 1
+    return posted
 
 # ---------- epics (human decisions) ----------
 
@@ -421,11 +426,11 @@ def _run_missions(now_fn, max_ticks: int) -> int:
 
 def run_until_idle(now_fn, max_ticks: int = 100) -> int:
     """One pass. Existing missions go first so the finder never delays work a human just approved;
-    whatever it finds is then researched in the same pass. Last, anything published (now or earlier)
-    goes out to 1F916 if today's post there is still free."""
+    whatever it finds is then researched in the same pass. Last, every channel that is set up posts from
+    the feed whatever it has not posted yet, as far as its allowance goes (1F916: one a day)."""
     refresh_feed()
     total = _run_missions(now_fn, max_ticks)
     found = find_new_missions(now_fn())
     if found:
         total += found + _run_missions(now_fn, max_ticks)
-    return total + post_to_1f916(now_fn())
+    return total + post_to_channels(now_fn())

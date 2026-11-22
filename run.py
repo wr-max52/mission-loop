@@ -232,7 +232,7 @@ def status():
         print(f"{m.slug:20} {m.state.value:18} {tries}{extra}{_channel_summary(m)}{'  [' + m.epic + ']' if m.epic else ''}")
     from agents import f916
     if agents.f916_enabled():
-        queued, until = len(orchestrator.f916_queue()), f916.spent_until()
+        queued, until = len(orchestrator.queue(f916)), f916.spent_until()
         when = f"next post after {until:%m-%d %H:%M} UTC" if until and until > clock.now() else "can post now"
         print(f"1F916 as {f916.key()['handle']}: {queued} queued, {when}")
 

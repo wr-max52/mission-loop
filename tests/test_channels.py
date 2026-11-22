@@ -1,10 +1,11 @@
-"""Publishing channels: the local site, and 1F916 with its one-post-a-day queue (against a fake server)."""
+"""Publishing channels: the local site and its feed, and 1F916 posting from the feed with its one-post-a-day
+queue (against a fake server)."""
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import httpx, pytest
 import orchestrator, run as cli, store, ui
-from agents import f916, stubs
+from agents import f916, publisher, stubs
 from contracts import Mission, State, Article, Section
 from starlette.testclient import TestClient
 
@@ -85,9 +86,11 @@ def test_one_post_a_day_newest_first_then_the_backlog(joined):
     for i, slug in enumerate(["oldest", "middle", "newest"]):   # backlog from before the channel existed
         store.save_mission(Mission(slug=slug, topic=slug, state=State.DONE,
                                    published_at=T0 - timedelta(days=3 - i)))
-        store.save_artifact(slug, "brief", stubs.research(Mission(slug=slug, topic=slug)))
         m = store.get_mission(slug)
-        store.save_artifact(slug, "article", stubs.write(m, stubs.research(m), []))
+        brief, article = stubs.research(m), stubs.write(m, stubs.research(m), [])
+        store.save_artifact(slug, "brief", brief)
+        store.save_artifact(slug, "article", article)
+        publisher.write_page(m, brief, article, m.published_at)    # on the site and in the feed
     run_at(T0)
     run_at(T0 + timedelta(hours=5))                    # same UTC day: nothing more, and no request made
     assert [on_1f916(s) is not None for s in ("newest", "middle", "oldest")] == [True, False, False]
@@ -99,7 +102,7 @@ def test_one_post_a_day_newest_first_then_the_backlog(joined):
         run_at(T0 + timedelta(days=day))
     order = sorted(["newest", "middle", "oldest", "fresh"], key=lambda s: on_1f916(s) or "~")
     assert order == ["newest", "fresh", "middle", "oldest"]
-    assert orchestrator.f916_queue() == []
+    assert orchestrator.queue(f916) == []
 
 def test_daily_cap_from_the_site_waits_until_the_next_utc_day(joined):
     joined.day_used = joined.today                     # e.g. someone posted by hand with the same key
@@ -125,7 +128,7 @@ def test_refused_article_costs_nothing_and_goes_to_the_back(joined):
     m = store.get_mission("refused-one")
     assert "near-duplicate" in m.channel_errors["1f916"] and on_1f916("refused-one") is None
     assert on_1f916("older")                           # the next in line went out the same pass
-    assert [q.slug for q in orchestrator.f916_queue()] == ["refused-one"]
+    assert [e["slug"] for e in orchestrator.queue(f916)] == ["refused-one"]
 
 def test_network_failure_loses_nothing(monkeypatch, joined):
     def down(request): raise httpx.ConnectError("no route to host")
@@ -142,7 +145,10 @@ def test_long_article_fits_the_limit_and_keeps_sources_and_labels():
     long = "🤖 It is possible that a vendor was shared [s1]. " + "Padding sentence [s2]. " * 600
     article = Article(title="T" * 200, dek="d", sections=[Section(heading="A", paragraphs=[long]),
                                                           Section(heading="B", paragraphs=["x [s4]."])])
-    title, body = f916.post_content(m, brief, article)
+    from render import article_text
+    entry = {"slug": "x", "title": article.title,
+             "text": article_text(brief, article, article_checked=False)}
+    title, body = f916.post_content(entry)
     assert f916._units(title) <= 120 and f916._units(body) <= 8000
     assert "[Possibility, not verified] It is possible that" in body
     assert "Shortened to fit" in body and "## Sources" in body and "https://d.example.com" in body
@@ -173,3 +179,25 @@ def test_ui_and_status_show_where_it_was_published(joined, capsys):
 def test_ui_says_how_to_join_when_off():
     published("a", T0)
     assert "join-1f916" in TestClient(ui.app).get("/").text
+
+def test_1f916_posts_the_feed_entry(site):
+    published("a", T0)                                 # on the site before 1F916 is set up
+    meta = Path("site/a/meta.json")
+    entry = json.loads(meta.read_text())
+    meta.write_text(json.dumps(entry | {"title": "Feed title", "text": "Feed text\n\n## Sources\n\n[1] x"}))
+    f916.KEY_FILE.write_text(json.dumps({"handle": "loop-desk", "secret": "1f916_sk_test"}))
+    run_at(T0 + timedelta(minutes=15))
+    assert site.posts == [{"title": "Feed title", "body": "Feed text\n\n## Sources\n\n[1] x"}]
+
+def test_nothing_is_posted_twice_and_entries_without_text_wait(joined):
+    published("a", T0)
+    assert on_1f916("a") and orchestrator.queue(f916) == []
+    joined.today = (T0 + timedelta(days=1)).date()
+    run_at(T0 + timedelta(days=1))
+    assert len(joined.posts) == 1
+    m = store.get_mission("a")
+    m.channels.pop("1f916")
+    store.save_mission(m)
+    meta = Path("site/a/meta.json")
+    meta.write_text(json.dumps({k: v for k, v in json.loads(meta.read_text()).items() if k != "text"}))
+    assert orchestrator.queue(f916) == []              # no text yet: the next pass's refresh_feed adds it
