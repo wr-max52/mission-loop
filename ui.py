@@ -41,6 +41,8 @@ MESSAGES = {
     "requeued": "Requeued. It starts again after the missions further along.",
     "pushed": "Pushed through. It is marked as failing its check and is waiting for your review.",
     "added": "Mission added. The loop researches it after the missions further along.",
+    "added_next": "Mission added. The Research Assistant takes it next.",
+    "added_started": "Mission added and the loop started. The Research Assistant takes it first.",
     "inspired": "Inspiration saved. The mission finder works from it each time the loop has caught up.",
     "uninspired": "Inspiration cleared. The mission finder and the Theorist are off.",
     "thinking": "The Theorist goes next: as the loop's next run starts, or when you start the loop.",
@@ -285,6 +287,10 @@ form.loop-ctl button.play:disabled { opacity:.55; cursor:default; }
 form.loop-ctl button.play .ico { width:1rem; height:1rem; }
 form.loop-ctl button.play .ico svg { stroke-width:2.6; }
 form.loop-ctl button.play:not(.on):not(.stopping) .ico svg { fill:currentColor; }   /* a solid play triangle */
+form.loop-ctl button.play.off { background:#237a35; border-color:#237a35; color:#fff; animation:go-pulse 2s ease-out infinite; }
+form.loop-ctl button.play.off:hover { background:#2b8a3e; border-color:#2b8a3e; animation:none; }
+@keyframes go-pulse { 0% { box-shadow:0 0 0 0 rgba(47,158,68,.6); } 70%, 100% { box-shadow:0 0 0 .55rem rgba(47,158,68,0); } }
+@media (prefers-reduced-motion: reduce) { form.loop-ctl button.play.off { animation:none; } }
 .status { display:inline-flex; align-items:center; gap:.4rem;
           color:var(--muted); font-size:.9rem; font-weight:600; }
 .status.on { color:var(--fg); }
@@ -316,17 +322,15 @@ h3.stage .ico { color:var(--muted); }
 .card:hover { border-color:var(--muted); }
 button.card.add-mission { display:flex; align-items:center; justify-content:center; gap:.55rem; width:100%;
   margin:-.6rem 0 1.5rem; padding:.7rem 1rem; font:inherit; font-size:1.05rem; font-weight:700; cursor:pointer;
-  color:#237a35; background:#ebfbee; border:2px dashed #69c07a; border-radius:10px; }
-button.card.add-mission:hover { background:#d3f9d8; border-color:#2f9e44; border-style:solid; }
+  color:var(--muted); background:var(--quote); border:2px dashed var(--rule); border-radius:10px; }
+button.card.add-mission:hover { color:var(--fg); border-color:var(--muted); border-style:solid; }
 button.card.add-mission .ico { width:1.25rem; height:1.25rem; }
 button.card.add-mission .ico:first-child svg { stroke-width:3; }
-:root[data-theme="dark"] button.card.add-mission { color:#8ce99a; border-color:#51cf66; background:rgba(81,207,102,.1); }
-:root[data-theme="dark"] button.card.add-mission:hover { background:rgba(81,207,102,.18); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme]) button.card.add-mission {
-  color:#8ce99a; border-color:#51cf66; background:rgba(81,207,102,.1); }
-  :root:not([data-theme]) button.card.add-mission:hover { background:rgba(81,207,102,.18); } }
-dialog.wizard { width:min(36rem, calc(100vw - 2rem)); box-sizing:border-box; padding:1.2rem 1.4rem; border:1px solid var(--rule);
-  border-radius:12px; background:var(--bg); color:var(--fg); }
+dialog.wizard { --tone:#237a35; width:min(36rem, calc(100vw - 2rem)); box-sizing:border-box; padding:1.2rem 1.4rem;
+  border:1px solid var(--rule); border-radius:12px; background:var(--bg); color:var(--fg); }
+dialog.wizard input:focus-visible, dialog.wizard textarea:focus-visible { outline:2px solid var(--tone); outline-offset:-1px;
+  border-color:var(--tone); }
+dialog.wizard button:focus-visible { outline:2px solid var(--tone); outline-offset:2px; }
 dialog.wizard::backdrop { background:rgba(0,0,0,.45); }
 dialog.wizard:focus { outline:none; }
 dialog.wizard [hidden] { display:none; }
@@ -338,9 +342,14 @@ dialog.wizard legend { font-weight:700; margin-bottom:.4rem; padding:0; }
 dialog.wizard input, dialog.wizard textarea { width:100%; box-sizing:border-box; }
 .wiz-dots { display:flex; gap:.4rem; list-style:none; padding:0; margin:.8rem 0 1rem; }
 .wiz-dots li { flex:1; height:4px; border-radius:2px; background:var(--rule); }
-.wiz-dots li.on, .wiz-dots li.done { background:#8a2b2b; }
+.wiz-dots li.on, .wiz-dots li.done { background:var(--tone); }
 .wiz-nav { display:flex; justify-content:flex-end; gap:.5rem; margin:1.2rem 0 0; }
 .wiz-nav .wiz-back { margin-right:auto; }
+.wiz-nav .wiz-add:not([hidden]) { display:contents; }
+.wiz-nav .wiz-go { display:inline-flex; align-items:center; gap:.35rem; color:var(--tone); border-color:var(--tone); }
+.wiz-nav .wiz-go:hover { background:var(--tone); color:#fff; }
+.wiz-nav .wiz-go .ico { width:.85rem; height:.85rem; }
+.wiz-nav .wiz-go .ico svg { fill:currentColor; }
 .wiz-sum { overflow-wrap:anywhere; }
 .card.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
 .card.active .sub { color:var(--fg); }
@@ -639,7 +648,7 @@ def loop_button() -> str:
     else:
         action, ico, text, dot = "stop", "pause", "Running", "on"
         title = "Pause the loop. The agent at work saves what it has (2 minutes at most), then the loop stops."
-    button = (f'<button class="play {dot}" title="{escape(title)}" aria-label="{escape(title)}"'
+    button = (f'<button class="play {dot or "off"}" title="{escape(title)}" aria-label="{escape(title)}"'
               f' onclick="this.form.back.value = location.pathname"{"" if action else " disabled"}>{icon(ico)}</button>')
     return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
             f'<input type="hidden" name="back" value="/"><input type="hidden" name="every" value="{every:g}">'
@@ -2076,6 +2085,10 @@ def new_mission() -> str:
     panes = "".join(f'<fieldset class="wiz-step" data-step="{i}"{"" if i == 0 else " hidden"}>'
                     f'<legend>Step {i + 1} of {len(steps)}: {title}</legend>{fields}</fieldset>'
                     for i, (title, fields) in enumerate(steps))
+    if loop_running():
+        go_label, go_title = "Add and research next", "The Research Assistant takes it as soon as it finishes its current task."
+    else:
+        go_label, go_title = "Add and start loop", "Starts the loop with the Research Assistant on this mission first."
     return (epic_datalist()
             + f'<button type="button" class="card add-mission" id="add-mission" aria-haspopup="dialog" '
               f'aria-controls="wizard">{icon("plus")}{icon("pencil")}<span>Add a mission</span></button>'
@@ -2087,42 +2100,46 @@ def new_mission() -> str:
   {panes}
   <p class="wiz-nav"><button type="button" class="wiz-back" hidden>Back</button>
     <button type="button" class="primary wiz-next">Next</button>
-    <button class="primary wiz-add" hidden>Add mission</button></p>
+    <span class="wiz-add" hidden><button class="primary">Add mission</button>
+    <button class="wiz-go" name="go" value="start" title="{escape(go_title)}">{icon("play")}{go_label}</button></span></p>
 </form></dialog>{WIZARD_JS}''')
 
 WIZARD_JS = """<script>
 (() => {
-  const dlg = document.getElementById("wizard");
-  if (!dlg || dlg.dataset.ready) return;
-  dlg.dataset.ready = "1";
-  const form = dlg.querySelector("form"), steps = [...dlg.querySelectorAll(".wiz-step")];
-  const dots = [...dlg.querySelectorAll(".wiz-dots li")], topic = dlg.querySelector("#topic");
-  const back = dlg.querySelector(".wiz-back"), next = dlg.querySelector(".wiz-next"), add = dlg.querySelector(".wiz-add");
-  let at = 0;
-  function show(i) {
-    at = i;
-    steps.forEach((s, n) => s.hidden = n !== i);
-    dots.forEach((d, n) => d.className = n < i ? "done" : n === i ? "on" : "");
-    back.hidden = i === 0; next.hidden = i === steps.length - 1; add.hidden = !next.hidden;
-    if (i === steps.length - 1) dlg.querySelector(".wiz-sum").textContent = "Adding: " + topic.value.trim();
-    const first = steps[i].querySelector("input, textarea");
-    if (first) first.focus();
+  if (window.wizardReady) return;
+  window.wizardReady = true;
+  // The page's refresh swaps in a fresh dialog (scripts in it don't run), so each click sets up the one on the page now.
+  function setup(dlg) {
+    if (dlg.wiz) return dlg.wiz;
+    const form = dlg.querySelector("form"), steps = [...dlg.querySelectorAll(".wiz-step")];
+    const dots = [...dlg.querySelectorAll(".wiz-dots li")], topic = dlg.querySelector("#topic");
+    const back = dlg.querySelector(".wiz-back"), next = dlg.querySelector(".wiz-next"), add = dlg.querySelector(".wiz-add");
+    let at = 0;
+    function show(i) {
+      at = i;
+      steps.forEach((s, n) => s.hidden = n !== i);
+      dots.forEach((d, n) => d.className = n < i ? "done" : n === i ? "on" : "");
+      back.hidden = i === 0; next.hidden = i === steps.length - 1; add.hidden = !next.hidden;
+      if (i === steps.length - 1) dlg.querySelector(".wiz-sum").textContent = "Adding: " + topic.value.trim();
+      const first = steps[i].querySelector("input, textarea");
+      if (first) first.focus();
+    }
+    function forward() {
+      if (at === 0 && !topic.reportValidity()) return;
+      if (at < steps.length - 1) show(at + 1);
+    }
+    next.addEventListener("click", forward);
+    back.addEventListener("click", () => show(at - 1));
+    dlg.querySelector(".wiz-close").addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });   // a click on the backdrop
+    form.addEventListener("keydown", e => {                                        // Enter moves on, never submits early
+      if (e.key === "Enter" && e.target.tagName === "INPUT" && at < steps.length - 1) { e.preventDefault(); forward(); }
+    });
+    return dlg.wiz = { open() { form.reset(); show(0); dlg.showModal(); topic.focus(); } };
   }
-  function forward() {
-    if (at === 0 && !topic.reportValidity()) return;
-    if (at < steps.length - 1) show(at + 1);
-  }
-  next.addEventListener("click", forward);
-  back.addEventListener("click", () => show(at - 1));
-  dlg.querySelector(".wiz-close").addEventListener("click", () => dlg.close());
-  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });   // a click on the backdrop
-  form.addEventListener("keydown", e => {                                        // Enter moves on, never submits early
-    if (e.key === "Enter" && e.target.tagName === "INPUT" && at < steps.length - 1) { e.preventDefault(); forward(); }
-  });
-  // one listener on the document, so a card swapped in by the page's refresh still opens it
   document.addEventListener("click", e => {
-    if (!e.target.closest("#add-mission")) return;
-    form.reset(); show(0); dlg.showModal(); topic.focus();
+    const dlg = document.getElementById("wizard");
+    if (dlg && e.target.closest("#add-mission")) setup(dlg).open();
   });
 })();
 </script>"""
@@ -2650,11 +2667,19 @@ async def add_mission(request: Request) -> Response:
     if name.strip() and not epic_title(name):
         return go("/", error="epic")
     epic = store.create_epic(name).slug if name.strip() else ""
-    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=epic))
-    store.log_event(slug, clock.now(), "", State.QUEUED.value, "added in the UI")
+    rush = form.get("go") == "start"       # "Add and start loop": researched next, and the loop started if off
+    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=epic, rush=rush))
+    store.log_event(slug, clock.now(), "", State.QUEUED.value,
+                    "added in the UI" + (", to be researched next" if rush else ""))
     if loop_running():
         wake()
-    return go(f"/m/{quote(slug)}", done="added")
+        done = "added_next" if rush else "added"
+    elif rush:
+        start_loop(settings.loop_every())
+        done = "added_started"
+    else:
+        done = "added"
+    return go(f"/m/{quote(slug)}", done=done)
 
 async def save_inspiration(request: Request) -> Response:
     if not same_origin(request):

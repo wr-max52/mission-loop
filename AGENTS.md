@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink`
-- Tests: `pytest -q` (expects 523 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 526 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -70,7 +70,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
      and whenever a sweep publishes something, the channels post.
   2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round
      (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
-     mid-task is next in line. A failed attempt shows as before and the mission waits until the others with
+     mid-task is next in line. A mission added with "Add and start loop" (`Mission.rush`) goes ahead of all of
+     them for the Research Assistant, once; the flag is cleared when it is picked. A failed attempt shows as before and the mission waits until the others with
      work for that worker have had a turn; then a new round starts from the farthest along.
   When the Theorist is due, it is the Principal Investigator's first task of the run, and the finder waits for
   it. When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
@@ -378,7 +379,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to wake the loop. The top bar of every page has the Auto switch and, beside
-it, the loop's play/pause button with its state (`ui.loop_button`): play starts the loop, which runs in the
+it, the loop's play/pause button with its state (`ui.loop_button`; green and pulsing while the loop is off): play starts the loop, which runs in the
 background, logs to `data/loop.log` and rests `settings.loop_every` minutes when idle (the Loop field on the
 Settings page, default 5); pause asks it to stop after the agent at work saves (disabled while it stops). "Check for
 work now" stays in the Missions page's loop panel while the loop runs.
@@ -392,7 +393,9 @@ order they go out, requested ones marked), and each article with where it went a
 looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") that opens a three-step wizard in a dialog (topic, objective, then epic and short name), which posts to `/missions`; the page's refresh holds off while it is open; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") (grey) that opens a three-step wizard in a dialog (topic, objective, then epic and short name; green), which posts to
+`/missions` with Add mission, or Add and start loop (`go=start`): the mission is marked `rush`, so the Research Assistant
+takes it next, and the loop is started if it is off ("Add and research next" while it runs); the page's refresh holds off while it is open; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
 unlit while the loop is off, as a snake (`flowchart.track`, `flowchart.lanes`, which `ui.flow_strip` and the About page share): the steps in runtime order are cut into
 lanes at each human review. Lane 0 runs left to right from the top left (the Theorist) to the first review, a
 square end on the right; lane 1 comes back right to left one level lower to the next review on the left; and so on,

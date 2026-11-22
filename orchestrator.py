@@ -384,12 +384,13 @@ def _as_worker(seat: str, fn, *args):
 def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:
     """The farthest-along mission for this worker that hasn't had its turn this round. Once every one has,
     a new round starts, so a mission whose attempt failed waits while the others get a go. Every copy of a
-    worker shares its rounds."""
+    worker shares its rounds. A mission a human rushed ("Add and start loop") goes ahead of the rest."""
     mine = [m for m in waiting if settings.worker_for(role(m)) == worker]
     fresh = [m for m in mine if (worker, m.slug) not in turns]
     if mine and not fresh:
         turns.difference_update((worker, m.slug) for m in mine)
         fresh = mine
+    fresh.sort(key=lambda m: not m.rush)   # stable: otherwise farthest along first
     return fresh[0] if fresh else None
 
 PASS_EVERY = 300                           # seconds: during long model work, a publishing pass this often, so a
@@ -450,6 +451,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     if m:
                         waiting.remove(m)
                         turns.add((worker, m.slug))
+                        m.rush = False         # it has its turn; saved with the step's result
                         running[pool.submit(_as_worker, seat, step, m, now_fn())] = (seat, m, m.state)
                         tasks += 1
                     elif not finder_done and theorist_done and settings.worker_for("assistant") == worker \
