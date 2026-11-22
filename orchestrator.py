@@ -12,7 +12,7 @@ from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, R
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
-WAKE_FLAG = Path("data/WAKE")             # the UI touches this so a sleeping loop runs a pass now
+WAKE_FLAG = Path("data/WAKE")             # the UI touches this so a resting loop looks for work now
 LOCK_FILE = Path("data/loop.lock")         # held by whichever run/loop is working
 
 def loop_running() -> bool:
@@ -78,7 +78,7 @@ def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str
 
 def _gather(m: Mission, now) -> str:
     """The Research Assistant's half of a research attempt: find and read sources. What it found is saved,
-    so the Principal Investigator can write the brief from it in this pass or a later one."""
+    so the Principal Investigator can write the brief from it now or after a restart."""
     m.attempts += 1                    # an attempt starts with its search
     try:
         activity.begin(m.slug, "sources")
@@ -100,7 +100,7 @@ def _write_brief(m: Mission, now) -> str:
             activity.begin(m.slug, "brief")
             evidence = Evidence(**(store.load_artifact(m.slug, "evidence") or {}))
             brief = agents.write_brief(m, evidence, now)
-            if stopping.requested():   # finished, but leave checking it for the next pass
+            if stopping.requested():   # finished, but leave checking it for the next start
                 raise stopping.Interrupted(brief)
         activity.begin(m.slug, "source_check")
         ok, notes = agents.validate(m, brief)
@@ -201,7 +201,7 @@ def step(m: Mission, now) -> str | None:
         m.published_at = now
         m.channels["site"] = ChannelPost(at=now, where=str(location))
         m.state = State.DONE
-        return f"published to {location}"   # other channels pick it up at the end of this pass
+        return f"published to {location}"   # other channels pick it up right after
 
     return None
 
@@ -272,13 +272,32 @@ def _record(m: Mission, before: State, note: str | None, now) -> int:
     store.log_event(m.slug, now, before.value, m.state.value, note)
     return 1
 
-def _quick_steps(m: Mission, now_fn) -> int:
+def _broke(m: Mission, before: State, e: Exception, now, failed: set[str]) -> None:
+    """A step raised. It is logged on the mission and skipped until the loop starts again; the rest go on."""
+    failed.add(m.slug)
+    why = f"{before.value} step failed: {type(e).__name__}: {e}"
+    print(f"{m.slug}: {why}", flush=True)
+    store.log_event(m.slug, now, before.value, before.value, why)
+
+# Farthest along first: whatever is closest to being published goes before what has only just started.
+FLOW = [State.ARTICLE_READY, State.WRITING, State.AWAITING_COMMENTS, State.BRIEF_READY,
+        State.RESEARCHING, State.QUEUED]
+
+def in_flow_order(missions: list[Mission]) -> list[Mission]:
+    """Farthest along first (a brief from gathered sources before a new search); within a stage, oldest first."""
+    return sorted((m for m in missions if m.state in FLOW),
+                  key=lambda m: (FLOW.index(m.state), role(m) != "pi"))
+
+def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
     """Steps that need no model (start, outreach, the comment wait, publishing) run right away, in order."""
     changed = 0
     while role(m) is None and m.state not in (State.DONE, State.PARKED) and not STOP_FLAG.exists():
         before = m.state
         try:
             note = step(m, now_fn())
+        except Exception as e:
+            _broke(m, before, e, now_fn(), failed)
+            break
         finally:
             activity.clear()
         if not _record(m, before, note, now_fn()):
@@ -294,33 +313,54 @@ def _as_worker(worker: str, fn, *args):
     finally:
         activity.clear()
 
-MAX_TASKS = 500                            # per pass: a safety net against a mission that never settles
+def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:
+    """The farthest-along mission for this worker that hasn't had its turn this round. Once every one has,
+    a new round starts, so a mission whose attempt failed waits while the others get a go."""
+    mine = [m for m in waiting if settings.worker_for(role(m)) == worker]
+    fresh = [m for m in mine if (worker, m.slug) not in turns]
+    if mine and not fresh:
+        turns.difference_update((worker, m.slug) for m in mine)
+        fresh = mine
+    return fresh[0] if fresh else None
 
-def work(now_fn, max_tasks: int = MAX_TASKS) -> int:
-    """Run every mission until each is blocked, with the two workers side by side. Each worker takes the
-    next task for its role, so the small model can search for one mission while the big model writes another;
-    a worker that is off hands its role to the other, which then does everything one task at a time.
-    Existing missions go first: the mission finder runs once, when the Research Assistant's role has
-    nothing else to do, and whatever it finds is worked on in the same pass. Returns how many changes."""
+MAX_TASKS = 500                            # per run: a safety net against a mission that never settles
+
+def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
+    """Run every mission until each is blocked, with the two workers side by side. Missions are read fresh
+    every few seconds, and the order is the same each time:
+    1. Every step that needs no model, farthest along first (publish a reviewed article, move an approved brief
+       on, ...). Right after the first sweep, and whenever one publishes something, the channels post.
+    2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round, so
+       writing goes before research, and a brief a human approves mid-task is next in line.
+    A worker that is off hands its role to the other, which then does everything one task at a time. The
+    mission finder runs once, when the Research Assistant's role has nothing else to do, and whatever it finds
+    is worked on straight away. after_task, if given, runs after each mission's model task. Returns how many changes."""
     changed = tasks = 0
-    finder_done = False
+    finder_done, first = False, True
+    failed: set[str] = set()               # steps that raised: skipped until the loop starts again
+    turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
     running: dict = {}                     # future -> (worker, mission or None for the finder, its state before)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
     with ThreadPoolExecutor(max_workers=len(settings.WORKERS), thread_name_prefix="worker") as pool:
         while True:
             if not STOP_FLAG.exists() and tasks < max_tasks:
                 busy = {m.slug for _, m, _ in running.values() if m}
-                missions = [m for m in store.active_missions() if m.slug not in busy]
+                missions = in_flow_order([m for m in store.active_missions()
+                                          if m.slug not in busy and m.slug not in failed])
                 for m in missions:
-                    changed += _quick_steps(m, now_fn)
-                waiting = [m for m in missions if role(m)]
+                    changed += _quick_steps(m, now_fn, failed)
+                if first or any(m.state == State.DONE for m in missions):
+                    changed += post_to_channels(now_fn())
+                    first = False
+                waiting = [m for m in missions if m.slug not in failed and role(m)]
                 taken = {w for w, _, _ in running.values()}
                 for worker in settings.WORKERS:
                     if worker in taken or not settings.worker_on(worker):
                         continue
-                    m = next((m for m in waiting if settings.worker_for(role(m)) == worker), None)
+                    m = _pick(worker, waiting, turns)
                     if m:
                         waiting.remove(m)
+                        turns.add((worker, m.slug))
                         running[pool.submit(_as_worker, worker, step, m, now_fn())] = (worker, m, m.state)
                         tasks += 1
                     elif not finder_done and settings.worker_for("assistant") == worker \
@@ -332,8 +372,19 @@ def work(now_fn, max_tasks: int = MAX_TASKS) -> int:
             done, _ = wait(running, timeout=POLL, return_when=FIRST_COMPLETED)
             for future in done:
                 worker, m, before = running.pop(future)
-                result = future.result()   # a bug in the loop itself still stops the pass, as before
-                changed += result if m is None else _record(m, before, result, now_fn())
+                try:
+                    result = future.result()
+                except Exception as e:     # step() handles model failures itself; this is anything else
+                    if m is None:
+                        raise
+                    _broke(m, before, e, now_fn(), failed)
+                    continue
+                if m is None:
+                    changed += result
+                    continue
+                changed += _record(m, before, result, now_fn())
+                if after_task:
+                    after_task()
 
 def _new_slug(topic: str, taken: set[str]) -> str:
     base = slugify(topic)[:54].strip("-") or "mission"
@@ -351,7 +402,7 @@ def _finder_epics(missions: list[Mission]) -> dict[str, list[str]]:
 
 def _settle_epic(idea, proposals: set[str]) -> tuple[str, str, str]:
     """(epic, fallback, note) for a found mission. It always gets the best existing epic the finder named;
-    a new epic is proposed only when enough ideas from this pass share it, and waits for the human."""
+    a new epic is proposed only when enough ideas from this search share it, and waits for the human."""
     fit = store.find_epic(idea.epic)
     fit = fit.slug if fit and fit.status == "active" else ""
     new = epic_title(idea.new_epic)
@@ -363,7 +414,7 @@ def _settle_epic(idea, proposals: set[str]) -> tuple[str, str, str]:
     return epic.slug, fit, f"; proposed new epic: {epic.title}"
 
 def find_new_missions(now) -> int:
-    """The mission finder's turn. It needs an inspiration line, and its failures never hold up a pass."""
+    """The mission finder's turn. It needs an inspiration line, and its failures never hold up the loop."""
     inspiration = store.get_inspiration()
     if not inspiration or STOP_FLAG.exists():
         return 0
@@ -417,7 +468,7 @@ def post_to_channels(now, max_tries: int = 3) -> int:
 
 def post_to(channel, now, max_tries: int = 3) -> int:
     """Post waiting entries until the channel has no allowance left. A refused entry costs nothing, so the
-    next one is tried; any other failure stops this channel until the next pass. Returns how many posted."""
+    next one is tried; any other failure stops this channel until its next turn. Returns how many posted."""
     posted = 0
     for entry in queue(channel)[:max_tries]:
         until = channel.wait_until()
@@ -435,7 +486,7 @@ def post_to(channel, now, max_tries: int = 3) -> int:
             store.save_mission(m)
             store.log_event(m.slug, now, m.state.value, m.state.value, f"{channel.NAME} refused the post: {e}")
             continue
-        except Exception as e:             # bad key, network, site down: nothing is lost, try next pass
+        except Exception as e:             # bad key, network, site down: nothing is lost, try next turn
             print(f"{channel.NAME} posting failed: {type(e).__name__}: {e}", flush=True)
             break
         finally:
@@ -546,11 +597,11 @@ def rename_epic(slug: str, title: str, now) -> None:
     store.save_epic(epic)
     _refresh_pages(_in_epic(slug))
 
-def run_until_idle(now_fn, max_tasks: int = MAX_TASKS) -> int:
-    """One pass. Missions run with both workers side by side, and the mission finder joins once existing
-    missions have given the Research Assistant nothing to do (see work). Last, every channel that is set up
+def run_until_idle(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
+    """Work until nothing is left that the loop can do on its own: quick code steps first, then the
+    farthest-along model work, with both workers side by side (see work). Last, every channel that is set up
     posts from the feed whatever it has not posted yet, as far as its allowance goes (1F916: one a day)."""
     activity.reset()
     refresh_feed()
-    total = work(now_fn, max_tasks)
+    total = work(now_fn, max_tasks, after_task)
     return total + post_to_channels(now_fn())

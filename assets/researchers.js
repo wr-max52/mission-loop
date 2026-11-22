@@ -1,13 +1,19 @@
 /* Pixel researchers: a cast of small outlined researchers who drop in on the dashboard while missions
- * are in progress. The card of each mission a model is working on right now, and the green pill of the working agent, gets its own
- * random schedule: the first visitor turns up after a random wait, walks in from a side, stays 15-30
- * seconds doing comic researcher things, walks off, and after a random 10-20 second gap the next one comes.
- * Never more than two are on the page at once; stages that have waited longest go first. Visitors are
- * drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every character
- * belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones to the
- * Principal Investigator), and a stage tagged with data-worker mostly gets visitors from that worker's crew
+ * are in progress. The card of each mission a model is working on right now gets its own random schedule: the first visitor turns up after a
+ * random wait, walks in from a side, stays 15-30 seconds doing comic researcher things, walks off, and
+ * after a random 10-20 second gap the next one comes. Never more than two are on the page at once, and
+ * arrivals come one at a time, a random 4-15 seconds apart; stages that have waited longest go first.
+ * Visitors are drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every
+ * character belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones
+ * to the Principal Investigator), and a card tagged with data-worker mostly gets visitors from that crew
  * (80% of them, FAVOR; now and then someone from the other crew drops by).
  * On the Settings page each worker's card has its whole crew standing about (a "crew" stage).
+ *
+ * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). Each
+ * busy worker's lit step gets one researcher from that worker's crew, doing that step's kind of work.
+ * When the worker's mission moves on (sources -> brief -> check), they run after it. When the work ends,
+ * moves to another mission, or passes to the other worker, they say a closing line and walk off, and a new
+ * one walks in for whatever started. assets/flow.js says when that happens with a "flowchange" event.
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -17,7 +23,8 @@ window.__researchers = true;
 
 const LIFE_MIN = 15, LIFE_MAX = 30;          // seconds on stage
 const GAP_MIN = 10, GAP_MAX = 20;            // seconds between visitors on one stage
-const FIRST_MIN = 1, FIRST_MAX = 20;         // the first visitor's random wait, so stages never start in step
+const FIRST_MIN = 2, FIRST_MAX = 15;         // the first visitor's random wait, so stages never start in step
+const ENTRY_MIN = 4, ENTRY_MAX = 15;         // seconds between any two arrivals on the page, so they stagger
 const MAX_ON_STAGE = 2;                      // researchers on the whole page at once
 const FAVOR = 0.8;                           // share of a working stage's visitors from its own worker's crew
 const EDGE = 40;                             // how far off-stage they start and finish their walk
@@ -141,7 +148,7 @@ function makeLook(kind, seed) {
   a.legs = 11 + Math.floor(r() * 7);          // 11..17 px: short to lanky
   a.torso = 11 + Math.floor(r() * 3);         // 11..13
   a.width = pick(r, [11, 12, 12, 13]);
-  a.speed = 20 + a.legs * 1.4 + r() * 6;      // px per second
+  a.speed = 12 + a.legs * 0.9 + r() * 4;      // px per second: an amble, 22..31
   a.book = pick(r, BOOKS);
   return a;
 }
@@ -302,9 +309,11 @@ function drawHead(P, a, g, p, t) {
   if (eyes === "closed") { P(0, y + 5, 2, 1, INK); P(3, y + 5, 2, 1, INK); }
   else if (eyes === "down") { P(1, y + 5, 1, 1, INK); P(4, y + 5, 1, 1, INK); }
   else if (eyes === "wide") { P(1, y + 5, 1, 3, INK); P(4, y + 5, 1, 3, INK); }
+  else if (eyes === "up") { P(1, y + 6, 1, 2, INK); P(4, y + 6, 1, 2, INK); }
   else { P(1, y + 5, 1, 2, INK); P(4, y + 5, 1, 2, INK); }
   P(3, y + 3, 2, 1, a.skinD);
   if (p.blush) { P(0, y + 3, 1, 1, "#ff8a8a"); P(5, y + 3, 1, 1, "#ff8a8a"); }
+  if (p.soot) { P(-1, y + 2, 2, 1, "#5c5f66"); P(3, y + 6, 2, 1, "#5c5f66"); P(-2, y + 7, 1, 1, "#5c5f66"); P(5, y + 1, 1, 1, "#5c5f66"); }
   const mouth = p.mouth || "none";
   if (mouth === "smile") { P(2, y + 1, 3, 1, MOUTH); P(1, y + 2, 1, 1, MOUTH); P(5, y + 2, 1, 1, MOUTH); }
   else if (mouth === "o") P(2, y + 1, 2, 2, MOUTH);
@@ -484,6 +493,7 @@ const ICONS = {
   q: [".kkkk.", "kqqqqk", "kqkkqk", ".kkqqk", "..kqk.", "..kkk.", "..kqk.", "..kkk."],
   bang: ["kkk", "kek", "kek", "kek", "kek", "kkk", "...", "kkk", "kek", "kkk"],
   heart: [".kk.kk.", "kppkppk", "kpppppk", ".kpppk.", "..kpk..", "...k..."],
+  note: ["...kk.", "...kqk", "...k.k", "...k..", ".kkk..", "kqqk..", "kqqk..", ".kk..."],
 };
 const ICON_COLORS = { k: INK, y: "#ffe066", w: "#ffffff", g: "#9aa0a6", q: "#5fa8ff", e: "#ff5a5a", p: "#ff6b9a" };
 function drawIcon(ctx, map, x, y, s = 2) {
@@ -508,7 +518,7 @@ function walkPose(r, dist) {
 }
 function stepToward(r, s, tx, dt, speed) {
   const d = tx - r.x;
-  if (Math.abs(d) < 0.5) return true;
+  if (Math.abs(d) < 1) { r.x = tx; return true; }   // close enough: no turning back and forth over a pixel
   r.face = Math.sign(d);
   const m = Math.min(Math.abs(d), speed * dt);
   r.x += r.face * m; s.dist = (s.dist || 0) + m;
@@ -541,7 +551,8 @@ const QUOTES = {
 };
 
 
-// The general library: academic nagging and literary misquotes. Dealt from a shuffled deck shared by the
+// The general library (500+ lines): academic nagging, grad-school and peer-review memes, stats and LaTeX pain,
+// archive and newsroom jokes, logical fallacies, bad Latin and literary misquotes. Dealt from a shuffled deck shared by the
 // whole page, so a line comes round again only after all the others have been said.
 const QUIPS = [
   // the classics of the margin
@@ -606,8 +617,135 @@ const QUIPS = [
   "I have measured out my life with footnotes.", "April is the cruellest month. Finals.",
   "Happy families are all alike; every unsourced claim is unsourced in its own way.",
   "Whose source is this? I think I know.", "Yes, Virginia, there is a bibliography.",
+  // grad school and the thesis
+  "Chapter 3 is 'nearly done'.", "My thesis is 80% done. Since 2019.", "ABD: all but done.",
+  "Year 6 of a 5-year PhD.", "My advisor said 'interesting'. Bad sign.", "'Interesting' is advisor for 'no'.",
+  "Just one more experiment.", "I'll write it up this weekend. (narrator: no)",
+  "Procrastination is a research method.", "Writing the acknowledgments first.",
+  "The dedication page is done!", "Defending in 3 days. Slides: 0%.", "Committee meeting = boss fight.",
+  "Advisor email at 11:58 pm.", "Quick question (it is not quick).", "Per my last email...",
+  "Circling back on my prior footnote.", "Gentle reminder: the deadline was yesterday.",
+  "Free pizza at the seminar!", "Will attend any talk with snacks.", "Stipend: three packs of ramen.",
+  "Fieldwork means no Wi-Fi.", "My office used to be a broom closet.", "Impostor syndrome, party of one.",
+  "Everyone here is smarter than me. (they all think this)", "Lab meeting moved to 8 am. Why.",
+  "Dissertation: 300 pages of 'it depends'.", "It depends.", "Well... it's complicated.",
+  "Sleep is for the tenured.", "Tenure: the final boss.", "Postdoc number four, here we go.",
+  "My CV has a CV.", "Teaching load: yes.", "Grading 200 essays on the same prompt.",
+  "Office hours: nobody. Night before exam: everyone.", "The syllabus answers that question.",
+  "It's in the syllabus!", "Extra credit? In this economy?", "My dog ate my dataset.",
+  // papers, hedges and results
+  "Further research is needed.", "This study has limitations.", "Results were mixed.",
+  "Promising preliminary results!", "Preliminary means 'we tried once'.", "Future work: everything else.",
+  "Left as an exercise to the reader.", "Proof omitted for brevity.", "Trivially true. (took me 3 weeks)",
+  "It is easy to see that... (it is not)", "Clearly... (not clear)", "Obviously... (not obvious)",
+  "Without loss of generality!", "Assume a spherical cow.", "In a vacuum, sure.", "Works on my dataset.",
+  "Data available upon reasonable request.", "No request is reasonable enough.", "Code available soon.",
+  "The supplement is 400 pages.", "See supplementary figure S47.", "Figure 3 is doing a lot of work.",
+  "Figure not to scale. Or legible.", "Log scale fixes everything.", "Just log-transform it.",
+  "Y-axis starts at 98. Suspicious.", "Truncated axis alert!", "Pie chart? In this economy?",
+  "A 3D pie chart. Absolutely not.", "Comic Sans on a poster?!", "Poster session: stand and smile.",
+  "Conference Wi-Fi: theoretical.", "Abstract due in 2 hours.", "Deadline extended! (I was already late)",
+  "Camera-ready means 'still editing'.", "Rebuttal letter: polite fury.",
+  "We thank Reviewer 2 for their... feedback.", "Reviewer 2 wants a different paper.",
+  "Reviewer 2: 'Have you considered citing me?'", "Please cite these 14 papers (all mine).",
+  "Reviewer 3 just wrote 'good'.", "Major revisions. Again.", "Desk rejected in 4 minutes.",
+  "Minor revisions! (they are major)", "Under review since the Bronze Age.", "Revise and resubmit, forever.",
+  "Impact factor: vibes.", "h-index go brrr.", "Citation count: my mom.", "Self-citation is self-care.",
+  "'Dear Esteemed Doctor, submit to our journal...'", "Invited to a conference on Everything.",
+  "Open access or open wallet?", "Paywall: $39.95 for 4 pages.", "Emailing the author directly. Bold.",
+  "Authors respond in 3-5 business years.", "Preprint or it didn't happen.",
+  "Negative results deserve love too.", "Null result, full heart.", "That's not a bug, it's a finding.",
+  "Unexpected result = new paper.", "The discussion section is where hope lives.",
+  "Abstract: overpromise. Results: underdeliver.", "Novel! (it was done in 1974)",
+  "To the best of our knowledge... (we didn't look)", "Title: a pun, then a colon.",
+  "Every title needs a colon: and a subtitle.",
+  // LaTeX, files and coauthors
+  "LaTeX error on line 1. The file is one line.", "Overfull hbox, again.", "Undefined control sequence!",
+  "BibTeX ate my references.", "Where did my figures float to?", "Figure 2 ended up on page 47.",
+  "final_v2_FINAL_really_final.docx", "Track changes: 1,204.", "Six coauthors, six conflicting comments.",
+  "Author order negotiations: ongoing.", "Corresponding author: whoever answers.",
+  "Et al. is doing heavy lifting.", "Who even is 'Smith et al.'?", "Ibid. ibid. ibid. ibid.",
+  "Research is 90% looking for the file.", "Where's that PDF from 2021?", "Folder 'to read': 3,000 PDFs.",
+  "I'll read it later. (never)", "Highlighted the whole page. Helpful.", "Sticky notes are a lifestyle.",
+  "Index cards never go out of style.", "My bibliography has a bibliography.",
+  "Citation manager crashed. Weep.", "Ctrl+S. Ctrl+S. Ctrl+S.", "The autosave did not save.",
+  "Shared drive, nobody's folder.", "'Untitled document (47)'",
+  // statistics
+  "p = 0.051. So close.", "p-hacking? I would never.", "The garden of forking paths!", "Bonferroni, please.",
+  "Correct for multiple comparisons!", "Bayesian, actually.", "My prior says no.", "Update your priors!",
+  "Regression to the mean!", "Survivorship bias!", "Selection bias!", "Confounder spotted.",
+  "Simpson's paradox lurks.", "Base rate fallacy!", "Margin of error?", "Weighted how, exactly?",
+  "Confidence interval wider than my hopes.", "Effect size: tiny.", "Underpowered study!",
+  "Overfit and proud.", "All models are wrong.", "Some models are useful.",
+  "Torture the data long enough and it confesses.", "The data spoke. It mumbled.",
+  "Excel turned my genes into dates.", "Who put a merged cell here?", "A CSV with commas in the data. Pain.",
+  "N/A is not zero!", "Mean or median? It matters!", "Averages lie politely.",
+  "Dropping outliers until it works...", "Replication crisis? What crisis?", "Pre-register it!",
+  "HARKing detected.", "One weird chart statisticians hate.", "Spurious correlation of the day.",
+  "Cheese consumption predicts bedsheet deaths.", "Lies, damned lies, and bar charts.",
+  // libraries and archives
+  "Ask a librarian. They know everything.", "Librarians: the original search engine.",
+  "Book returned 31 years late.", "The stacks after dark: spooky.", "Quiet floor. Loud thoughts.",
+  "Microfilm reader warming up...", "The archive is in a basement. Of course.", "Rare books room: gloves on.",
+  "Pencils only in the archive!", "Found it in a box labeled 'misc'.", "Finding aid: no aid.",
+  "Box 47, folder 'other'.", "The answer is in a 1974 memo.", "FOIA filed. See you in 2031.",
+  "Redacted. Redacted. 'the'. Redacted.", "Page 3 of 2?", "Scanned upside down. Of course.",
+  "The PDF is a photo of a printout.", "OCR thinks 'Senate' says 'Sonata'.", "The footnote is a dead link.",
+  "404: source not found.", "Link rot!", "Archived copy, thank goodness.", "Card catalog nostalgia.",
+  "Due date stamped 1962.", "Someone wrote 'WRONG' in the margin. Hero.", "Marginalia from 1890 > the book.",
+  "Interlibrary loan: 6-8 weeks of hope.",
+  // newsroom and fact-checking
+  "Who said it, and when?", "On the record, or off?", "Anonymous sources say... hmm.",
+  "One source is a rumor.", "Two sources is a story.", "Read the filing, not the post.",
+  "Read the bill, not the summary.", "Check the meeting minutes!", "Meeting minutes: actually hours.",
+  "The appendix is where secrets live.", "Don't bury the lede!",
+  "That headline wrote a check the story can't cash.", "Clickbait. Close tab.",
+  "Press release wearing a news costume.", "Astroturf detected.", "Think tank? Thinking about funding.",
+  "Funded by 'Citizens for Good Things'.", "A shell company in a shell company.", "Follow the LLC.",
+  "Annual report, page 212: the good stuff.", "The quiet part, said loud.",
+  "Spokesperson declined to comment. Classic.", "'No comment' is a comment.", "Hedging: may, might, could.",
+  "Weasel words!", "'Experts say.' Which experts?", "'Studies show.' Which studies?",
+  "'Many people are saying.' Who?", "'Sources familiar with the matter.' Hmm.",
+  "Allegedly, allegedly, allegedly.", "Corrections appended below.", "Updated at 3:47 am. Why?",
+  "Embargoed until Tuesday.", "The lobbyist wrote the bill. Literally.", "Check the metadata!",
+  "Who registered the domain?", "Reverse image search time.", "That photo is from 2014.",
+  // logic and laws of nature
+  "Is-ought gap!", "Category error!", "No true Scotsman!", "Tu quoque!", "Appeal to authority!",
+  "Appeal to nature!", "False dichotomy!", "Moving the goalposts!", "Motte and bailey!",
+  "Gish gallop incoming.", "Texas sharpshooter!", "Sunk cost, but for drafts.", "Hume would ask for evidence.",
+  "Descartes doubted this too.", "Socrates would ask six more questions.", "Epistemology hours: open.",
+  "How do we know what we know?", "Define 'know'.", "Ship of Theseus, but it's my draft.",
+  "Schrödinger's citation: real and fake.", "Heisenberg's deadline: certainly late.",
+  "Murphy's law of footnotes.", "Hanlon's razor, maybe.", "Chesterton's fence: ask first.",
+  "Goodhart's law strikes!", "Debunking costs ten times more.", "Peak of Mount Stupid.",
+  "Streisand effect incoming.", "Occam's razor needs sharpening.", "Russell's teapot of evidence.",
+  "Bayes would want a base rate.",
+  // coffee, time and rabbit holes
+  "Coffee is a research grant.", "Fueled by caffeine and spite.", "Espresso: the true peer reviewer.",
+  "It's 3 am. Perfect time for a footnote.", "Golden hour: 2 am in the library.", "Deadline-driven research.",
+  "Five more minutes of reading. (3 hours)", "Just checking one thing. (47 tabs)", "Rabbit hole: entered.",
+  "How did I get to this Wikipedia page?", "Wikipedia's citations are the good part.",
+  "The rabbit hole has footnotes.", "Hold my beaker.", "I'm not arguing, I'm citing.",
+  "Trust me, I'm a researcher. (don't)", "Correlation, causation, and their cousin coincidence.",
+  "Science! (results may vary)",
+  // Latin, badly
+  "Lorem ipsum dolor sit cite.", "Carpe datum.", "In vino veritas, in data dubitas.",
+  "Quis custodiet ipsos reviewers?", "Sapere aude: dare to check.", "Res ipsa loquitur. It doesn't.",
+  "Mea culpa: wrong citation.", "Nota bene!", "Ad nauseam.", "Sic transit gloria deadline.",
+  "Errare humanum est. Errata too.", "E pluribus footnotes.", "Tempus fugit. The deadline approacheth.",
+  // more literary misquotes
+  "Hell is other people's footnotes.", "Abandon all hope, ye who enter page 300.",
+  "In the beginning was the draft.", "It was a dark and stormy deadline.",
+  "Last night I dreamt I went to the archives again.", "Brave new bibliography.", "Of mice and methods.",
+  "The old man and the citation.", "Pride and peer review.", "Crime and publication.", "War and peer review.",
+  "Great expectations, mixed results.", "One hundred years of revisions.",
+  "Infinite jest, infinite footnotes.", "A tale of two datasets.", "The importance of being cited.",
+  "Waiting for Reviewer 2.", "The catcher in the citations.", "Moby-Dick: 600 pages of whale methods.",
+  "Gatsby believed in the green footnote.", "Not with a bang but a footnote.", "Frankenstein's dataset lives!",
+  "The Count of Monte Footnote.", "Around the world in 80 citations.",
+  "Twenty thousand leagues under the paywall.",
 ];
-const QUIP_DECK = "researcher:quips";
+const QUIP_DECK = "researcher:quips:" + QUIPS.length;   // a bigger library deals a fresh deck
 function nextQuip() {
   let deck = memory.get(QUIP_DECK);
   if (!Array.isArray(deck) || !deck.length) deck = shuffle(QUIPS.map((_, i) => i));
@@ -617,29 +755,220 @@ function nextQuip() {
 }
 const readTime = text => clamp(1.6 + text.length * 0.055, 1.8, 5);
 
+// ---------- little bits of everyday research life: pixel maps, props and helpers ----------
+// A pixel map is a list of rows, top to bottom, drawn facing right; "." is empty and each letter a color.
+// "L" is left for the caller to choose (a flower's petals, a flask's liquid).
+const PAL = Object.assign({}, ICON_COLORS, { r: "#e03131", o: "#f08c00", G: "#2b8a3e", m: "#8ce99a", M: "#2f9e44",
+  b: "#4dabf7", B: "#8d5a2b", n: "#ced4da", N: "#495057", t: "#e9c46a", v: "#b197fc", h: "#fff3bf", c: "#ffa94d" });
+const BILL = ["mmmmmmmm", "mMmMMmMm", "mmmmmmmm"];
+const FLOWER = [".LLL.", "LLyLL", ".LLL.", "..G..", ".GG..", "..GG.", "..G.."];
+const FLOWER_HELD = [".L.", "LyL", ".G.", ".G."];
+const BIRD_UP = ["b....b..", ".b..b...", "..bbbbo.", "..bbbb.."];
+const BIRD_DOWN = ["........", "..bbbbo.", ".bbbbb..", "b....b.."];
+const BIRD_SIT = ["...bb...", "..bbbo..", ".bbbb...", "..o.o..."];
+const CAT_A = ["........c.c.", "c.......cccc", ".c......cckc", ".ccccccccccc", "..ccccccccc.", "..c.c...c.c.", "..c.c...c.c."];
+const CAT_B = ["........c.c.", "c.......cccc", ".c......cckc", ".ccccccccccc", "..ccccccccc.", "...c.c..c.c.", "..c...c.c..c"];
+const CAT_SIT = [".....c.c", ".....ccc", ".....ckc", "..cccccc", ".ccccccc", "cccccccc", "c.cc.cc."];
+const ROCKET = ["..r..", ".rwr.", ".wbw.", ".www.", ".www.", "rwwwr", "r.n.r"];
+const PLANE = ["ww.......", ".wwwww...", "..wwwwwww", "..nnnn..."];
+const APPLE = ["..G..", ".rGr.", "rrrrr", "rrrrr", ".rrr."];
+const DUCK = ["...yy.", "...yko", "yyyyy.", "yyyyy.", ".yyy.."];
+const GERM_A = [".m.m.", "mmmmm", "mkmkm", "mmmmm", "m.m.m"];
+const GERM_B = ["m.m.m", "mmmmm", "mkmkm", "mmmmm", ".m.m."];
+const BFLY_A = ["v.k.v", "vvkvv", "vpkpv", "v.k.v"];
+const BFLY_B = ["..k..", ".vkv.", ".vkv.", "..k.."];
+const CAP_FLAT = ["NNNNNNNNN", "...NNN..y", "...NNN..y"];
+const CAP_EDGE = ["NNN", "NNN", ".Ny"];
+const BALL = [".w.", "www", ".w."];
+const FLASK = ["..n..", ".nwn.", ".nLn.", "nLLLn", "nLLLn", ".nnn."];
+
+// A pixel map held or set down, in the researcher's frame: (x, y) is its bottom-left corner.
+function pmap(P, map, x, y, pal) {
+  const h = map.length;
+  for (let i = 0; i < h; i++)
+    for (let j = 0; j < map[i].length; j++) {
+      const ch = map[i][j];
+      if (ch !== ".") P(x + j, y + h - 1 - i, 1, 1, (pal && pal[ch]) || PAL[ch]);
+    }
+}
+// A pixel map straight on the stage, outlined like the researchers: (cx, by) is its bottom middle.
+function drawMap(ctx, map, cx, by, flip, rot, pal) {
+  const h = map.length, w = map[0].length, ox = -(w >> 1), oy = -h + 1;
+  ctx.save();
+  ctx.translate(cx, by);
+  if (rot) { ctx.translate(0, -h / 2); ctx.rotate(rot); ctx.translate(0, h / 2); }
+  for (const pass of [0, 1])
+    for (let i = 0; i < h; i++)
+      for (let j = 0; j < w; j++) {
+        const ch = map[i][j];
+        if (ch === ".") continue;
+        const x = ox + (flip < 0 ? w - 1 - j : j), y = oy + i;
+        if (pass === 0) { ctx.fillStyle = INK; ctx.fillRect(x - 1, y - 1, 3, 3); }
+        else { ctx.fillStyle = (pal && pal[ch]) || PAL[ch]; ctx.fillRect(x, y, 1, 1); }
+      }
+  ctx.restore();
+}
+function thin(P, x0, y0, x1, y1, c, skip) {      // a one-pixel line; skip(i) leaves gaps for a pour or a dash
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let i = 0; i <= n; i++) if (!skip || !skip(i)) P(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n), 1, 1, c);
+}
+const ahead = (r, d) => r.x + r.face * d;                        // a stage x this far in front of the researcher
+const near = (r, d) => (r.stage.kind === "flow" ? Math.min(d, 8) : d);   // steps on the strip are short
+function item(r, map, d, extra) {                                // something lying on the floor in front of them
+  const [lo, hi] = r.stage.range();
+  const p = Object.assign({ kind: "map", map, x: clamp(ahead(r, d), lo, hi), y: 0, life: 30, flip: r.face }, extra || {});
+  return r.stage.add(p) || p;
+}
+function vanish(p) { if (p && p.life > 0.4) { p.life = 0.4; p.max = 0.4; p.fade = true; } }
+// Walk over to stage x `tx`, stopping just short so it ends up at their feet. A walking pose, or null once there.
+function walkTo(r, s, dt, tx, gap = 9) {
+  if (s.there) return null;
+  const dir = Math.sign(tx - r.x) || r.face;
+  if (stepToward(r, s, tx - dir * gap, dt, r.a.speed)) { s.there = s.t; r.face = dir; return null; }
+  r.y = r.stage.hop(r.x);
+  return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
+}
+
+function propBoard(P, x, rows, prog, q) {           // a chalkboard on an easel, filling with chalk "math"
+  thin(P, x + 3, 0, x + 5, 8, "#8d5a2b"); thin(P, x + 19, 0, x + 17, 8, "#8d5a2b");
+  P(x - 1, 7, 24, 17, "#8d5a2b"); P(x, 8, 22, 15, "#2b5847");
+  const total = rows.reduce((a, b) => a + b, 0);
+  let left = Math.round(prog * total);
+  rows.forEach((len, i) => {
+    const y = 20 - i * 3, n = Math.min(len, left);
+    left -= n;
+    for (let c = 0; c < n; c++) {
+      if (c % 4 === 3) continue;
+      P(x + 2 + c, y, 1, 1, "#f1f3f5");
+      if ((c * 7 + i * 3) % 5 === 0) P(x + 2 + c, y + 1, 1, 1, "#f1f3f5");
+    }
+  });
+  if (prog >= 1) {
+    if (q) { P(x + 17, 18, 3, 1, "#ffe066"); P(x + 19, 15, 1, 3, "#ffe066"); P(x + 18, 14, 1, 1, "#ffe066"); P(x + 18, 11, 1, 1, "#ffe066"); }
+    else { const y = 20 - (rows.length - 1) * 3; P(x + 1, y - 1, rows[rows.length - 1] + 2, 1, "#ffe066"); P(x + 1, y + 2, rows[rows.length - 1] + 2, 1, "#ffe066"); }
+  }
+}
+function propCork(P, x, pts, notes) {                 // a corkboard with sticky notes and red string
+  thin(P, x + 3, 0, x + 5, 7, "#8d5a2b"); thin(P, x + 19, 0, x + 17, 7, "#8d5a2b");
+  P(x - 1, 6, 24, 19, "#8d5a2b"); P(x, 7, 22, 17, "#c8a165");
+  for (let i = 1; i < notes; i++) thin(P, x + pts[i - 1][0] + 2, 9 + pts[i - 1][1], x + pts[i][0] + 2, 9 + pts[i][1], "#e03131");
+  for (let i = 0; i < notes; i++) { const [px, py] = pts[i]; P(x + px, 7 + py, 4, 4, "#ffe066"); P(x + px + 1, 8 + py, 2, 1, "#c9a227"); P(x + px + 2, 10 + py, 1, 1, "#e03131"); }
+}
+function propChart(P, x, y, n, crash) {               // a hand-held chart whose bars grow
+  P(x - 1, y - 1, 16, 13, INK); P(x, y, 14, 11, "#ffffff");
+  P(x + 1, y + 1, 1, 9, "#495057"); P(x + 1, y + 1, 12, 1, "#495057");
+  [2, 3, 5, 6, 8].forEach((h, i) => { if (i < n) P(x + 3 + i * 2, y + 2, 1, crash && i === 4 ? 1 : h, crash && i === 4 ? "#e03131" : "#4dabf7"); });
+  if (n >= 5 && !crash) { thin(P, x + 3, y + 4, x + 12, y + 10, "#2f9e44"); P(x + 11, y + 10, 2, 1, "#2f9e44"); P(x + 12, y + 9, 1, 1, "#2f9e44"); }
+}
+function propNotebook(P, hx, hy, lines) {
+  box(P, hx - 1, hy - 3, 7, 8, "#f8f9fa");
+  for (let i = 0; i < 3; i++) P(hx + i * 2, hy + 5, 1, 1, "#495057");
+  for (let i = 0; i < Math.min(lines, 3); i++) P(hx, hy + 2 - i * 2, 3 + (i % 2) * 2, 1, "#74c0fc");
+}
+function propMicroscope(P, x) {
+  box(P, x, 1, 8, 2, "#495057"); P(x + 1, 6, 6, 1, "#868e96"); P(x + 6, 3, 2, 9, "#495057");
+  limb(P, x + 6, 12, x + 3, 16, 2, "#ced4da"); P(x + 3, 7, 2, 3, "#adb5bd");
+}
+function propRocket(P, lx) { pmap(P, ROCKET, lx - 2, 0); }
+function propMortar(P, g) { const y = g.crown; box(P, -3, y - 1, 7, 2, "#212529"); P(-7, y + 1, 15, 1, "#212529"); P(6, y - 2, 1, 3, "#ffd43b"); }
+function propSheet(P, x, mark) { box(P, x, 1, 9, 2, "#ffffff"); if (mark) P(x + 3, 2, 3, 1, mark); }
+function propStamp(P, hx, hy) { box(P, hx - 2, hy - 4, 5, 2, "#495057"); P(hx - 2, hy - 5, 5, 1, "#c92a2a"); box(P, hx - 1, hy + 1, 3, 2, "#8d5a2b"); }
+function propNet(P, hx, hy, swing) {                 // a butterfly net; returns the middle of its hoop
+  const ex = swing ? hx + 12 : hx + 6, ey = swing ? hy + 2 : hy + 11;
+  limb(P, hx, hy, ex, ey, 1, "#8d5a2b");
+  P(ex - 2, ey, 5, 1, "#f8f9fa"); P(ex - 2, ey + 4, 5, 1, "#f8f9fa"); P(ex - 3, ey + 1, 1, 3, "#f8f9fa"); P(ex + 3, ey + 1, 1, 3, "#f8f9fa");
+  return [ex, ey + 2];
+}
+function propPizza(P, hx, hy, bites) {
+  const rows = Math.max(1, 6 - bites * 2);
+  box(P, hx - 2, hy - 2, 6, 1, "#c08a3e");
+  for (let i = 1; i < rows; i++) {
+    P(hx - 2, hy - 2 + i, Math.max(1, 6 - i), 1, "#ffd43b");
+    if (i === 2 || i === 4) P(hx - 1 + (i % 3), hy - 2 + i, 1, 1, "#e03131");
+  }
+}
+function propPlant(P, x, grow, petal) {               // a seedling that grows into a flower
+  P(x, 0, 5, 1, "#8d5a2b");
+  if (grow <= 0) return;
+  const h = Math.round(grow * 7);
+  thin(P, x + 2, 1, x + 2, h, "#2b8a3e");
+  if (grow > 0.4) { P(x + 3, 3, 2, 1, "#40c057"); P(x, 4, 2, 1, "#40c057"); }
+  if (grow >= 1) { P(x + 1, h + 1, 3, 3, petal); P(x + 2, h + 2, 1, 1, "#ffe066"); }
+  else if (grow > 0.7) P(x + 2, h + 1, 1, 2, "#40c057");
+}
+function propCan(P, hx, hy) { box(P, hx - 1, hy - 3, 6, 5, "#74c0fc"); thin(P, hx + 5, hy, hx + 8, hy + 2, "#4dabf7"); P(hx - 2, hy - 1, 1, 3, "#4dabf7"); }
+function propGlobe(P, hx, hy, off) {
+  P(hx + 1, hy - 2, 5, 1, "#8d5a2b"); P(hx + 3, hy - 1, 1, 2, "#8d5a2b");
+  const cx = hx + 3, cy = hy + 5;
+  for (let dy = -4; dy <= 4; dy++)
+    for (let dx = -4; dx <= 4; dx++) {
+      if (dx * dx + dy * dy > 18) continue;
+      const land = ((dx + off + 90) % 9 < 3 && (dy + 9) % 4 !== 0) || ((dx + off + 94) % 9 === 6 && dy > -2);
+      P(cx + dx, cy + dy, 1, 1, land ? "#40c057" : "#4dabf7");
+    }
+}
+
+// Lines for the bits. They're said at the bit's big moment and replace whatever bubble was up.
+const BIT_LINES = {
+  beaker_boom: ["That's... a result.", "Note to self: not that one.", "*cough* Noted.", "Hypothesis: rejected.", "Science!"],
+  beaker_ok: ["Hypothesis: confirmed?", "Ooh, pretty.", "Reproducible? Let's not.", "It fizzes!"],
+  rocket_crash: ["Peer review: failed.", "Back to the drawing board.", "It's a learning experience.", "Rocket science is hard."],
+  rocket_ok: ["Ad astra!", "Houston, we have a citation.", "To the stars!"],
+  dollar: ["Grant funding!", "Funding secured!", "A whole dollar!", "Lunch is covered.", "Overhead: 60%."],
+  flower: ["Field sample!", "How lovely.", "Botany break.", "A peer-reviewed petal."],
+  bird: ["Hello, colleague.", "A peer reviewer!", "Tweet tweet.", "Field observation!"],
+  notebook: ["Draft #47.", "Nope.", "Start over.", "Brilliant. No, terrible."],
+  chalkboard: ["Q.E.D.", "That checks out.", "Elegant!", "Proof by chalk."],
+  chalk_q: ["...hm.", "Where did it go wrong?", "Carry the one?"],
+  chart_up: ["Up and to the right!", "Look at that trend!", "Significant!"],
+  chart_down: ["...about that.", "Outlier. Definitely an outlier.", "Nobody saw that."],
+  apple: ["Gravity! Noted.", "Ow. But also: eureka.", "Newton was right."],
+  microscope: ["It moved!", "Ew, it's alive!", "Fascinating little guy.", "Enhance!"],
+  gradcap: ["Doctor Me!", "Finally graduated!", "Hat trick!"],
+  plane: ["Submitted!", "Sent to the journal.", "Fly, my manuscript!", "Off to Reviewer 2."],
+  corkboard: ["It's all connected.", "Follow the red string.", "The string never lies.", "I KNEW it."],
+  stamp_ok: ["Approved!", "Accepted!", "Minor revisions!"],
+  stamp_no: ["Rejected!", "Reviewer 2 has spoken.", "Major revisions!"],
+  cat: ["Who's a good reviewer?", "Office cat!", "You can't sit there. OK, you can."],
+  butterfly: ["Field specimen!", "Got one! Okay, bye.", "Lepidoptera!"],
+  juggle_ok: ["Multitasking!", "Three deadlines at once!", "Juggling three grants."],
+  juggle_drop: ["Oops.", "That one was overdue anyway.", "Ow. Footnotes."],
+  pizza: ["Free seminar pizza!", "Brain food.", "This is why I go to talks."],
+  sprout: ["Longitudinal study complete.", "It grows!", "Results: a flower."],
+  dance: ["Paper accepted!!", "It compiled!", "No revisions!"],
+  sneeze_after: ["Archives are dusty.", "Excuse me, 1890.", "Bless this footnote."],
+  duck_talk: ["So this function...", "...and then the loop...", "Okay duck, listen."],
+  duck_done: ["Oh! It was a typo.", "Thanks, duck.", "Duck solves it again."],
+  globe: ["Fieldwork, anywhere?", "Let's go... there!", "Somewhere, a source."],
+};
+
 const ACTIONS = {
   spawn: {                                       // walk in from one side
     init(r) {
-      const [lo, hi] = r.stage.range(), side = r.rand() < 0.5 ? -1 : 1;
+      const [lo, hi] = r.stage.range();
+      let side = r.rand() < 0.5 ? -1 : 1, tx;
+      if (r.stage.kind === "flow") {             // straight to the lit step, from the nearer end of the strip
+        tx = r.stage.spawnX(r.rand);
+        side = tx - lo < hi - tx ? -1 : 1;
+      } else tx = side < 0 ? lo + between(r.rand, 10, 140) : hi - between(r.rand, 10, 140);
       r.x = side < 0 ? lo - EDGE : hi + EDGE;
-      const tx = r.stage.kind === "pill" ? r.stage.spawnX(r.rand)
-        : side < 0 ? lo + between(r.rand, 10, 140) : hi - between(r.rand, 10, 140);
       return { tx: clamp(tx, lo, hi) };
     },
     run(r, s, dt) {
       r.alpha = r.stage.edgeFade(r.x); r.y = r.stage.hop(r.x);
-      if (stepToward(r, s, s.tx, dt, r.a.speed)) {
+      if (stepToward(r, s, s.tx, dt, r.a.speed * (r.stage.kind === "flow" ? 1.5 : 1))) {
         r.alpha = 1; r.y = 0; s.done = true;
-        if (r.rand() < 0.45) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
+        if (r.stage.kind === "flow") r.arrive();
+        else if (r.rand() < 0.22) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
         return stand({ carry: true });
       }
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
     },
   },
   despawn: {                                     // and walk off the nearer side
-    init(r) {
+    init(r, o) {
       const [lo, hi] = r.stage.range();
-      if (r.rand() < 0.5) r.say(pick(r.rand, ["Bye!", "Off to the archives!", "Lunch break!", "brb, library",
+      if (!(o && o.quiet) && r.rand() < 0.25) r.say(pick(r.rand, ["Bye!", "Off to the archives!", "Lunch break!", "brb, library",
         "Exit, pursued by a deadline.", "To the stacks!", "My work here is cited.", "Fin."]));
       return { tx: r.x - lo < hi - r.x ? lo - EDGE : hi + EDGE };
     },
@@ -649,13 +978,35 @@ const ACTIONS = {
       return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
     },
   },
+  farewell: {                                    // a closing line and a wave before walking off
+    init(r, o) {
+      r.say(o.text, Math.max(2.6, readTime(o.text) + 1.2));
+      return { dur: clamp(readTime(o.text) * 0.5, 0.9, 1.6) };
+    },
+    run(r, s) {
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: ["up", Math.floor(s.t * 5) % 2 ? 2 : 0], mouth: "smile" });
+    },
+  },
+  chase: {                                       // the mission moved on to the next step: run after it
+    init(r) {
+      if (r.rand() < 0.25) r.say(pick(r.rand, ["Next!", "Onward!", "Wait for me!", "Coming!", "Follow that mission!"]), 1.4);
+      return { tx: r.stage.spawnX(r.rand) };
+    },
+    run(r, s, dt) {
+      r.y = r.stage.hop(r.x);
+      if (stepToward(r, s, s.tx, dt, r.a.speed * 2.2)) { r.y = 0; s.done = true; r.arrive(); return stand({ carry: true }); }
+      return stand(Object.assign(walkPose(r, s.dist || 0), { carry: true }));
+    },
+  },
   walk: {
     init(r, o) {
       const tx = r.stage.pickTarget(r), far = Math.abs(tx - r.x) > 80;
+      if (Math.abs(tx - r.x) < 12) return { tx: r.x, fast: 1, tripAt: null };   // not worth a walk: stay put
       return { tx, fast: (o && o.fast) || 1, tripAt: r.mood === "busy" && far && r.rand() < 0.15 ? between(r.rand, 0.8, 2) : null };
     },
     run(r, s, dt) {
-      const speed = r.a.speed * s.fast * (r.caffeine > 0 ? 1.9 : 1);
+      const speed = r.a.speed * s.fast * (r.caffeine > 0 ? 1.4 : 1);
       if (stepToward(r, s, s.tx, dt, speed)) { s.done = true; return stand({ carry: true }); }
       if (s.tripAt && s.t > s.tripAt) { s.tripAt = null; r.next = ["walk"]; r.begin("trip"); return stand(); }
       r.y = r.stage.hop(r.x);
@@ -689,18 +1040,18 @@ const ACTIONS = {
     init(r) {
       roomAhead(r, 40);
       const sniff = r.rand() < 0.3;
-      const tx = r.stage.kind === "pill" ? r.x : r.x + r.face * between(r.rand, 16, 36);  // pills are too short to roam
+      const tx = r.stage.kind === "flow" ? r.x : r.x + r.face * between(r.rand, 16, 36);  // pills are too short to roam
       return { dur: between(r.rand, 3.5, 6), sniff, tx, found: r.rand() < 0.55 };
     },
     run(r, s, dt) {
       const pause = Math.floor(s.t / 0.9) % 3 === 2;
-      if (!pause) stepToward(r, s, s.tx, dt, r.a.speed * 0.3);
+      const moving = !pause && !stepToward(r, s, s.tx, dt, r.a.speed * 0.4);
       const end = s.t >= s.dur - 0.9;
       if (end && s.found && !s.cheered) { s.cheered = true; r.icon("bang"); r.quip("search"); }
       if (s.sniff && Math.floor(s.t * 3) !== Math.floor((s.t - 0.016) * 3)) r.stage.puff(r.x + r.face * 10, r.headTop - 12, r.face);
       if (s.sniff && !s.saidSniff && s.t > 1) { s.saidSniff = true; r.quip("sniff"); }
       if (s.t >= s.dur) s.done = true;
-      const walk = pause || end ? {} : walkPose(r, s.dist || 0);
+      const walk = moving && !end ? walkPose(r, s.dist || 0) : {};
       if (s.sniff) return stand(Object.assign({}, walk, { crouch: 2, nod: 1, eyes: "closed", armF: ["low", 0], armB: ["low", 0] }));
       return stand(Object.assign({}, walk, {
         crouch: 1, armF: end && s.found ? ["up", 0] : ["low", 0], eyes: "down",
@@ -858,6 +1209,446 @@ const ACTIONS = {
       }));
     },
   },
+  // ---------- little bits of everyday research life ----------
+  beaker: {                                      // pour one flask into another; usually it goes poof
+    init(r) {
+      return { dur: 5.4, a: pick(r.rand, ["#74c0fc", "#ff922b"]), mix: pick(r.rand, ["#b197fc", "#69db7c", "#ff8787", "#ffd43b"]),
+               boom: r.rand() < 0.7 };
+    },
+    run(r, s) {
+      const pour = s.t > 0.6 && s.t < 2.4, shake = s.t >= 2.4 && s.t < 3.2, after = s.t >= 3.2;
+      if (after && !s.popped) {
+        s.popped = true;
+        const at = s.g ? { x: ahead(r, s.g.handB[0]), y: s.g.handB[1] + 3 + r.y } : { x: ahead(r, 4), y: 20 };
+        if (s.boom) {
+          for (let i = 0; i < 10; i++) r.stage.add({ kind: "smoke", c: i % 3 ? s.mix : "#f1f3f5", x: at.x, y: at.y,
+            vx: (Math.random() - 0.5) * 50, vy: Math.random() * 30, life: 0.9 + Math.random() * 0.5, size: 4 });
+          r.soot = 6; r.icon("bang", 0.6); r.line("beaker_boom", 0.8);
+        } else {
+          for (let i = 0; i < 8; i++) r.stage.add({ kind: "px", c: s.mix, x: at.x + (Math.random() - 0.5) * 4, y: at.y + 5,
+            vy: 14 + Math.random() * 14, life: 1, fade: true });
+          r.icon("bulb", 1.2); r.line("beaker_ok", 0.7);
+        }
+      }
+      if (s.t >= s.dur) s.done = true;
+      const j = shake ? (Math.floor(s.t * 16) % 2 ? 1 : -1) : 0, burnt = after && s.boom;
+      return stand({
+        armF: pour ? ["high", 0] : burnt ? ["up", 0] : ["forward", 0], armB: burnt ? ["up", 0] : ["forward", 7 + j],
+        eyes: after ? (burnt && s.t > 4.2 ? "closed" : "wide") : "down", mouth: after ? (burnt ? "o" : "smile") : "none",
+        props: (P, g) => {
+          s.g = g;
+          if (burnt) return;
+          const fill = clamp((s.t - 0.6) / 1.8, 0, 1);
+          pmap(P, FLASK, g.handB[0] - 2, g.handB[1] - 3, { L: fill > 0.5 ? s.mix : "#ffe066" });
+          pmap(P, FLASK, g.handF[0] - 2, g.handF[1] - 3, { L: after ? "#e9ecef" : s.a });
+          if (pour) thin(P, g.handF[0] + 1, g.handF[1] - 3, g.handB[0], g.handB[1] + 3, s.a, i => (i + Math.floor(s.t * 14)) % 3 === 0);
+        },
+      });
+    },
+  },
+  rocket: {                                      // set it down, light it, back away... and up it goes
+    init(r) {
+      roomAhead(r, 30);
+      return { dur: 10, ok: r.rand() < 0.3, rx: ahead(r, 14), backX: ahead(r, -10) };
+    },
+    run(r, s, dt) {
+      const lx = (s.rx - r.x) * r.face;
+      if (s.t < 0.8) return stand({ crouch: 3, armF: ["low", 3], eyes: "down", props: P => propRocket(P, lx) });
+      if (s.t < 1.6) {
+        if (Math.random() < 0.4) r.stage.add({ kind: "px", c: Math.random() < 0.5 ? "#ffd43b" : "#ff922b", x: s.rx, y: 9,
+          vx: (Math.random() - 0.5) * 20, vy: 20, life: 0.4, fade: true });
+        return stand({ crouch: 2, armF: ["low", 4], eyes: "wide", props: P => propRocket(P, lx) });
+      }
+      if (s.t < 2.2) {
+        const [lo, hi] = r.stage.range();
+        stepToward(r, s, clamp(s.backX, lo, hi), dt, r.a.speed * 1.5);
+        r.face = Math.sign(s.rx - r.x) || r.face;
+        return stand({ armF: ["head", 0], armB: ["head", 0], eyes: "closed", mouth: "o", props: P => propRocket(P, (s.rx - r.x) * r.face) });
+      }
+      if (!s.launched) {
+        s.launched = true; r.stage.dust(s.rx, 6);
+        const f = Math.sign(s.rx - r.x) || r.face, up = r.stage.kind === "flow" ? 90 : 112;
+        r.stage.add({ kind: "map", map: ROCKET, x: s.rx, y: 2, vx: f * (s.ok ? 6 : 34), vy: up, g: s.ok ? 70 : up, floor: !s.ok, life: 6, rot: 0,
+          trail: p => {
+            p.rot = Math.atan2(p.vx, p.vy);
+            if (Math.random() < 0.7) r.stage.add({ kind: "px", c: Math.random() < 0.5 ? "#ffd43b" : "#ff922b", x: p.x, y: p.y, vy: -10, life: 0.35, fade: true });
+            if (Math.random() < 0.15) r.stage.smoke(p.x, p.y);
+            if (s.ok && p.vy < 0) { p.life = 0; p.trail = null; r.stage.sparkle(p.x, p.y, 14); s.popped = true; }
+          },
+          land: p => { p.rot = f * Math.PI / 2; p.life = 2.5; p.fade = true; p.trail = null; r.stage.dust(p.x, 10); for (let i = 0; i < 4; i++) r.stage.star(p.x, 10); s.crashed = true; },
+        });
+      }
+      if (s.crashed && !s.reacted) { s.reacted = s.t; r.line("rocket_crash", 0.8); }
+      if (s.popped && !s.reacted) { s.reacted = s.t; r.line("rocket_ok", 0.8); r.icon("heart", 1); }
+      if ((s.reacted && s.t - s.reacted > 2) || s.t > s.dur) s.done = true;
+      if (!s.reacted) return stand({ eyes: "up", mouth: "o" });
+      return s.crashed ? stand({ armF: ["head", 0], eyes: "closed", mouth: "flat" })
+        : stand({ armF: ["up", 0], armB: ["up", 0], mouth: "smile", eyes: "closed", blush: true });
+    },
+  },
+  dollar: {                                      // a dollar on the floor!
+    init(r) {
+      roomAhead(r, 50);
+      const st = { dur: 9 };
+      st.bill = item(r, BILL, near(r, between(r.rand, 26, 44)), { life: 14 });
+      st.cleanup = () => vanish(st.bill);
+      return st;
+    },
+    run(r, s, dt) {
+      if (s.t > s.dur) s.done = true;
+      if (s.t < 0.8) { if (!s.seen) { s.seen = true; r.icon("bang", 0.7); } return stand({ eyes: "wide", carry: true }); }
+      const w = walkTo(r, s, dt, s.bill.x);
+      if (w) return w;
+      const k = s.t - s.there;
+      if (k < 0.7) return stand({ crouch: 3, armF: ["low", 2], eyes: "down" });
+      if (!s.got) { s.got = true; s.bill.life = 0; r.stage.sparkle(ahead(r, 4), r.headTop, 6); r.icon("heart", 1.2); r.line("dollar", 0.8); }
+      if (k > 3.4) s.done = true;
+      const hop = k < 2.2 ? Math.abs(Math.sin(k * 7)) : 0;
+      r.y = hop * 6;
+      return stand({ armF: ["up", 0], mouth: "smile", blush: true, liftF: hop > 0.2, liftB: hop > 0.2,
+                     props: (P, g) => pmap(P, BILL, g.handF[0] - 4, g.handF[1] + 1) });
+    },
+  },
+  flower: {                                      // pick a flower and tuck it behind an ear
+    init(r) {
+      roomAhead(r, 50);
+      const st = { dur: 10, petal: pick(r.rand, ["#ff6b9a", "#ffd43b", "#b197fc", "#ff8787", "#f8f9fa"]) };
+      st.f = item(r, FLOWER, near(r, between(r.rand, 24, 42)), { life: 14, pal: { L: st.petal } });
+      st.cleanup = () => vanish(st.f);
+      return st;
+    },
+    run(r, s, dt) {
+      if (s.t > s.dur) s.done = true;
+      if (s.t < 0.7) return stand({ carry: true, eyes: "wide", mouth: "o" });
+      const w = walkTo(r, s, dt, s.f.x);
+      if (w) return w;
+      const k = s.t - s.there, held = (P, g) => pmap(P, FLOWER_HELD, g.handF[0] - 1, g.handF[1] - 1, { L: s.petal });
+      if (k < 0.7) return stand({ crouch: 3, armF: ["low", 2], eyes: "down" });
+      if (!s.got) { s.got = true; s.f.life = 0; }
+      if (k < 2.2) { if (!s.sniffed && k > 1) { s.sniffed = true; r.icon("heart", 1); } return stand({ armF: ["mouth", 0], eyes: "closed", mouth: "smile", props: held }); }
+      if (k < 3) return stand({ armF: ["head", 0], eyes: "up", mouth: "smile", props: held });
+      if (!s.worn) { s.worn = true; r.flower = s.petal; r.line("flower", 0.7); r.stage.sparkle(r.x, r.headTop, 4); }
+      if (k > 4.4) s.done = true;
+      return stand({ mouth: "smile", blush: true, eyes: "closed" });
+    },
+  },
+  bird: {                                        // a bird lands on their head, chirps, and flies off
+    init(r) {
+      const side = r.rand() < 0.5 ? -1 : 1, st = { dur: 12 };
+      st.b = r.stage.add({ kind: "map", frames: [BIRD_UP, BIRD_DOWN], fps: 10, x: r.x + side * 90, y: 70, life: 14, flip: -side, fadeIn: true }) || {};
+      st.cleanup = () => { if (st.b.life > 1.5) { st.b.frames = [BIRD_UP, BIRD_DOWN]; st.b.vx = 45; st.b.vy = 35; st.b.flip = 1; st.b.life = 1.5; st.b.max = 1.5; st.b.fade = true; } };
+      return st;
+    },
+    run(r, s, dt) {
+      const b = s.b, hx = r.x + r.face, hy = r.topY;
+      if (s.t > s.dur) s.done = true;
+      if (!s.landed) {
+        const dx = hx - b.x, dy = hy - b.y, d = Math.hypot(dx, dy);
+        if (d < 2 || s.t > 5) { s.landed = s.t; b.frames = [BIRD_SIT]; b.flip = -r.face; r.line("bird", 0.6); }
+        else { const m = Math.min(d, 60 * dt); b.x += dx / d * m; b.y += dy / d * m; b.flip = Math.sign(dx) || b.flip; }
+        return stand({ carry: true, eyes: d < 60 ? "up" : "open" });
+      }
+      const k = s.t - s.landed;
+      if (k < 3) {
+        b.x = hx; b.y = hy;
+        const c = Math.floor(k / 0.9);
+        if (c !== s.chirp) { s.chirp = c; if (c > 0) r.stage.add({ kind: "icon", map: ICONS.note, x: b.x + 4, y: b.y + 8, vx: 4, vy: 12, life: 0.9, fade: true }); }
+        return stand({ eyes: "up", mouth: "smile", blush: k > 1 });
+      }
+      if (!s.off) { s.off = true; const dir = r.rand() < 0.5 ? -1 : 1; b.frames = [BIRD_UP, BIRD_DOWN]; b.vx = dir * 45; b.vy = 35; b.flip = dir; b.life = 2.5; b.max = 2.5; b.fade = true; }
+      if (k > 4.5) s.done = true;
+      return stand({ armF: ["up", Math.floor(k * 6) % 2 ? 2 : 0], mouth: "smile" });
+    },
+  },
+  notebook: {                                    // scribble in a spiral notebook; sometimes rip the page out
+    init(r) { return { dur: between(r.rand, 3.5, 5), rip: r.rand() < 0.45 }; },
+    run(r, s) {
+      const end = s.dur - (s.rip ? 1.2 : 0.3), writing = s.t < end, wig = Math.floor(s.t * 10) % 2;
+      if (s.rip && !writing && !s.ripped) {
+        s.ripped = true; r.line("notebook", 0.6);
+        r.stage.add({ kind: "map", map: BALL, x: ahead(r, 4), y: r.headTop - 10, vx: -r.face * between(r.rand, 30, 50), vy: 50, g: 160,
+                      floor: true, bounce: 0.45, life: 2.5, fade: true });
+      }
+      if (s.t >= s.dur) s.done = true;
+      return stand({
+        armB: ["forward", 3], armF: writing ? ["forward", wig] : ["up", 0], eyes: writing ? "down" : "closed", nod: writing ? 1 : 0,
+        mouth: s.ripped ? "flat" : "none",
+        props: (P, g) => { propNotebook(P, g.handB[0], g.handB[1], writing ? Math.floor(s.t * 2) : 0); if (writing) propPencil(P, g.handF[0], g.handF[1] + wig); },
+      });
+    },
+  },
+  chalkboard: {                                  // fill a chalkboard, step back, and box the answer (or not)
+    init(r) { roomAhead(r, 36); return { dur: between(r.rand, 5, 6.5), q: r.rand() < 0.3, rows: Array.from({ length: 4 }, () => 8 + Math.floor(r.rand() * 10)) }; },
+    run(r, s) {
+      const writeEnd = s.dur - 1.6, prog = clamp(s.t / writeEnd, 0, 1), back = s.t > writeEnd;
+      if (!back && Math.random() < 0.08) r.stage.add({ kind: "px", c: "#f1f3f5", x: ahead(r, 12), y: 16 + r.y, vy: -8, life: 0.6, fade: true });
+      if (back && !s.said) { s.said = true; r.icon(s.q ? "q" : "bulb", 1.1); r.line(s.q ? "chalk_q" : "chalkboard", 0.7); }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: back ? ["swing", 0] : [Math.floor(s.t * 3) % 2 ? "high" : "forward", 1], liftB: back ? 1 : 0,
+                     mouth: back && !s.q ? "smile" : "none", props: P => propBoard(P, 9, s.rows, prog, s.q) });
+    },
+  },
+  corkboard: {                                   // sticky notes, red string: it's all connected
+    init(r) { roomAhead(r, 36); return { dur: 6, pts: shuffle([[2, 12], [15, 12], [8, 7], [16, 3], [2, 2]], r.rand) }; },
+    run(r, s) {
+      const n = clamp(Math.floor(s.t * 1.2) + 1, 1, 5), solved = s.t > 4.3;
+      if (solved && !s.said) { s.said = true; r.icon("bang", 0.6); r.line("corkboard", 0.8); }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: [solved ? "high" : "forward", Math.floor(s.t * (solved ? 8 : 3)) % 2 + 1], eyes: solved ? "wide" : "open",
+                     mouth: solved ? "o" : "none", props: P => propCork(P, 9, s.pts, n) });
+    },
+  },
+  chart: {                                       // hold up a chart; up and to the right, or not
+    init(r) { return { dur: 4.6, up: r.rand() < 0.65 }; },
+    run(r, s) {
+      const bars = Math.min(5, Math.floor(s.t * 2)), crash = !s.up && s.t > 2.8;
+      if (s.t > 2.8 && !s.said) { s.said = true; r.line(s.up ? "chart_up" : "chart_down", 0.8); if (s.up) r.stage.sparkle(ahead(r, 10), r.headTop, 5); }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: ["high", 1], armB: ["high", 0], mouth: s.t > 2.8 ? (s.up ? "smile" : "o") : "none", eyes: crash ? "wide" : "open",
+                     props: (P, g) => propChart(P, g.handF[0] - 2, g.handF[1] + 1, bars, crash) });
+    },
+  },
+  apple: {                                       // an apple falls on their head. Eureka.
+    init(r) {
+      const st = { dur: 5 };
+      st.a = r.stage.add({ kind: "map", map: APPLE, x: r.x + r.face, y: r.stage.ground + 6, g: 260, life: 8 }) || { y: 0 };
+      st.cleanup = () => vanish(st.a);
+      return st;
+    },
+    run(r, s) {
+      const a = s.a;
+      if (!s.bonk && (a.y <= r.topY + 1 || s.t > 3)) {
+        s.bonk = s.t; a.vy = 70; a.vx = -r.face * 30; a.floor = true; a.bounce = 0.4; a.life = 3; a.max = 3; a.fade = true;
+        for (let i = 0; i < 3; i++) r.stage.star(r.x, r.headTop);
+        r.squash = 0.85;
+      }
+      if (!s.bonk) return stand({ carry: true });
+      const k = s.t - s.bonk;
+      if (k > 0.25) r.squash = 1;
+      if (k > 0.7 && !s.aha) { s.aha = true; r.icon("bulb", 1.4); r.line("apple", 0.8); }
+      if (k > 3) { r.squash = 1; s.done = true; }
+      return k < 0.7 ? stand({ eyes: "closed", mouth: "o", armF: ["head", 0] }) : stand({ eyes: "wide", mouth: "smile", armF: ["up", 0] });
+    },
+  },
+  microscope: {                                  // peer in... and jump back
+    init(r) { roomAhead(r, 26); return { dur: 5.5, germ: r.rand() < 0.6 }; },
+    run(r, s) {
+      const peer = s.t < 3, k = s.t - 3;
+      if (!peer && !s.jumped) {
+        s.jumped = true; r.icon("bang", 0.7); r.line("microscope", 0.7);
+        if (s.germ) r.stage.add({ kind: "map", frames: [GERM_A, GERM_B], fps: 5, x: ahead(r, 13), y: 16, vx: r.face * 14, vy: 10, life: 3, fade: true });
+      }
+      r.y = !peer && k < 0.5 ? Math.sin(k / 0.5 * Math.PI) * 8 : 0;
+      if (s.t >= s.dur) { r.y = 0; s.done = true; }
+      const scope = P => propMicroscope(P, 9);
+      return peer ? stand({ crouch: 2, nod: 1, eyes: Math.floor(s.t * 1.3) % 3 ? "down" : "closed", armF: ["low", 2 + (Math.floor(s.t * 2) % 2)], props: scope })
+        : stand({ eyes: "wide", mouth: "o", armF: ["up", 0], armB: ["up", 0], props: scope });
+    },
+  },
+  gradcap: {                                     // toss the mortarboard, catch it on the way down
+    init(r) { return { dur: 5 }; },
+    run(r, s) {
+      if (s.t > 0.6 && !s.thrown) {
+        s.thrown = true;
+        s.cap = r.stage.add({ kind: "map", frames: [CAP_FLAT, CAP_EDGE], fps: 9, x: r.x, y: r.topY + 2, vy: 120, g: 150, life: 4 }) || { vy: -1, y: 0 };
+      }
+      if (s.cap && !s.caught && s.cap.vy < 0 && s.cap.y <= r.headTop) { s.caught = true; s.cap.life = 0; r.line("gradcap", 0.7); r.stage.sparkle(r.x, r.headTop + 6, 8); }
+      if (s.t >= s.dur) s.done = true;
+      const up = s.thrown && !s.caught;
+      return stand({ armF: s.t < 0.6 ? ["head", 0] : up ? ["up", 0] : ["swing", 0], armB: up ? ["up", 0] : ["swing", 0],
+                     eyes: up ? "up" : s.caught ? "closed" : "open", mouth: s.caught ? "smile" : up ? "o" : "none", blush: !!s.caught,
+                     props: (P, g) => { if (!s.thrown || s.caught) propMortar(P, g); } });
+    },
+  },
+  plane: {                                       // fold a paper airplane and send it off
+    init(r) { roomAhead(r, 60); return { dur: 4.5 }; },
+    run(r, s) {
+      const fold = s.t < 1.2;
+      if (!fold && !s.thrown) {
+        s.thrown = true; r.line("plane", 0.6);
+        const f = r.face;
+        r.stage.add({ kind: "map", map: PLANE, x: ahead(r, 10), y: r.headTop - 8, vx: f * 55, vy: 18, g: 14, floor: true, life: 5, fade: true, flip: f,
+                      trail: p => { p.vy += Math.sin(p.life * 6) * 0.8; } });
+      }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: fold ? ["forward", Math.floor(s.t * 6) % 2] : s.t < 1.6 ? ["up", 3] : ["swing", 0], armB: fold ? ["forward", 2] : ["swing", 0],
+                     eyes: fold ? "down" : "open", mouth: s.thrown ? "smile" : "none",
+                     props: fold ? (P, g) => propPaper(P, g.handF[0] - 2, g.handF[1] - 2) : null });
+    },
+  },
+  stamp: {                                       // APPROVED. Or, Reviewer 2 style, not.
+    init(r) { roomAhead(r, 20); return { dur: 3.6, ok: r.rand() < 0.5 }; },
+    run(r, s) {
+      if (s.t > 1.15 && !s.hit) { s.hit = true; r.stage.dust(ahead(r, 13), 4); r.line(s.ok ? "stamp_ok" : "stamp_no", 0.75); }
+      if (s.t >= s.dur) s.done = true;
+      const raised = s.t < 1;
+      return stand({ crouch: s.hit && s.t < 1.7 ? 2 : 0, armF: [raised ? "up" : "low", raised ? 1 : 3], eyes: s.hit ? "closed" : "open",
+                     mouth: s.hit ? (s.ok ? "smile" : "flat") : "none",
+                     props: (P, g) => { propSheet(P, 9, s.hit ? (s.ok ? "#2f9e44" : "#e03131") : null); propStamp(P, g.handF[0], g.handF[1]); } });
+    },
+  },
+  cat: {                                         // the office cat drops by for a pat
+    init(r) {
+      const side = r.rand() < 0.5 ? -1 : 1, st = { dur: 12, side };
+      st.c = r.stage.add({ kind: "map", frames: [CAT_A, CAT_B], fps: 6, x: r.x + side * 110, y: 0, life: 16, flip: -side, fadeIn: true }) || {};
+      st.cleanup = () => vanish(st.c);
+      return st;
+    },
+    run(r, s, dt) {
+      const c = s.c, spot = ahead(r, 14);
+      if (s.t > s.dur) s.done = true;
+      if (!s.sat) {
+        const d = spot - c.x;
+        if (Math.abs(d) < 1.5) { s.sat = s.t; c.frames = [CAT_SIT]; c.flip = -r.face; r.icon("heart", 1); }
+        else { c.x += Math.sign(d) * Math.min(Math.abs(d), 32 * dt); c.flip = Math.sign(d); }
+        return stand({ carry: true, eyes: Math.abs(d) < 50 ? "wide" : "open" });
+      }
+      const k = s.t - s.sat;
+      if (k > 1 && !s.said) { s.said = true; r.line("cat", 0.7); }
+      if (k > 1 && k < 4 && Math.random() < 0.03) r.stage.add({ kind: "icon", map: ICONS.heart, x: c.x, y: 12, vy: 10, life: 1, fade: true });
+      if (k >= 4.5 && !s.left) { s.left = true; c.frames = [CAT_A, CAT_B]; c.flip = s.side; c.vx = s.side * 30; c.life = 4; c.max = 4; c.fade = true; }
+      if (k >= 6) s.done = true;
+      if (k < 4.5) return stand({ crouch: 2, armF: ["low", 3 + (Math.floor(k * 4) % 2)], eyes: "closed", mouth: "smile", blush: true });
+      return stand({ armF: ["up", Math.floor(k * 6) % 2 ? 2 : 0], mouth: "smile" });
+    },
+  },
+  butterfly: {                                   // chase a butterfly with a net, catch it, let it go
+    init(r) {
+      roomAhead(r, 30);
+      const st = { dur: 8, ox: ahead(r, near(r, 30)) };
+      st.b = r.stage.add({ kind: "map", frames: [BFLY_A, BFLY_B], fps: 8, x: st.ox, y: 34, life: 12, fadeIn: true }) || {};
+      st.cleanup = () => { if (st.b.life > 1.5) { st.b.vy = 25; st.b.vx = 20; st.b.life = 1.5; st.b.max = 1.5; st.b.fade = true; } };
+      return st;
+    },
+    run(r, s) {
+      const b = s.b;
+      if (s.t < 3.3) { b.x = s.ox + Math.sin(s.t * 2.3) * 14; b.y = 30 + Math.sin(s.t * 5.1) * 7; r.face = Math.sign(b.x - r.x) || r.face; }
+      const swing = [1.2, 2.3, 3.3].some(t0 => s.t > t0 && s.t < t0 + 0.3);
+      if (s.t >= 3.3 && !s.caught) { s.caught = true; r.line("butterfly", 0.7); r.stage.sparkle(b.x, b.y, 4); }
+      if (s.caught && !s.freed && s.hoop) { b.x = s.hoop.x; b.y = s.hoop.y - 2; }
+      if (s.t >= 5.4 && !s.freed) { s.freed = true; b.vx = r.face * 18; b.vy = 22; b.life = 3; b.max = 3; b.fade = true; }
+      if (s.t >= s.dur) s.done = true;
+      const holding = s.caught && !s.freed;
+      return stand({
+        armF: s.freed ? ["up", Math.floor(s.t * 6) % 2 ? 2 : 0] : holding ? ["up", 0] : swing ? ["forward", 3] : ["high", 0],
+        eyes: holding ? "wide" : s.freed ? "open" : "up", mouth: s.caught ? "smile" : "none",
+        props: s.freed ? null : (P, g) => { const [hx, hy] = propNet(P, g.handF[0], g.handF[1], swing); s.hoop = { x: ahead(r, hx), y: hy + r.y }; },
+      });
+    },
+  },
+  juggle: {                                      // juggle three books; sometimes one comes down on the head
+    init(r) { return { dur: between(r.rand, 3.5, 4.5), drop: r.rand() < 0.35, colors: [pick(r.rand, BOOKS), pick(r.rand, BOOKS), pick(r.rand, BOOKS)] }; },
+    run(r, s) {
+      const end = s.t > s.dur - 1;
+      if (end && !s.ended) {
+        s.ended = true; r.line(s.drop ? "juggle_drop" : "juggle_ok", 0.7);
+        if (s.drop) { r.stage.book(r.x, r.headTop + 2, -r.face * 20, 20, s.colors[2]); for (let i = 0; i < 3; i++) r.stage.star(r.x, r.headTop); }
+      }
+      if (s.t >= s.dur) s.done = true;
+      const k = Math.floor(s.t * 3.2) % 2;
+      return stand({
+        armF: end ? ["forward", 0] : ["high", k], armB: end ? (s.drop ? ["head", 0] : ["swing", 0]) : ["high", 1 - k],
+        eyes: end ? (s.drop ? "closed" : "open") : "up", mouth: end ? (s.drop ? "o" : "smile") : "o",
+        props: (P, g) => {
+          if (end) return propStack(P, g.handF[0], g.handF[1] + 1, s.drop ? 2 : 3, 0, s.colors);
+          for (let i = 0; i < 3; i++) {
+            const t = s.t * 1.6 + i / 3, ph = t % 1, fwd = Math.floor(t) % 2 === 0;
+            const [x0, y0] = fwd ? g.handB : g.handF, [x1, y1] = fwd ? g.handF : g.handB;
+            box(P, Math.round(x0 + (x1 - x0) * ph) - 1, Math.round(Math.max(y0, y1) + 2 + Math.sin(ph * Math.PI) * 16), 3, 2, s.colors[i]);
+          }
+        },
+      });
+    },
+  },
+  pizza: {                                       // free seminar pizza, in three bites
+    init(r) { return { dur: 4.2 }; },
+    run(r, s) {
+      const bites = s.t < 0.4 ? 0 : Math.min(3, Math.floor((s.t - 0.4) / 1.1) + 1);
+      const biting = s.t > 0.4 && s.t < 3.7 && (s.t - 0.4) % 1.1 < 0.35;
+      if (biting && Math.random() < 0.2) r.stage.add({ kind: "px", c: "#e9c46a", x: ahead(r, 6), y: r.headTop - 12, vx: r.face * 10, vy: 10, g: 80, floor: true, life: 1, fade: true });
+      if (s.t > 0.6 && !s.said) { s.said = true; r.line("pizza", 0.6); }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: biting ? ["mouth", 0] : ["forward", 0], eyes: biting ? "closed" : "open", mouth: biting ? "o" : "smile",
+                     props: (P, g) => propPizza(P, g.handF[0], g.handF[1] + (biting ? -1 : 1), bites) });
+    },
+  },
+  sprout: {                                      // plant a seed, water it, watch it grow into a flower
+    init(r) { roomAhead(r, 24); return { dur: 7, petal: pick(r.rand, ["#ff6b9a", "#ffd43b", "#b197fc", "#ff8787", "#74c0fc"]) }; },
+    run(r, s) {
+      const plant = s.t < 1, water = s.t >= 1 && s.t < 3.4, grow = clamp((s.t - 1.4) / 2.6, 0, 1), admire = s.t >= 4.2;
+      if (water && s.spout && Math.random() < 0.5) r.stage.add({ kind: "px", c: "#74c0fc", x: s.spout.x, y: s.spout.y, vy: -10, g: 120, floor: true, life: 0.7, fade: true });
+      if (admire && !s.said) { s.said = true; r.icon("heart", 1.1); r.line("sprout", 0.7); }
+      if (s.t >= s.dur) { s.done = true; item(r, FLOWER, 13, { life: 8, fade: true, pal: { L: s.petal } }); }
+      return stand({
+        crouch: plant ? 3 : water ? 1 : 0, armF: plant ? ["low", 3] : water ? ["forward", 2] : ["swing", 0],
+        eyes: admire ? "closed" : "down", mouth: admire ? "smile" : "none", blush: admire,
+        props: (P, g) => {
+          if (!s.done) propPlant(P, 11, grow, s.petal);
+          if (water) { propCan(P, g.handF[0], g.handF[1]); s.spout = { x: ahead(r, g.handF[0] + 8), y: g.handF[1] + 2 + r.y }; }
+        },
+      });
+    },
+  },
+  dance: {                                       // a little victory dance
+    init(r) { r.line("dance", 0.8); return { dur: 3.2 }; },
+    run(r, s) {
+      const beat = Math.floor(s.t * 4) % 4, hb = Math.floor(s.t * 2);
+      r.y = Math.abs(Math.sin(s.t * Math.PI * 2)) * 6;
+      if (hb !== s.hb) { s.hb = hb; if (hb > 0) r.face *= -1; r.stage.sparkle(r.x, r.headTop, 3); }
+      if (s.t >= s.dur) { r.y = 0; s.done = true; }
+      return stand({ armF: [beat % 2 ? "up" : "high", beat % 2], armB: [beat % 2 ? "high" : "up", 0], mouth: "smile", eyes: "closed", blush: true,
+                     liftF: beat === 1 ? 1 : 0, liftB: beat === 3 ? 1 : 0 });
+    },
+  },
+  sneeze: {                                      // a dusty old book... ACHOO
+    init(r) { roomAhead(r, 20); return { dur: 4.4 }; },
+    run(r, s, dt) {
+      const open = s.t > 0.4, tickle = s.t > 1 && s.t < 2.2, achoo = s.t >= 2.2;
+      if (open && !achoo && Math.random() < 0.15) r.stage.add({ kind: "smoke", c: "#d8c9a3", x: ahead(r, 9), y: r.headTop - 14, vx: r.face * 4, vy: 6, life: 1, size: 2 });
+      if (achoo && !s.boom) {
+        s.boom = true; r.say("ACHOO!", 1.3); r.stage.dust(ahead(r, 10), 8);
+        for (let i = 0; i < 4; i++) r.stage.paper(ahead(r, 8), r.headTop - 10, r.face * between(r.rand, 10, 40), between(r.rand, 20, 50));
+      }
+      if (achoo && s.t < 2.5) { const [lo, hi] = r.stage.range(); r.x = clamp(r.x - r.face * 30 * dt, lo, hi); }
+      if (s.t > 3.2 && !s.said) { s.said = true; r.line("sneeze_after", 0.7); }
+      if (s.t >= s.dur) s.done = true;
+      if (achoo) return stand({ eyes: s.t < 2.6 ? "closed" : "wide", mouth: "o", armF: ["up", 1], armB: ["up", 0], liftF: s.t < 2.5 ? 1 : 0 });
+      return stand({ armF: ["forward", 0], armB: ["forward", 1], eyes: tickle ? "closed" : "down", nod: tickle ? Math.floor(s.t * 5) % 2 : 1,
+                     mouth: tickle ? (Math.floor(s.t * 6) % 2 ? "o" : "flat") : "none",
+                     props: open ? (P, g) => PROPS.book(P, r.a, g.handF[0], g.handF[1]) : null });
+    },
+  },
+  duck: {                                        // rubber duck debugging
+    init(r) {
+      roomAhead(r, 22);
+      const st = { dur: 6.4 };
+      st.d = item(r, DUCK, near(r, 14), { life: 10, flip: -r.face });
+      st.cleanup = () => vanish(st.d);
+      return st;
+    },
+    run(r, s) {
+      const talk = s.t > 0.6 && s.t < 3.6;
+      if (s.t > 0.8 && !s.said) { s.said = true; r.line("duck_talk", 0.8); }
+      for (const t0 of [2, 3]) if (s.t > t0 && !s["q" + t0]) { s["q" + t0] = true; r.stage.add({ kind: "icon", map: ICONS.note, x: s.d.x, y: 12, vy: 14, life: 1, fade: true }); }
+      if (s.t > 3.8 && !s.aha) { s.aha = true; r.icon("bulb", 1.3); r.line("duck_done", 0.9); }
+      if (s.t > 5.2 && !s.got) { s.got = true; vanish(s.d); }
+      if (s.t >= s.dur) s.done = true;
+      if (s.t < 0.6 || (s.t > 4.8 && s.t < 5.4)) return stand({ crouch: 3, armF: ["low", 3], eyes: "down" });
+      return stand({ crouch: talk ? 1 : 0, armF: talk ? ["forward", Math.floor(s.t * 3) % 3] : s.aha ? ["up", 0] : ["swing", 0],
+                     eyes: s.aha ? "wide" : "down", mouth: talk ? (Math.floor(s.t * 7) % 2 ? "o" : "flat") : s.aha ? "smile" : "none" });
+    },
+  },
+  globe: {                                       // spin the globe, stop it with a finger
+    init(r) { return { dur: between(r.rand, 3.5, 4.5) }; },
+    run(r, s) {
+      const stop = s.t > s.dur - 1;
+      if (!stop) s.off = Math.floor(s.t * 7);
+      if (stop && !s.said) { s.said = true; r.line("globe", 0.7); }
+      if (s.t >= s.dur) s.done = true;
+      return stand({ armF: ["forward", 0], armB: stop ? ["forward", 6] : ["forward", 3 + (Math.floor(s.t * 6) % 2)], eyes: "down",
+                     mouth: stop ? "smile" : "none", props: (P, g) => propGlobe(P, g.handF[0] + 1, g.handF[1] + 1, s.off || 0) });
+    },
+  },
   trip: {
     init(r) { r.quip("trip"); return { dur: 1.9 }; },
     run(r, s) {
@@ -877,20 +1668,77 @@ const ACTIONS = {
   },
 };
 
+// How likely each bit is, by mood. Every table mixes real work with the little things that happen around it.
+const LIFE = { bird: 0.5, cat: 0.4, butterfly: 0.4, dollar: 0.35, flower: 0.4, pizza: 0.4, juggle: 0.4, plane: 0.4,
+               sprout: 0.4, gradcap: 0.2, dance: 0.25, globe: 0.4, sneeze: 0.4, apple: 0.3 };
+const LAB = { beaker: 0.8, rocket: 0.4, microscope: 0.8, chalkboard: 0.8, corkboard: 0.8, chart: 0.6, duck: 0.5, stamp: 0.5 };
 const MOODS = {
   // the mission an agent is working on right now
-  busy: { read: 2, search: 3, notes: 2, dig: 2, typing: 2, eureka: 1.2, confused: 1, citation: 1.5,
-          telescope: 1, papers: 1, stack: 1.2, coffee: 1, scroll: 1.2, idle: 0.6 },
+  busy: Object.assign({ read: 2, search: 3, notes: 2.2, notebook: 1.5, dig: 2, typing: 2, eureka: 1.2, confused: 1,
+                        citation: 1.5, telescope: 1, papers: 1, stack: 1.2, coffee: 1.6, scroll: 1.2, idle: 0.6 }, LAB, LIFE),
   // standing by their worker's card on the Settings page: mostly still, now and then a little bit of business
-  crew: { idle: 6, read: 1.2, notes: 1, coffee: 1.2, typing: 0.8, citation: 0.6, scroll: 0.6, confused: 0.4,
-          eureka: 0.4, telescope: 0.4, sleep: 0.5 },
+  crew: { idle: 6, read: 1.2, notes: 1, notebook: 0.8, coffee: 1.2, typing: 0.8, citation: 0.6, scroll: 0.6, confused: 0.4,
+          eureka: 0.4, telescope: 0.4, sleep: 0.3, globe: 0.3, pizza: 0.3, bird: 0.25 },
 };
+
+// On the pipeline strip the mood is the lit step, so the researcher does that step's kind of work.
+Object.assign(MOODS, {
+  finder: { telescope: 4, search: 3, read: 1, eureka: 1.5, notes: 1, idle: 0.5, globe: 2, butterfly: 1.5, corkboard: 1.5, coffee: 0.8 },
+  sources: { search: 3, dig: 3, typing: 2, read: 2, scroll: 1.5, telescope: 1, confused: 1, coffee: 1, microscope: 1.5,
+             corkboard: 1.5, sneeze: 1, notebook: 1, beaker: 0.8, apple: 0.4, bird: 0.4 },
+  contacts: { typing: 3, notes: 2, search: 2, read: 1, idle: 0.6 },
+  brief: { notes: 3, typing: 3, read: 1.5, eureka: 1.2, coffee: 1.5, papers: 1, stack: 0.8, notebook: 2.5, chalkboard: 1.5,
+           chart: 1, juggle: 0.5, pizza: 0.4 },
+  source_check: { search: 3, citation: 3, read: 2, confused: 1.5, notes: 1.2, stamp: 2.5, microscope: 1.5, duck: 1.5, beaker: 0.8 },
+  writer: { typing: 3.5, notes: 2, coffee: 2, scroll: 1, eureka: 1, papers: 0.8, notebook: 2.5, chalkboard: 1, pizza: 0.6,
+            juggle: 0.5, bird: 0.4 },
+  article_check: { citation: 3, read: 2.5, search: 2, confused: 1.5, notes: 1, stamp: 2.5, duck: 1.5, chart: 1 },
+  publisher: { papers: 3, stack: 2, eureka: 1.5, typing: 1, dance: 2, gradcap: 1.5, rocket: 1.5, plane: 1.5 },
+  "1f916": { typing: 3, idle: 1, eureka: 1, plane: 2, rocket: 1, dance: 1 },
+  bluesky: { typing: 3, idle: 1, eureka: 1, plane: 2, bird: 1.5, dance: 1 },
+});
+const STEP_LINES = {                             // said on reaching a step
+  finder: ["Scanning the horizon.", "Any new leads?", "Mission hunting."],
+  sources: ["To the sources!", "Let's dig.", "Who funded this?", "Opening 47 tabs."],
+  contacts: ["Who can we ask?", "Finding the experts."],
+  brief: ["Writing it up.", "Brief time.", "Facts first."],
+  source_check: ["Every quote, checked.", "Show me the source.", "Ctrl+F time."],
+  writer: ["Drafting!", "Once upon a fact...", "Words, assemble!"],
+  article_check: ["Checking the draft.", "Possibility or fact?", "Red pen out."],
+  publisher: ["Stop the presses!", "Going to print!"],
+  "1f916": ["Posting to 1F916.", "One post a day!"],
+  bluesky: ["Posting to Bluesky.", "Telling the timeline."],
+};
+// The closing line when a step's work ends: where the mission went (its state now), or why nobody is
+// working any more. Human reviews get named, since that's where the work waits.
+const CLOSERS = {
+  BRIEF_READY: ["Brief's on your desk!", "Over to you: review the brief.", "Brief filed. Your call, boss."],
+  ARTICLE_READY: ["Article's ready for your red pen!", "Draft's on your desk!", "Over to you: publish it?"],
+  PARKED: ["Three strikes. Parked it for you.", "Stuck. Needs a human.", "Parked. Sorry!"],
+  DONE: ["Published! Next!", "Hot off the press!", "Out the door!"],
+  RESEARCHING: ["Didn't pass. Back to the sources.", "Check said no. Another try soon."],
+  WRITING: ["Didn't pass. Rewrite coming.", "Check said no. New draft soon."],
+  AWAITING_COMMENTS: ["Now we wait for replies."],
+  finder: ["New missions on the board!", "Leads found. Go get 'em!", "That's the hunt done."],
+  posted: ["Posted!", "Out in the world!", "Told the world."],
+  handoff: ["Passing the baton.", "Over to my colleague!", "Your turn, colleague."],
+  gathered: ["Sources gathered. PI's turn!", "Over to you, Professor.", "Notes are on your desk, Prof."],
+  off: ["Clocking out.", "Loop's off. Nap time.", "Shift's over!"],
+  other: ["Done here!", "That's a wrap.", "My work here is cited.", "Fin."],
+};
+function closer(c) {
+  const key = !c.running ? "off" : c.handoff ? (c.worker === "assistant" ? "gathered" : "handoff")
+    : c.from.step === "finder" ? "finder"
+    : (c.from.step === "1f916" || c.from.step === "bluesky") && c.outcome === "DONE" ? "posted"
+    : CLOSERS[c.outcome] ? c.outcome : "other";
+  return pick(Math.random, CLOSERS[key]);
+}
 
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
 const BAG = "researcher:bag";
-function nextCharacter(busy, worker) {           // worker: mostly that crew; none: anyone
-  if (worker && Math.random() >= FAVOR) {        // now and then, a visitor from the other crew
+function nextCharacter(busy, worker, favor = 1) {   // worker: that crew (share `favor`, else the other); none: anyone
+  if (worker && Math.random() >= favor) {        // now and then, a visitor from the other crew
     const others = [...new Set(CAST.map(k => ROSTER[k].worker))].filter(w => w !== worker);
     if (others.length) worker = pick(Math.random, others);
   }
@@ -916,18 +1764,25 @@ class Researcher {
     this.face = carry && carry.face ? carry.face : (this.rand() < 0.5 ? 1 : -1);
     this.y = 0; this.alpha = 1; this.squash = 1; this.tilt = 0; this.caffeine = 0;
     this.bubble = null; this.badge = null; this.headTop = 48; this.topY = 52; this.prev = null; this.clock = 0;
-    this.quipIn = stage.mood === "crew" ? between(this.rand, 6, 40) : between(this.rand, 4, 9);
+    this.quipIn = stage.mood === "crew" ? between(this.rand, 6, 40) : between(this.rand, 8, 18);
     this.begin(carry ? "idle" : "spawn");
   }
   say(text, dur) {
     if (this.stage.kind === "crew" && this.stage.talking(this)) return;   // a crew takes turns to speak
     this.bubble = { text, t: 0, dur: dur || readTime(text), y: null, lines: null }; }
   quip(key) {                                    // a line for the bit, or one from the big library
+    if (this.rand() < 0.5) return;               // about every other bit goes by without a word
     const own = QUOTES[key];
     this.say(own && this.rand() < 0.4 ? pick(this.rand, own) : nextQuip());
   }
   icon(kind, dur = 1.2) { this.badge = { kind, t: 0, dur }; }
+  line(key, chance = 0.6) {                      // a bit's own line, said over whatever bubble is up
+    const lines = BIT_LINES[key];
+    if (lines && this.rand() < chance) this.say(pick(this.rand, lines));
+  }
   begin(name, opts) {
+    if (this.act && this.act.cleanup) this.act.cleanup();   // a bit cut short tidies away its bird, cat or dollar
+    this.y = 0;
     this.prev = this.act && this.act.name;
     this.act = Object.assign({ name, t: 0 }, ACTIONS[name].init ? ACTIONS[name].init(this, opts) : {});
   }
@@ -940,10 +1795,21 @@ class Researcher {
     delete table[after];
     this.begin(weighted(this.rand, table));
   }
-  leave() {
+  settle() { this.tilt = 0; this.y = 0; this.squash = 1; this.badge = null; this.caffeine = 0; this.next = null; }
+  leave(text) {
     if (this.leaving) return;
-    this.leaving = true; this.tilt = 0; this.y = 0; this.badge = null; this.caffeine = 0;
-    this.begin("despawn");
+    this.leaving = true; this.settle();
+    if (text && !REDUCE) { this.next = ["despawn", { quiet: true }]; this.begin("farewell", { text }); }
+    else this.begin("despawn");
+  }
+  chase() {                                      // the mission moved on: follow it to its next step
+    if (this.leaving) return;
+    this.settle(); this.mood = this.stage.mood;
+    this.begin("chase");
+  }
+  arrive() {
+    const lines = STEP_LINES[this.stage.mood];
+    if (lines && this.rand() < 0.35) this.say(pick(this.rand, lines));
   }
   poke() {
     if (this.leaving || ["spawn", "trip", "wave", "despawn", "sleep"].includes(this.act.name)) return;
@@ -955,7 +1821,7 @@ class Researcher {
     if (this.bubble && (this.bubble.t += dt) > this.bubble.dur) this.bubble = null;
     if (this.badge && (this.badge.t += dt) > this.badge.dur) this.badge = null;
     if ((this.quipIn -= dt) <= 0) {               // now and then, an unprompted remark
-      this.quipIn = this.mood === "crew" ? between(this.rand, 25, 60) : between(this.rand, 8, 16);
+      this.quipIn = this.mood === "crew" ? between(this.rand, 25, 60) : between(this.rand, 16, 32);
       if (!this.bubble && !this.badge && !this.leaving && ["walk", "idle"].includes(this.act.name)) this.say(nextQuip());
     }
     const act = this.act;
@@ -967,24 +1833,23 @@ class Researcher {
       if (CARRY[prop]) pose.armF = CARRY[prop];
       pose.props = (P, g) => PROPS[prop](P, this.a, g.handF[0], g.handF[1]);
     }
+    if (this.soot > 0) { this.soot -= dt; pose = Object.assign({}, pose, { soot: true }); }   // after a lab mishap
     this.pose = pose;
     if (this.act === act && act.done && !this.gone) this.chooseNext();
   }
 }
 
-// ---------- stages: a canvas laid over a card or the agent pills ----------
+// ---------- stages: a canvas laid over a card or the pipeline strip ----------
 
-const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;
-const PILL_HEADROOM = 84;   // the offscreen sprite canvas and the feet's place in it
+const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;   // the offscreen sprite canvas and the feet's place in it
 const stages = [];
 
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "pill" ? "pill" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href"));
-    this.mood = kind === "pill" ? "busy" : kind === "crew" ? "crew" : host.dataset.lab || "busy";
-    const lit = kind === "pill" && host.querySelector(".agent.on[data-worker]");
-    this.worker = (lit ? lit.dataset.worker : host.dataset.worker) || null;   // whose crew visits
+    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href"));
+    this.mood = kind === "crew" ? "crew" : host.dataset.lab || "busy";
+    this.worker = host.dataset.worker || null;   // whose crew visits a card
     this.canvas = document.createElement("canvas");
     this.canvas.className = "lab-stage";
     this.canvas.setAttribute("aria-hidden", "true");
@@ -993,71 +1858,59 @@ class Stage {
     this.off = this.layer(); this.ink = this.layer(); this.comp = this.layer();
     this.fx = []; this.marks = [];
     this.layout();
-    if ("ResizeObserver" in window) new ResizeObserver(() => this.layout()).observe(host);
-    host.addEventListener("mouseenter", () => this.resident && this.resident.poke());
+    this.ro = "ResizeObserver" in window ? new ResizeObserver(() => this.layout()) : null;
+    if (this.ro) this.ro.observe(host);
+    this.poke = () => this.resident && this.resident.poke();
+    host.addEventListener("mouseenter", this.poke);
     this.schedule();
   }
   layer() { const c = document.createElement("canvas"); c.width = OFF_W; c.height = OFF_H; return c.getContext("2d"); }
-  layout() {
-    const dpr = window.devicePixelRatio || 1;
-    if (!this.host.isConnected || !this.host.clientWidth) return;   // detached or hidden: keep the last layout
-    if (this.kind === "pill") {
-      const pills = [...this.host.querySelectorAll(".agent")];
-      const on = this.host.querySelector(".agent.on") || pills[0];
-      if (!on) return;
-      const row = pills.filter(p => Math.abs(p.offsetTop - on.offsetTop) < 4);
-      this.canvas.style.top = -PILL_HEADROOM + "px";           // room above for speech bubbles
-      this.canvas.style.height = on.offsetTop + PILL_HEADROOM + "px";
-      this.cssW = this.host.clientWidth; this.cssH = on.offsetTop + PILL_HEADROOM;
-      this.platforms = row.map(p => [p.offsetLeft, p.offsetLeft + p.offsetWidth]);
-      this.home = [on.offsetLeft, on.offsetLeft + on.offsetWidth];
-    } else {
-      this.cssW = this.host.clientWidth; this.cssH = this.canvas.clientHeight || 100;
+  // The page swapped in a fresh copy of this stage's card: move the canvas and whoever is on it across.
+  adopt(host) {
+    if (this.ro) { this.ro.unobserve(this.host); this.ro.observe(host); }
+    this.host.removeEventListener("mouseenter", this.poke);
+    this.host = host; host.appendChild(this.canvas);
+    host.addEventListener("mouseenter", this.poke);
+    if (this.kind === "card") {                  // the fresh copy may name a new worker running it
+      this.mood = host.dataset.lab || "busy"; this.worker = host.dataset.worker || null;
+      if (this.resident) this.resident.mood = this.mood;
     }
-    this.W = Math.floor(this.cssW); this.H = Math.floor(this.cssH);
-    this.ground = this.kind === "pill" ? this.H - 1 : this.H - 9;     // the row the soles stand on
-    this.canvas.width = Math.round(this.cssW * dpr); this.canvas.height = Math.round(this.cssH * dpr);
+    this.layout();
+  }
+  kill() { if (this.ro) this.ro.disconnect(); this.canvas.remove(); }
+  cast() { return this.resident ? [this.resident] : []; }
+  size(cssW, cssH, ground) {
+    const dpr = window.devicePixelRatio || 1;
+    this.cssW = cssW; this.cssH = cssH;
+    this.W = Math.floor(cssW); this.H = Math.floor(cssH);
+    this.ground = ground;                                            // the row the soles stand on
+    this.canvas.width = Math.round(cssW * dpr); this.canvas.height = Math.round(cssH * dpr);
     this.dpr = dpr;
-    if (this.resident) { const [lo, hi] = this.range(); this.resident.x = clamp(this.resident.x, lo - 40, hi + 40); }
+    const [lo, hi] = this.range();
+    for (const r of this.cast()) if (!r.leaving) r.x = clamp(r.x, lo - 40, hi + 40);
     if (REDUCE) this.draw();
   }
-  range() {
-    if (this.kind === "pill") {
-      const p = this.platforms || [[8, this.W - 8]];
-      return [p[0][0] + 6, p[p.length - 1][1] - 6];
-    }
-    return [20, this.W - 20];
+  layout() {
+    if (!this.host.isConnected || !this.host.clientWidth) return;   // detached or hidden: keep the last layout
+    const h = this.canvas.clientHeight || 100;
+    this.size(this.host.clientWidth, h, Math.floor(h) - 9);
   }
+  range() { return [20, this.W - 20]; }
   edgeFade(x) {                                  // fade in and out over the last stretch off-stage
     const [lo, hi] = this.range();
     return clamp(Math.min(x - (lo - EDGE), hi + EDGE - x) / 26, 0, 1);
   }
   spawnX(r) {
-    if (this.kind === "pill" && this.home) return between(r, this.home[0] + 8, this.home[1] - 8);
     const [lo, hi] = this.range();
     return between(r, lo + 20, hi - 20);
   }
   pickTarget(r, max = 220) {
-    if (this.kind === "pill") {                   // somewhere on a nearby pill, never in the gap between two
-      const near = (this.platforms || []).map(p => [Math.max(p[0] + 6, r.x - max), Math.min(p[1] - 6, r.x + max)])
-        .filter(([a, b]) => b > a);
-      const home = this.home && [this.home[0] + 6, this.home[1] - 6];
-      const [a, b] = home && (r.rand() < 0.65 || !near.length) ? home : pick(r.rand, near);
-      return between(r.rand, a, b);
-    }
     const [lo, hi] = this.range();
     let x = between(r.rand, lo, hi);
     if (Math.abs(x - r.x) < 24) x = r.x + (r.rand() < 0.5 ? -1 : 1) * between(r.rand, 36, 100);
     return clamp(clamp(x, r.x - max, r.x + max), lo, hi);   // a stroll, not a cross-country hike
   }
-  hop(x) {                                         // jump over the gaps between pills
-    if (this.kind !== "pill" || !this.platforms) return 0;
-    for (let i = 0; i + 1 < this.platforms.length; i++) {
-      const a = this.platforms[i][1] - 2, b = this.platforms[i + 1][0] + 2;
-      if (x > a && x < b) return Math.sin((x - a) / (b - a) * Math.PI) * 12;
-    }
-    return 0;
-  }
+  hop() { return 0; }                              // cards are flat
   schedule() {
     const t = now();
     let rec = memory.get(this.key);
@@ -1071,7 +1924,7 @@ class Stage {
   spawn(rec, resume) {
     if (!rec) {
       const busy = new Set(stages.filter(s => s !== this && s.resident).map(s => s.resident.a.kind));
-      rec = { kind: nextCharacter(busy, this.worker), seed: Math.floor(Math.random() * 2 ** 31), born: now(), worker: this.worker,
+      rec = { kind: nextCharacter(busy, this.worker, FAVOR), seed: Math.floor(Math.random() * 2 ** 31), born: now(), worker: this.worker,
               life: between(Math.random, LIFE_MIN, LIFE_MAX) };
       memory.set(this.key, rec);
     }
@@ -1089,17 +1942,31 @@ class Stage {
       r.update(dt);
       if (r.gone) { this.resident = null; this.nextAt = t + between(Math.random, GAP_MIN, GAP_MAX); this.fx.length = 0; }
     }
+    this.tick(dt);
+  }
+  tick(dt) {
     for (const p of this.fx) {
       p.life -= dt; p.vy -= (p.g || 0) * dt;
       p.x += p.vx * dt + (p.sway ? Math.sin(p.life * p.sway) * 0.6 : 0); p.y += p.vy * dt;
-      if (p.floor && p.y <= 0) { p.y = 0; p.vx *= 0.5; p.vy = 0; p.g = 0; }
+      if (p.trail) p.trail(p, dt);
+      if (p.floor && p.y <= 0) {
+        p.y = 0;
+        if (p.land && !p.landed) { p.landed = true; p.land(p); }
+        if (p.bounce && Math.abs(p.vy) > 25) { p.vy = -p.vy * p.bounce; p.vx *= 0.7; }
+        else { p.vx *= 0.5; p.vy = 0; p.g = 0; }
+      }
     }
     this.fx = this.fx.filter(p => p.life > 0);
     this.marks = this.marks.filter(m => (m.life -= dt) > 0);
   }
 
   // effects; x is in pixels from the left, y in pixels up from the floor
-  add(p) { if (this.fx.length < 140) this.fx.push(Object.assign({ vx: 0, vy: 0, size: 2, max: p.life }, p)); }
+  add(p) {
+    if (this.fx.length >= 140) return null;
+    const q = Object.assign({ vx: 0, vy: 0, size: 2, max: p.life }, p);
+    this.fx.push(q);
+    return q;                                    // so a bit can steer its bird, cat or rocket
+  }
   dust(x, n) { for (let i = 0; i < n; i++) this.add({ kind: "smoke", x, y: 2, vx: (Math.random() - 0.5) * 60, vy: Math.random() * 16, life: 0.5, size: 4 }); }
   dirt(x, face) { for (let i = 0; i < 6; i++) this.add({ kind: "px", c: "#7a5230", x, y: 2, vx: -face * (12 + Math.random() * 28), vy: 36 + Math.random() * 20, g: 120, life: 0.9, floor: true }); }
   steam(x, y) { this.add({ kind: "px", c: "#d5d8dc", x: x + (Math.random() - 0.5) * 4, y, vy: 12, life: 1, sway: 6, fade: true }); }
@@ -1124,10 +1991,10 @@ class Stage {
     for (const m of this.marks) {
       if (m.kind === "hole") { ctx.fillStyle = "rgba(60,40,25,.55)"; ctx.fillRect(Math.round(m.x - m.n), G - 1, m.n * 2 + 1, 3); }
     }
-    const r = this.resident;
-    if (r && r.pose) this.drawResearcher(ctx, r);
+    const cast = this.cast();
+    for (const r of cast) if (r.pose) this.drawResearcher(ctx, r);
     for (const p of this.fx) this.drawFx(ctx, p);
-    if (r) this.drawOverlay(ctx, r);
+    for (const r of cast) this.drawOverlay(ctx, r);
   }
   drawResearcher(ctx, r) {
     const { off, ink, comp } = this, p = r.pose;
@@ -1136,6 +2003,11 @@ class Stage {
     let peak = 0;
     const P = (x, y, w, h, c) => { if (c && w > 0 && h > 0 && y + h > peak) peak = y + h; paint(x, y, w, h, c); };
     const g = drawBody(P, r.a, p, r.clock);
+    if (r.flower) {                              // tucked behind an ear: a little cross of petals
+      const fx = -6, fy = g.head + 9;
+      P(fx + 1, fy, 1, 3, r.flower); P(fx, fy + 1, 3, 1, r.flower);
+      P(fx + 1, fy + 1, 1, 1, r.flower === "#ffd43b" ? "#e8590c" : "#ffd43b");
+    }
     if (p.props) {
       p.props(P, g);
       const [hx, hy] = g.handF; P(hx - 1, hy - 1, 3, 3, r.a.skin);   // fingers in front of what they hold
@@ -1149,8 +2021,7 @@ class Stage {
     comp.clearRect(0, 0, OFF_W, OFF_H);
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) comp.drawImage(ink.canvas, dx, dy);
     comp.drawImage(off.canvas, 0, 0);
-    const jit = r.caffeine > 0 ? Math.round(Math.random() * 2 - 1) : 0;
-    const x = Math.round(r.x + jit), y = this.ground - Math.round(r.y);
+    const x = Math.round(r.x), y = this.ground - Math.round(r.y);
     ctx.save();
     ctx.globalAlpha = clamp(r.alpha, 0, 1);
     ctx.translate(x, y + 1);
@@ -1162,14 +2033,20 @@ class Stage {
   }
   drawFx(ctx, p) {
     const x = Math.round(p.x), y = this.ground - Math.round(p.y);
-    ctx.globalAlpha = p.fade ? clamp(p.life / p.max * 1.5, 0, 1) : 1;
+    ctx.globalAlpha = (p.fade ? clamp(p.life / p.max * 1.5, 0, 1) : 1) * (p.fadeIn ? clamp((p.max - p.life) / 0.6, 0, 1) : 1);
     switch (p.kind) {
+      case "map": {
+        const map = p.frames ? p.frames[Math.floor((p.max - p.life) * (p.fps || 8)) % p.frames.length] : p.map;
+        drawMap(ctx, map, x, y, p.flip || 1, p.rot || 0, p.pal);
+        break;
+      }
+      case "icon": drawIcon(ctx, p.map, x - (p.map[0].length >> 1), y - p.map.length, 1); break;
       case "px": ctx.fillStyle = p.c; ctx.fillRect(x, y, p.size, p.size); break;
       case "smoke": {
         const s = Math.round(p.size + (1 - p.life / p.max) * 6);
         ctx.globalAlpha = clamp(p.life / p.max, 0, 1) * 0.8;
-        ctx.fillStyle = "#e4e6ea"; ctx.fillRect(x - (s >> 1), y - (s >> 1), s, s);
-        ctx.fillStyle = "#b8bcc4"; ctx.fillRect(x - (s >> 1), y + s - (s >> 1) - 2, s, 2);
+        ctx.fillStyle = p.c || "#e4e6ea"; ctx.fillRect(x - (s >> 1), y - (s >> 1), s, s);
+        ctx.fillStyle = p.c ? shade(p.c, 0.8) : "#b8bcc4"; ctx.fillRect(x - (s >> 1), y + s - (s >> 1) - 2, s, 2);
         break;
       }
       case "z": { ctx.fillStyle = "#7aa7ff"; for (let r = 0; r < 5; r++) for (let c = 0; c < 3; c++) if (Z[r][c] === "z") ctx.fillRect(x + c * 2, y + r * 2 - 10, 2, 2); break; }
@@ -1217,6 +2094,121 @@ class Stage {
     ctx.fillStyle = fg; ctx.textBaseline = "middle";
     b.lines.forEach((line, i) => ctx.fillText(line, x + 6, ty + 3 + LH * i + LH / 2 + 0.5));
     ctx.globalAlpha = 1;
+  }
+}
+
+// The pipeline strip. Each busy worker's lit step gets its own researcher, from that worker's crew, who stays
+// as long as the step is lit, runs after the worker's mission when it moves on, and hands off to a newcomer
+// (a closing line, a walk off the nearer end) when the work ends, moves to another mission or passes to the
+// other worker. Each researcher stands on a slot: the stage with its own home step and mood.
+const crewKey = w => (CAST.some(k => ROSTER[k].worker === w) ? w : null);   // "desk" work: anyone
+const fits = (kind, w) => !crewKey(w) || ROSTER[kind].worker === w;
+class FlowStage extends Stage {
+  constructor(host) { super(host, "flow"); }
+  lit() {                                        // [{worker, step, slug}], from the strip's data-working
+    const f = this.host.closest("#flow");
+    try { return JSON.parse((f && f.dataset.working) || "[]"); } catch (e) { return []; }
+  }
+  layout() {
+    if (!this.host.isConnected || !this.host.clientWidth) return;
+    const nodes = [...this.host.querySelectorAll(".step, .check")];
+    if (!nodes.length) return;
+    this.platforms = nodes.map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]);
+    this.size(this.host.clientWidth, this.host.clientHeight, nodes[0].offsetTop - 1);
+    for (const c of Object.values(this.crew || {})) this.aim(c.slot, c.step);
+  }
+  aim(slot, step) {                              // point a slot at a step: where to stand, what kind of work
+    const el = step && this.host.querySelector(`.step[data-step="${step}"], .check[data-step="${step}"]`);
+    slot.home = el ? this.span(el) : null;
+    slot.mood = step || "busy";
+  }
+  span(el) {                                     // where a researcher can stand on a step; a check is just a post
+    const a = el.offsetLeft, b = a + el.offsetWidth, c = (a + b) / 2;
+    return el.classList.contains("check") ? [c - 3, c + 3] : [a + 8, Math.max(a + 9, b - 8)];
+  }
+  range() {
+    const p = this.platforms || [[8, (this.W || 200) - 8]];
+    return [p[0][0] + 6, p[p.length - 1][1] - 6];
+  }
+  // On a slot, `this.home` is that researcher's own step.
+  spawnX(r) { return this.home ? between(r, this.home[0], this.home[1]) : super.spawnX(r); }
+  pickTarget(r) { return this.home ? between(r.rand, this.home[0], this.home[1]) : r.x; }   // stay with the work
+  hop(x) {                                       // jump the gaps between steps, higher over a wide one
+    const p = this.platforms;
+    if (!p) return 0;
+    for (let i = 0; i + 1 < p.length; i++) {
+      const a = p[i][1] - 2, b = p[i + 1][0] + 2;
+      if (x > a && x < b) return Math.sin((x - a) / (b - a) * Math.PI) * clamp((b - a) * 0.3, 5, 26);
+    }
+    return 0;
+  }
+  cast() { return (this.leavers || []).concat(Object.values(this.crew || {}).map(c => c.r).filter(Boolean)); }
+  slot(step, slug, pending) {
+    const c = { step, slug, slot: Object.create(this), pending };
+    this.aim(c.slot, step);
+    return c;
+  }
+  schedule() {
+    this.leavers = []; this.crew = {};
+    const saved = memory.get(this.key) || {};
+    for (const e of this.lit()) {
+      const rec = saved[e.worker];
+      this.crew[e.worker] = this.slot(e.step, e.slug, now() + 0.4);
+      if (rec && rec.step === e.step && rec.slug === e.slug && ROSTER[rec.kind] && fits(rec.kind, e.worker)) this.spawn(e.worker, rec, true);
+    }
+  }
+  spawn(worker, rec, resume) {
+    const c = this.crew[worker];
+    if (!c) return;
+    if (!rec) {
+      const busy = new Set(stages.flatMap(s => s.cast()).map(r => r.a.kind));
+      rec = { kind: nextCharacter(busy, crewKey(worker)), seed: Math.floor(Math.random() * 2 ** 31) };
+    }
+    c.rec = Object.assign({}, rec, { step: c.step, slug: c.slug });
+    c.r = new Researcher(c.slot, c.rec, resume ? rec : null);
+    c.pending = null;
+    if (!resume) entered();
+    if (REDUCE) return;
+    // Still at most two on the page: the card visitors who have stayed longest head off to make room.
+    const cards = stages.filter(s => s.kind === "card" && s.resident && !s.resident.leaving).sort((a, b) => a.rec.born - b.rec.born);
+    let over = this.cast().filter(r => !r.leaving).length + cards.length - MAX_ON_STAGE;
+    for (const s of cards) if (over-- > 0) s.resident.leave();
+  }
+  save() {
+    const out = {};
+    for (const [w, c] of Object.entries(this.crew || {})) if (c.r) out[w] = Object.assign({}, c.rec, { x: c.r.x, face: c.r.face });
+    memory.set(this.key, out);
+  }
+  // assets/flow.js says one worker's step changed: chase, hand off, or clear its slot.
+  change(c) {
+    this.layout();
+    const w = c.worker, cur = this.crew[w], r = cur && cur.r;
+    if (!c.to.step) {
+      if (r) this.dismiss(r, closer(c));
+      delete this.crew[w];
+    } else if (r && c.from.step && c.to.slug && c.from.slug === c.to.slug) {
+      cur.step = c.to.step; cur.rec.step = c.to.step;
+      this.aim(cur.slot, c.to.step);
+      if (REDUCE) r.x = cur.slot.spawnX(r.rand); else r.chase();
+    } else {
+      if (r) this.dismiss(r, closer(c));
+      this.crew[w] = this.slot(c.to.step, c.to.slug, now() + (r ? 1.5 : 0.2));   // a beat behind the one leaving
+    }
+    if (REDUCE) still();
+  }
+  dismiss(r, text) {
+    if (REDUCE) return;
+    this.leavers.push(r);
+    r.leave(text);
+  }
+  update(dt) {
+    for (const [w, c] of Object.entries(this.crew)) {
+      if (c.pending && now() >= c.pending && !c.r) { if (c.slot.home) this.spawn(w); else c.pending = null; }
+    }
+    for (const r of this.cast()) r.update(dt);
+    for (const c of Object.values(this.crew)) if (c.r && c.r.gone) c.r = null;
+    this.leavers = this.leavers.filter(r => !r.gone);
+    this.tick(dt);
   }
 }
 
@@ -1281,38 +2273,71 @@ function wrapText(ctx, text, max) {
 
 // ---------- start ----------
 
-// Let waiting stages in, longest-waiting first, while fewer than MAX_ON_STAGE researchers are out.
+// Let waiting card stages in, longest-waiting first, while fewer than MAX_ON_STAGE researchers are out.
+// The strip's researcher never waits for a turn, but counts against the cards' share.
+// Arrivals come one at a time, a random 4-15 s apart, so two never walk in together.
+let nextEntry = 0;
+function entered() { nextEntry = Math.max(nextEntry, now() + between(Math.random, ENTRY_MIN, ENTRY_MAX)); }
 function admit() {
   const t = now();
-  let free = MAX_ON_STAGE - stages.filter(s => s.resident).length;
-  if (free <= 0) return;
-  const ready = stages.filter(s => !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
-  for (const s of ready) { if (free-- <= 0) break; s.spawn(); }
+  if (t < nextEntry || stages.reduce((n, s) => n + s.cast().length, 0) >= MAX_ON_STAGE) return;
+  const ready = stages.filter(s => s.kind === "card" && !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
+  if (ready.length) { ready[0].spawn(); entered(); }
 }
 
+// Reduced motion: still figures only, one on each lit step and the rest on cards while there's room.
+function still() {
+  const flow = stages.find(s => s.kind === "flow");
+  if (flow) for (const [w, c] of Object.entries(flow.crew || {})) if (!c.r && c.slot.home) flow.spawn(w, null, true);
+  let room = MAX_ON_STAGE - stages.reduce((n, s) => n + s.cast().length, 0);
+  for (const s of stages) if (s.kind === "card" && !s.resident && room-- > 0) s.spawn(null, true);
+  for (const s of stages) { for (const r of s.cast()) r.update(0); s.draw(); }
+  for (const c of crews) { c.slots.forEach(r => r.update(0)); c.draw(); }
+}
+
+// Find the stages on the page. After the page swaps in fresh HTML, a stage whose card (or strip) came
+// back keeps its researcher on the new copy; one whose card went away saves where it was and goes.
+// A worker's crew on the Settings page is its own kind of stage (Crew), found here too.
 const crews = [];
-function boot() {
-  document.querySelectorAll(".card[data-lab]").forEach(c => stages.push(new Stage(c, "card")));
-  const strip = document.querySelector(".agents[data-lab]");
-  if (strip && strip.querySelector(".agent.on")) stages.push(new Stage(strip, "pill"));
-  document.querySelectorAll(".crew[data-crew]").forEach(c => crews.push(new Crew(c)));
-  if (!stages.length && !crews.length) return;
-  addEventListener("pagehide", () => stages.forEach(s => s.save()));
-  if (REDUCE) {                                   // one still researcher per stage, no wandering
-    stages.slice(0, MAX_ON_STAGE).forEach(s => { if (!s.resident) s.spawn(null, true); s.resident.update(0); s.draw(); });
-    crews.forEach(c => { c.slots.forEach(r => r.update(0)); c.draw(); });
-    return;
+function rescan() {
+  for (const s of stages.slice()) {
+    if (s.host.isConnected) continue;
+    const sel = s.kind === "flow" ? ".flow-track[data-lab]"
+      : `.card[data-lab][href="${CSS.escape(s.host.getAttribute("href"))}"]`;
+    const next = document.querySelector(sel);
+    if (next && !stages.some(o => o.host === next)) { s.adopt(next); continue; }
+    s.save(); s.kill(); stages.splice(stages.indexOf(s), 1);
   }
+  document.querySelectorAll(".card[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
+  const track = document.querySelector(".flow-track[data-lab]");
+  if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
+  document.querySelectorAll(".crew[data-crew]").forEach(c => { if (!crews.some(o => o.host === c)) crews.push(new Crew(c)); });
+  start();
+}
+
+function tick(dt) {
+  admit();
+  for (const s of stages) { s.update(dt); s.draw(); }
+  for (const c of crews) { c.update(dt); c.draw(); }
+}
+let started = false;
+function start() {
+  if (REDUCE) { still(); return; }
+  if (started || !(stages.length || crews.length)) return;
+  started = true;
   let last = performance.now();
   const frame = t => {
-    const dt = clamp((t - last) / 1000, 0, 0.05); last = t;
-    admit();
-    for (const s of stages) { s.update(dt); s.draw(); }
-    for (const c of crews) { c.update(dt); c.draw(); }
+    tick(clamp((t - last) / 1000, 0, 0.05)); last = t;
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 }
-window.Researchers = { stages, crews, ROSTER, makeLook, ACTIONS, Stage, Researcher, Crew };   // handy from the console
+
+function boot() {
+  addEventListener("pagehide", () => stages.forEach(s => s.save()));
+  document.addEventListener("flowchange", e => { const f = stages.find(s => s.kind === "flow"); if (f) f.change(e.detail); });
+  rescan();
+}
+window.Researchers = { stages, crews, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS };   // handy from the console
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
