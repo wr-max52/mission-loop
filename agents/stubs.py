@@ -92,3 +92,23 @@ def chat(question: str, history: list[dict] | None = None, model: str | None = N
         async with Toolbox(["loop"], config_path=CONFIG) as tb:
             return await tb.call("loop_status", {})
     return f"Stub answer to: {question}\n" + asyncio.run(ask())
+
+STUB_COLORS = {"red": "#c0392b", "blue": "#3d6a9e", "green": "#2f9e44", "pink": "#e84393", "purple": "#7b5ea7",
+               "black": "#17110e", "white": "#f2f0f7", "yellow": "#f1c40f", "orange": "#e67e22", "brown": "#6e4527"}
+
+def avatar_models() -> list[dict]:
+    return [{"name": "stub", "vision": False}]
+
+def edit_avatar(spec: dict, message: str, look: dict | None = None, model: str | None = None,
+                image: str | None = None, errors: list[str] | None = None, catalog: dict | None = None) -> dict:
+    """No model: the first color word named becomes the hair color, so stub runs can try the studio's chat."""
+    from agents.avatar import REFUSAL, refuses
+    if refuses(message):
+        return {"reply": REFUSAL, "refused": True, "spec": spec, "change": {}, "model": "stub", "saw_image": False}
+    words = [w for w in STUB_COLORS if w in (message or "").lower()]
+    if not words:
+        return {"reply": "Stub designer: name a color and I'll dye the hair.", "refused": False, "spec": spec,
+                "change": {}, "model": "stub", "saw_image": False}
+    change = {"hair": STUB_COLORS[words[0]]}
+    return {"reply": f"Stub designer: {words[0]} hair it is.", "refused": False, "spec": dict(spec, **change),
+            "change": change, "model": "stub", "saw_image": False}
