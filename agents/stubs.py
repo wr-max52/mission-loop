@@ -70,6 +70,12 @@ def check_article(m: Mission, brief: ResearchBrief, article: Article, records=No
 def chat_models() -> list[str]:
     return ["stub"]
 
+def chat_catalog() -> list[dict]:
+    return [{"name": "stub", "family": "stub", "crew": "assistant"}]
+
+def chat_web() -> bool:
+    return False
+
 def chat(question: str, history: list[dict] | None = None, model: str | None = None) -> str:
     """No model: asks the real loop MCP server for its status, so stub runs still go through MCP."""
     import asyncio

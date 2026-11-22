@@ -10,6 +10,10 @@
  * to the Principal Investigator), and a card tagged with data-worker mostly gets visitors from that crew
  * (80% of them, FAVOR; now and then someone from the other crew drops by).
  * On the Settings page each worker's card has its whole crew standing about (a "crew" stage).
+ * Researcher Chat has a guide at the top of its panel (a "guide" stage): picking a model sends that model's
+ * researcher walking in (a worker's own model brings someone from that worker's crew, any other model someone
+ * from the crew its size suggests, the same person for every model of one family) and whoever stood there
+ * walks off. The chat says which with a "chatguide" event. Guides don't count toward MAX_ON_STAGE.
  *
  * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). Each
  * busy worker's lit step gets one researcher from that worker's crew, doing that step's kind of work.
@@ -968,6 +972,7 @@ const ACTIONS = {
       if (stepToward(r, s, s.tx, dt, r.a.speed * (r.stage.kind === "flow" ? 1.5 : 1))) {
         r.alpha = 1; r.y = 0; s.done = true;
         if (r.stage.kind === "flow") r.arrive();
+        else if (r.greet) { r.say(r.greet, Math.max(3.5, readTime(r.greet) + 1.5)); r.greet = null; }
         else if (r.rand() < GREET) r.say(r.rand() < 0.35 ? `${r.a.name}, reporting in.` : nextQuip());
         return stand({ carry: true });
       }
@@ -2290,6 +2295,57 @@ class Crew extends Stage {
   }
 }
 
+// ---------- a guide: the researcher for Researcher Chat's model, at the top of its panel ----------
+
+const hash = text => [...text].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0;
+// The same model always brings the same person: its crew, then its family picks who in that crew.
+function guideFor(crew, family) {
+  const cast = crewOf(crewKey(crew)).sort();
+  return cast[hash(family || "") % cast.length];
+}
+
+class Guide extends Stage {
+  constructor(host) {
+    super(host, "guide");
+    this.key = "researcher:guide"; this.mood = "crew"; this.leavers = [];
+  }
+  schedule() {}                                   // nobody visits on a timer: the model picker sends them
+  save() {}
+  cast() { return (this.leavers || []).concat(this.resident ? [this.resident] : []); }
+  // A model was picked: whoever stands here walks off and that model's researcher walks in. The same model
+  // as the last one shown in this tab (a page change) is simply standing there already.
+  show(d) {
+    if (!d || !d.model) return;
+    const kind = guideFor(d.crew, d.family), seed = hash(d.model);
+    const line = `${ROSTER[kind].name} here, on ${d.model}.`;
+    const r = this.resident;
+    if (r && r.a.kind === kind && this.model === d.model) return;
+    const same = !r && memory.get(this.key) === d.model;
+    this.model = d.model; memory.set(this.key, d.model);
+    if (r) { r.leave(); this.leavers.push(r); }
+    this.resident = null;
+    if (REDUCE || same) {
+      const [lo, hi] = this.range();
+      this.resident = new Researcher(this, { kind, seed }, { x: (lo + hi) / 2, face: 1 });
+      if (REDUCE) { this.leavers = []; this.resident.update(0); this.draw(); }
+      return;
+    }
+    this.want = { kind, seed, line, at: now() + (r ? 0.8 : 0.2) };
+  }
+  update(dt) {
+    if (this.want && now() >= this.want.at) {
+      const w = this.want;
+      this.want = null;
+      this.resident = new Researcher(this, w);
+      this.resident.greet = w.line;
+    }
+    for (const r of this.leavers) r.update(dt);
+    this.leavers = this.leavers.filter(r => !r.gone);
+    if (this.resident) this.resident.update(dt);
+    this.tick(dt);
+  }
+}
+
 const BUBBLE_FONT = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace", BUBBLE_MAX = 232;
 // Greedy word wrap; a word too long for a line gets broken rather than spilling out of the bubble.
 function wrapText(ctx, text, max) {
@@ -2334,13 +2390,14 @@ function still() {
   for (const s of stages) if (s.kind === "card" && !s.resident && room-- > 0) s.spawn(null, true);
   for (const s of stages) { for (const r of s.cast()) r.update(0); s.draw(); }
   for (const c of crews) { c.slots.forEach(r => r.update(0)); c.draw(); }
+  for (const g of guides) { for (const r of g.cast()) r.update(0); g.draw(); }
 }
 
 // Find the stages on the page. After the page swaps in fresh HTML, a stage whose card (or strip) came
 // back keeps its researcher on the new copy; one whose card went away saves where it was and goes. A card
 // that lost its data-lab (assets/flow.js takes it off when nobody works on it) sends its visitor off.
 // A worker's crew on the Settings page is its own kind of stage (Crew), found here too.
-const crews = [];
+const crews = [], guides = [];
 function rescan() {
   for (const s of stages.slice()) {
     if (!s.host.isConnected) {
@@ -2359,6 +2416,12 @@ function rescan() {
   const track = document.querySelector(".flow-track[data-lab]");
   if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
   document.querySelectorAll(".crew[data-crew]").forEach(c => { if (!crews.some(o => o.host === c)) crews.push(new Crew(c)); });
+  document.querySelectorAll(".chat-guide").forEach(c => {
+    if (guides.some(o => o.host === c)) return;
+    const g = new Guide(c);
+    guides.push(g);
+    if (window.chatGuide) g.show(window.chatGuide);   // the chat picked a model before this script ran
+  });
   start();
 }
 
@@ -2367,11 +2430,12 @@ function tick(dt) {
   for (const s of stages) { s.update(dt); s.draw(); }
   for (let i = stages.length - 1; i >= 0; i--) if (stages[i].dead) { stages[i].kill(); stages.splice(i, 1); }
   for (const c of crews) { c.update(dt); c.draw(); }
+  for (const g of guides) { g.update(dt); g.draw(); }
 }
 let started = false;
 function start() {
   if (REDUCE) { still(); return; }
-  if (started || !(stages.length || crews.length)) return;
+  if (started || !(stages.length || crews.length || guides.length)) return;
   started = true;
   let last = performance.now();
   const frame = t => {
@@ -2384,8 +2448,9 @@ function start() {
 function boot() {
   addEventListener("pagehide", () => stages.forEach(s => s.save()));
   document.addEventListener("flowchange", e => { const f = stages.find(s => s.kind === "flow"); if (f) f.change(e.detail); });
+  document.addEventListener("chatguide", e => guides.forEach(g => g.show(e.detail)));
   rescan();
 }
-window.Researchers = { stages, crews, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS };   // handy from the console
+window.Researchers = { stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS };   // handy from the console
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

@@ -1,5 +1,5 @@
 """The chat assistant, its read-only loop MCP server, and the agents' trails it reads."""
-import time
+import json, time
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
@@ -199,11 +199,12 @@ async def test_assistant_looks_then_answers(monkeypatch):
     boxes = []
     answer = await assistant.run_chat("what's going on?", toolbox_factory=lambda n: boxes.append(FakeToolbox(n)) or boxes[-1])
     assert answer == "The loop is running."
-    assert boxes[0].names == ["loop"] and boxes[0].calls == [("loop_status", {})]
+    assert boxes[0].names == ["loop", "fetch", "pages"] and boxes[0].calls == [("loop_status", {})]
     assert seen[0][2] == assistant.default_model() == llm.model_for("assistant")   # the copy the loop already loaded
     tool_msg = seen[1][0][-1]
     assert tool_msg["role"] == "tool" and len(tool_msg["content"]) == assistant.MAX_TOOL_CHARS
-    assert len(seen[0][0][0]["content"]) < 1800                     # the system prompt stays small: an app overview, no more
+    assert seen[0][0][0]["content"].startswith("You are Researcher Chat")
+    assert len(seen[0][0][0]["content"]) < 2200                     # the system prompt stays small: an app overview, no more
 
 async def test_assistant_answers_without_tools_once_its_budget_is_spent(monkeypatch):
     seen = scripted(monkeypatch, *[call("loop_status")] * assistant.MAX_TOOL_CALLS, say("Best guess."))
@@ -223,11 +224,32 @@ async def test_empty_question_needs_no_model(monkeypatch):
     scripted(monkeypatch)
     assert "Ask me" in await assistant.run_chat("   ", toolbox_factory=FakeToolbox)
 
-async def test_web_search_joins_only_with_a_key(monkeypatch):
+async def test_web_tools_and_search_only_with_a_key(monkeypatch):
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)
-    assert assistant.servers() == ["loop"]
+    assert assistant.servers() == ["loop", "fetch", "pages"] and not assistant.web_search()
     monkeypatch.setenv("BRAVE_API_KEY", "k")
-    assert assistant.servers() == ["loop", "search"]
+    assert assistant.servers() == ["loop", "fetch", "pages", "search"] and assistant.web_search()
+    cfg = json.loads(assistant.CONFIG.read_text())
+    assert all(name in cfg for name in assistant.servers())          # every one is an MCP server in mcp.json
+
+async def test_web_results_get_more_room_than_loop_results(monkeypatch):
+    class WebBox(FakeToolbox):
+        def __init__(self, names):
+            super().__init__(names)
+            self.server = {"loop_status": "loop", "fetch": "fetch"}
+        async def call(self, name, args):
+            return "y" * 10_000
+    seen = scripted(monkeypatch, call("fetch"), call("loop_status"), say("done"))
+    await assistant.run_chat("read that page?", toolbox_factory=WebBox)
+    assert len(seen[1][0][-1]["content"]) == assistant.MAX_WEB_CHARS
+    assert len(seen[2][0][-1]["content"]) == assistant.MAX_TOOL_CHARS
+
+def test_model_crews(monkeypatch):
+    settings.save(assistant_model="small-test:1b", pi_model="big-test:30b")
+    assert assistant.crew("small-test:1b") == "assistant" and assistant.crew("big-test:30b") == "pi"
+    assert assistant.crew("other:70b") == "pi" and assistant.crew("other:8b") == "assistant"
+    assert assistant.crew("other:latest", "32.8B") == "pi" and assistant.crew("other:latest", "770M") == "assistant"
+    assert assistant.crew("mystery") == "assistant"
 
 async def test_assistant_uses_the_chosen_model(monkeypatch):
     seen = scripted(monkeypatch, say("ok"))
@@ -247,6 +269,7 @@ def test_model_list_and_pick(monkeypatch):
         def show(self, n): return NS(capabilities=caps.get(n))
     monkeypatch.setattr(ollama, "Client", Fake)
     assert assistant.models() == [default, "big-test:30b", "llama3:8b"]   # default first, tool users only
+    assert {c["name"]: c["family"] for c in assistant.catalog()}["llama3:8b"] == "llama3"
     assert set(hosts) == {settings.ollama_host()}                  # the configured LLM connection
     assert assistant.pick("llama3:8b") == "llama3:8b"
     assert assistant.pick("not-installed:1b") == default
@@ -291,12 +314,24 @@ def test_ask_passes_the_model_on(monkeypatch):
 def test_model_picker_lists_models_and_reports_ollama_down(monkeypatch):
     client = TestClient(ui.app)
     default = assistant.default_model()
-    monkeypatch.setattr(ui.agents, "chat_models", lambda: [default, "llama3:8b"])
-    assert client.get("/chat/models").json() == {"models": [default, "llama3:8b"], "default": default}
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    found = [{"name": default, "family": "small-test", "crew": "assistant"}, {"name": "llama3:8b", "family": "llama", "crew": "assistant"}]
+    monkeypatch.setattr(ui.agents, "chat_catalog", lambda: found)
+    assert client.get("/chat/models").json() == {
+        "models": [default, "llama3:8b"], "default": default, "web": False,
+        "crews": {default: {"crew": "assistant", "family": "small-test"}, "llama3:8b": {"crew": "assistant", "family": "llama"}}}
     def down(): raise ConnectionError("no ollama")
-    monkeypatch.setattr(ui.agents, "chat_models", down)
+    monkeypatch.setattr(ui.agents, "chat_catalog", down)
     data = client.get("/chat/models").json()
-    assert data["models"] == [default] and "Ollama isn't reachable" in data["error"]
+    assert data["models"] == [default] and "Ollama isn't reachable" in data["error"] and default in data["crews"]
+
+def test_panel_is_researcher_chat_with_a_guide_only_while_animations_are_on():
+    client = TestClient(ui.app)
+    html = client.get("/settings").text
+    assert "<strong>Researcher Chat</strong>" in html and 'data-sprites="/assets/researchers.js"' in html
+    settings.set_animations(False)
+    html = client.get("/published").text
+    assert "Researcher Chat" in html and 'class="chat-guide"' not in html and "researchers.js" not in html
 
 def test_chat_ask_refuses_other_sites_and_reports_failures(monkeypatch):
     client = TestClient(ui.app)

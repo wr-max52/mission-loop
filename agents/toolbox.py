@@ -21,6 +21,7 @@ class Toolbox:
         self.config_path = config_path or CONFIG
         self.tools: list[dict] = []        # Ollama tool schemas
         self._owner: dict[str, ClientSession] = {}
+        self.server: dict[str, str] = {}   # tool name -> the mcp.json server it came from
 
     async def __aenter__(self):
         self._stack = AsyncExitStack()
@@ -39,6 +40,7 @@ class Toolbox:
             await session.initialize()
             for tool in (await session.list_tools()).tools:
                 self._owner[tool.name] = session
+                self.server[tool.name] = name
                 self.tools.append({"type": "function", "function": {
                     "name": tool.name,
                     "description": tool.description or "",

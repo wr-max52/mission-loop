@@ -9,6 +9,7 @@ async def test_toolbox_round_trip(tmp_path):
     cfg.write_text(json.dumps({"echo": {"command": sys.executable, "args": [str(FIXTURE)]}}))
     async with Toolbox(["echo"], config_path=cfg) as tb:
         assert [t["function"]["name"] for t in tb.tools] == ["echo"]
+        assert tb.server == {"echo": "echo"}            # which server each tool came from
         assert "echo: hi" in await tb.call("echo", {"text": "hi"})
         assert (await tb.call("nope", {})).startswith("ERROR: unknown tool")
 

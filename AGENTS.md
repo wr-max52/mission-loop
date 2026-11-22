@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 391 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 394 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -226,22 +226,31 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 - Tools are MCP servers, always: a new agent tool goes in a small server module registered in `mcp.json`
   (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
   so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`.
-- Chat assistant: `agents/assistant.py` answers the human's questions about the loop: the chat bubble at the
-  bottom right of every UI page opens it in a panel over the left third, or `python run.py ask "..." [--model]`.
-  It needs Ollama but not the loop, so it works with the loop stopped. The panel has a model picker (installed
-  Ollama models that can call tools; the default is shared with the loop, any other is loaded beside it), and keeps the
-  conversation in that browser tab only, so the page's refreshes don't wipe it. It is not a worker: a short prompt that explains the app, at most 5 tool calls, tool results cut
-  to 2,500 characters, only the last 4 messages the page sends back, no memory and nothing saved. Its tools come
-  from the `loop` MCP server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`, `agent_steps`,
-  `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`), plus `search` when
-  `BRAVE_API_KEY` is set. Mission listings name each mission's epic. All but `add_mission` and `set_mission_epic`
-  only read the database, `data/activity.json`, the channels' state files, the trails and
-  `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the UI's Add
-  mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones included, in an
-  epic like the Epic field on its page (`orchestrator.assign_epic`). Neither changes a mission's stage or work. The
-  panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists). By default it uses the small model with
-  the loop's options (`settings.chat_model`: `chat_model` in settings.json, then `MISSION_LOOP_CHAT_MODEL`, else
-  the Research Assistant's model), so Ollama reuses the loaded copy instead of reloading it.
+- Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and looks things up on the
+  web: the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
+  `python run.py ask "..." [--model]`. It needs Ollama but not the loop, so it works with the loop stopped. The panel
+  has a model picker (installed Ollama models that can call tools; the default is shared with the loop, any other is
+  loaded beside it), and keeps the conversation in that browser tab only, so the page's refreshes don't wipe it. With
+  animations on, a pixel researcher for the picked model walks in at the top of the panel and says which model it
+  is (`Guide` in `assets/researchers.js`, sent by the chat's `chatguide` event; the script loads the first time the
+  panel opens): a worker's own model brings someone from that worker's crew, any other model the tenured crew from
+  20B parameters up (`assistant.crew`, `BIG_MODEL`), else the young one, and the model's family picks who, so one
+  model always brings the same person. Picking another model sends the last one walking off. It is not a worker: a
+  short prompt that explains the app, at most 8 tool calls in 3 minutes, tool results cut to 2,500 characters (web
+  pages and searches 4,000), only the last 4 messages the page sends back, no memory and nothing saved. Its tools
+  are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
+  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`,
+  `theorist_notes`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
+  `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
+  panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
+  `add_mission` and `set_mission_epic` only read the database, `data/activity.json`, the channels' state files, the
+  trails and `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the
+  UI's Add mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones
+  included, in an epic like the Epic field on its page (`orchestrator.assign_epic`). Neither changes a mission's
+  stage or work. The panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists).
+  By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
+  then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
+  reloading it.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -313,7 +322,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
-| Ask what is going on | the chat bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
+| Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
 | Pick each worker's model, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
 | Point at another Ollama | the LLM connection address on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Block a source site | add the domain to `blocked_domains.txt` |
