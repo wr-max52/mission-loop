@@ -76,6 +76,16 @@ function shade(hex, f) {
   const c = rgb(hex), k = f < 1 ? (1 - f) * 0.3 : Math.min(0.3, (f - 1) * 0.3), to = f < 1 ? COOL : WARM;
   return hexOf(c.map((v, i) => { const s = f < 1 ? v * f : v + (255 - v) * (f - 1); return s + (to[i] - s) * k; }));
 }
+// More colorful, the way handheld-era sprites are: saturation up, greys left grey, lightness kept.
+function vivid(hex, k = 1.4) {
+  const [r, g, b] = rgb(hex).map(v => v / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (d < 0.04) return hex;
+  const sat = d / (1 - Math.abs(2 * l - 1) || 1), s2 = Math.min(0.92, sat * k + 0.03), f = s2 / sat;
+  return hexOf([r, g, b].map(v => (l + (v - l) * f) * 255));
+}
+// The dark of a color, for an outline: sprites of that era are edged in a deep shade of what they outline, not in black.
+const tintOf = (r, g, b) => [Math.round(r * 0.26 + 12), Math.round(g * 0.22 + 9), Math.round(b * 0.28 + 22)];
+function darkOf(hex) { const c = rgb(hex); return hexOf(tintOf(c[0], c[1], c[2])); }
 // A soft line: the dark of a part's own color, for the lines inside the figure (an arm across the chest, one leg
 // in front of the other). Where one ends up on the silhouette, the outline pass turns it to ink like the rest.
 const SOFT = new Set(), softOf = new Map();
@@ -99,7 +109,7 @@ const memory = {
 
 const INK = "#1d1b22", MOUTH = "#7a3434", WHITE = "#ffffff", BLUSH = "#ff8f9e";
 const SKIN = ["#ffe1c6", "#f5cba3", "#e8b38a", "#d49a6a", "#b97c4e", "#9a6038", "#7a4628", "#58321d"];
-const BOOKS = ["#b33939", "#227093", "#218c74", "#cc8e35", "#6d214f", "#40407a"];
+const BOOKS = ["#d63a3a", "#1f8fc4", "#1fa67f", "#f0a030", "#a02c7a", "#5a55c8"];
 const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", "#a3a3a3"];
 const IRIS = ["#6b3d22", "#2f5fa8", "#2f7d4f", "#7a5a22", "#4a3a7a", "#3b2a20"];
 
@@ -161,9 +171,9 @@ const crewOf = worker => {                        // a crew never ends up empty:
 
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
-  const one = v => (Array.isArray(v) ? pick(r, v) : v);
+  const one = v => { const c = Array.isArray(v) ? pick(r, v) : v; return typeof c === "string" && c[0] === "#" ? vivid(c) : c; };
   const a = { kind, seed, name: t.name, fav: t.fav || {}, worker: t.worker };
-  a.skin = SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)];
+  a.skin = vivid(SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)], 1.18);
   const deep = lum(a.skin) < 125;                                // darker skin: warmer shade, eyes that still read
   a.skinD = mix(shade(a.skin, 0.84), "#8a2f3c", 0.14); a.skinL = mix(a.skin, "#fff3dc", deep ? 0.3 : 0.45);
   a.cheek = mix(a.skin, "#ff5a6e", deep ? 0.2 : 0.28);
@@ -208,7 +218,7 @@ function makeLook(kind, seed) {
   a.torso = 11 + Math.floor(r() * 3);         // 11..13
   a.width = pick(r, [11, 12, 12, 13]);
   a.speed = 12 + a.legs * 0.9 + r() * 4;      // px per second: an amble, 23..32
-  a.book = pick(r, BOOKS);
+  a.book = vivid(pick(r, BOOKS));
   a.phase = r() * 7;                          // so glasses glint and wisps sway out of step
   a.base = t.base || kind;                    // a custom sprite keeps its starting sprite's quirk unless it has its own
   a.maps = t.maps || null; a.propMap = t.propMap || null; a.quirk = t.quirk || null;
@@ -262,7 +272,12 @@ function art(P, a, rows, x0, yTop, pal) {
 
 function drawLeg(P, a, cx, off, lift, L, back) {
   const lf = lift ? 2 : 0, foot = cx - 1 + off, sc = back ? a.shoesD : a.shoes, line = soft(a.shoes);
-  limb(P, cx, L - 2, cx + off, lf + 4, 4, back ? a.pantsD : a.pants, soft(a.pants));
+  const pc = back ? a.pantsD : a.pants, pl = soft(a.pants);
+  if (lift && L > 9) {                                            // a step: the knee leads, the shin follows
+    const kx = cx + Math.round(off * 0.5) + 2, ky = Math.round((L + lf) / 2) + 1;
+    limb(P, cx, L - 2, kx, ky, 4, pc, pl); limb(P, kx, ky, cx + off, lf + 4, 4, pc, pl);
+  } else limb(P, cx, L - 2, cx + off, lf + 4, 4, pc, pl);
+  if (!back && !off && !lift && L > 9) P(cx + 1, 6, 1, L - 9, shade(a.pants, 1.22));   // light down the shin
   if (!back && a.legsStyle !== "skirt") P(cx + off - 1, lf + 4, 4, 1, a.pantsD);   // the hem over the shoe
   P(foot - 1, lf, 7, 3, line); P(foot - 1, lf + 3, 6, 1, line);                    // a shoe with a rounded toe
   P(foot, lf + 2, 5, 1, sc); P(foot, lf + 1, 5, 1, a.sneaker ? (back ? "#c9ccd4" : "#ffffff") : shade(sc, 0.66));
@@ -288,6 +303,7 @@ function drawArm(P, a, spec, g, back) {
   const sleeve = back ? a.sleeveD : a.sleeve, skin = back ? a.skinD : a.skin, line = soft(a.sleeve), bare = soft(a.skin);
   limb(P, ax, sy, elbow[0], elbow[1], 3, sleeve, line);
   limb(P, elbow[0], elbow[1], hand[0], hand[1], 3, a.short ? skin : sleeve, a.short ? bare : line);
+  if (!back) P(ax, sy, 2, 1, shade(sleeve, 1.2));                                // light on the shoulder
   if (a.rolled) P(elbow[0] - 1, elbow[1] - 1, 3, 3, shade(sleeve, 1.16));       // the rolled-up cuff
   else if (a.short) P(elbow[0] - 1, elbow[1], 3, 1, shade(sleeve, 0.8));          // a short sleeve's hem
   pill(P, hand[0] - 1, hand[1] - 1, 3, 3, skin, bare);
@@ -311,6 +327,7 @@ function drawTorso(P, a, g) {
     P(tl, b, W, sh - b, c); P(tl + 1, sh, W - 2, 1, c);
     P(tl + 1, b, 2, sh - b + 1, cd); P(tl, b, 1, sh - b, line);
     P(tl + 3, b, W - 3, 1, cd);                                   // the hem
+    P(tl + 3, sh, W - 5, 1, shade(c, 1.2)); P(tl + 3, sh - 1, 1, 1, shade(c, 1.2));   // light on the shoulders
     return b;
   };
   // The chest is drawn a pixel back from the middle: the front arm hides the front edge of the torso.
@@ -328,6 +345,7 @@ function drawTorso(P, a, g) {
     case "labcoat": {
       const c = a.coat, cd = a.coatD, b = shell(c, 5, cd), line = soft(c);
       P(0 - 1, b, 1, 5, line); P(1 - 1, b, 1, 1, a.pantsD);               // the coat parts over the knees
+      if (g.stride) { P(tl - 1, b, 1, 4, cd); P(tl - 2, b, 1, 2, cd); }   // and its tails fly out behind on a stride
       P(0 - 1, hip + 1, 1, T - 6, cd);                                // buttoned up the middle
       P(1 - 1, hip + 1, 1, 1, "#9aa3b2"); P(1 - 1, hip + 4, 1, 1, "#9aa3b2");
       vneck(a.shirt, 6, cd);
@@ -423,6 +441,7 @@ function drawTorso(P, a, g) {
     case "trench": {
       const c = a.top, cd = a.topD, cl = shade(c, 1.2), b = shell(c, 6, cd), leather = "#5a3d24";
       P(0 - 1, b, 1, 6, soft(c));                                     // the back vent shows between the knees
+      if (g.stride) { P(tl - 1, b, 1, 5, cd); P(tl - 2, b, 1, 2, cd); }   // the coat swings on a stride
       P(1 - 1, hip + 2, 1, T - 4, cd);                                // double-breasted: the front laps over
       for (const y of [hip + 3, hip + 6]) { P(-2 - 1, y, 1, 1, leather); P(3 - 1, y, 1, 1, leather); }
       P(-1 - 1, sh - 3, 3, 4, a.shirt); P(0 - 1, sh - 3, 1, 3, a.shirtD);
@@ -879,7 +898,7 @@ function drawBody(P, a, p, t) {
   const L = p.sit ? 4 : Math.max(5, a.legs - 2 * (p.crouch || 0));
   const bob = p.bob || 0, hip = L + bob, sh = hip + a.torso - 1;
   const tl = -Math.ceil(a.width / 2), tr = tl + a.width - 1;
-  const g = { L, tl, tr, hip, sh, head: sh + 2 - (p.nod ? 1 : 0) };
+  const g = { L, tl, tr, hip, sh, head: sh + 2 - (p.nod ? 1 : 0), stride: p.sit ? 0 : Math.sign(p.legF || 0) };
   g.top = g.head + 11;
   g.crown = g.head + crownOf(a);
   g.handB = drawArm(P, a, p.armB, g, true);
@@ -905,67 +924,103 @@ function drawBody(P, a, p, t) {
 
 // ---------- props (hx, hy is the middle of the hand holding it) ----------
 
+// A round lens in a brass rim, 7 across, its middle at (cx, cy).
+function propLens(P, cx, cy, glint) {
+  const rows = [1, 2, 3, 3, 3, 2, 1];
+  for (let i = 0; i < 7; i++) {
+    const w = rows[i], y = cy + 3 - i;
+    P(cx - w, y, 2 * w + 1, 1, i < 2 ? "#f2c94c" : i > 4 ? "#a8780f" : "#d9a520");
+    if (i > 0 && i < 6) P(cx - w + 1, y, 2 * w - 1, 1, glint ? "#ffffff" : i < 3 ? "#d6f3ff" : i > 3 ? "#7cc4ee" : "#a9e1fb");
+  }
+  P(cx - 1, cy + 1, 1, 1, "#ffffff"); P(cx - 2, cy, 1, 1, "#ffffff");
+}
 const PROPS = {
-  tablet(P, a, hx, hy) { box(P, hx - 1, hy - 3, 8, 6, "#5f6670"); P(hx, hy - 2, 6, 4, "#bcd3e8"); P(hx + 4, hy + 1, 1, 1, "#ffffff"); },
-  laptop(P, a, hx, hy) {                        // open, tilted toward the viewer like the sketch
-    box(P, hx - 3, hy - 1, 12, 2, "#a3a9b1");
-    box(P, hx - 1, hy + 1, 10, 7, "#7d838b"); P(hx, hy + 2, 8, 5, "#bfe0f2"); P(hx + 5, hy + 5, 2, 1, "#ffffff");
+  tablet(P, a, hx, hy) {                        // a slate, its screen lit: a chart and a line of text
+    box(P, hx - 1, hy - 3, 8, 6, "#4a5266"); P(hx - 1, hy + 2, 8, 1, "#7a849c"); P(hx - 1, hy - 3, 8, 1, "#363c4d");
+    P(hx, hy - 2, 6, 4, "#4fb8ff"); P(hx, hy + 1, 6, 1, "#a8e2ff"); P(hx, hy - 2, 6, 1, "#2f8fe0");
+    P(hx + 2, hy, 3, 1, "#ffffff"); P(hx + 2, hy - 1, 1, 1, "#ffe066"); P(hx + 3, hy - 1, 1, 1, "#7ee787"); P(hx + 5, hy - 1, 1, 2, "#ff8fa3");
   },
-  phone(P, a, hx, hy) { box(P, hx, hy - 1, 3, 5, "#26262b"); P(hx, hy, 3, 3, "#7fd0ff"); },
-  book(P, a, hx, hy) {
-    box(P, hx - 1, hy - 3, 6, 8, a.book); P(hx - 1, hy - 3, 1, 8, shade(a.book, 0.65));
-    P(hx + 4, hy - 2, 1, 6, "#f6f0dc"); P(hx + 1, hy + 2, 3, 1, "#f1c40f");
+  laptop(P, a, hx, hy) {                        // open, tilted toward the viewer: an editor full of code
+    box(P, hx - 3, hy - 1, 12, 2, "#b9c0cc"); P(hx - 3, hy - 1, 12, 1, "#8b93a3"); for (let x = hx - 2; x < hx + 8; x += 2) P(x, hy, 1, 1, "#6b7488");
+    box(P, hx - 1, hy + 1, 10, 7, "#8b93a3"); P(hx - 1, hy + 7, 10, 1, "#c9ced8");
+    P(hx, hy + 2, 8, 5, "#1f2a4d"); P(hx, hy + 6, 8, 1, "#33416b"); P(hx, hy + 6, 1, 1, "#ff6b6b"); P(hx + 1, hy + 6, 1, 1, "#ffd43b");
+    P(hx + 1, hy + 5, 3, 1, "#7ee787"); P(hx + 5, hy + 5, 2, 1, "#ff9ec4"); P(hx + 2, hy + 4, 4, 1, "#79c0ff"); P(hx + 1, hy + 3, 2, 1, "#ffd43b"); P(hx + 4, hy + 3, 3, 1, "#7ee787"); P(hx + 6, hy + 2, 1, 1, "#ffffff");
   },
-  briefcase(P, a, hx, hy) { P(hx - 1, hy - 2, 3, 1, INK); box(P, hx - 4, hy - 9, 9, 6, "#2b2b30"); P(hx, hy - 5, 1, 1, "#c9a227"); P(hx - 4, hy - 6, 9, 1, "#3d3d44"); },
-  camera(P, a, hx, hy) { box(P, hx - 1, hy - 2, 7, 5, "#2f3138"); box(P, hx + 6, hy - 1, 2, 3, "#555c66"); P(hx + 3, hy + 3, 2, 1, "#dddddd"); P(hx, hy + 2, 1, 1, "#e74c3c"); },
+  phone(P, a, hx, hy) {
+    box(P, hx, hy - 1, 3, 5, "#2f3440"); P(hx, hy, 3, 3, "#4fb8ff"); P(hx, hy + 2, 3, 1, "#a8e2ff");
+    P(hx, hy + 1, 1, 1, "#ff8fa3"); P(hx + 2, hy + 1, 1, 1, "#ffe066"); P(hx + 1, hy, 1, 1, "#7ee787"); P(hx + 1, hy + 3, 1, 1, "#5a6275");
+  },
+  book(P, a, hx, hy) {                          // a hardback: spine, page edges, a gold title and a ribbon
+    const c = a.book;
+    box(P, hx - 1, hy - 3, 6, 8, c); P(hx - 1, hy - 3, 1, 8, shade(c, 0.6)); P(hx, hy - 3, 1, 8, shade(c, 1.25)); P(hx, hy + 4, 5, 1, shade(c, 1.25));
+    P(hx + 4, hy - 2, 1, 6, "#fff4d6"); P(hx + 4, hy - 2, 1, 1, "#d9c9a0"); P(hx + 4, hy, 1, 1, "#d9c9a0"); P(hx + 4, hy + 2, 1, 1, "#d9c9a0");
+    P(hx + 1, hy + 2, 3, 1, "#ffd43b"); P(hx + 1, hy, 2, 1, "#ffd43b"); P(hx + 2, hy - 5, 1, 3, "#e03131");
+  },
+  briefcase(P, a, hx, hy) {                     // leather, brass at the corners and the lock
+    P(hx - 2, hy - 3, 5, 1, "#5a3418"); P(hx - 2, hy - 2, 1, 1, "#5a3418"); P(hx + 2, hy - 2, 1, 1, "#5a3418");
+    box(P, hx - 4, hy - 9, 9, 6, "#8a5226"); P(hx - 4, hy - 4, 9, 1, "#b0713a"); P(hx - 4, hy - 9, 9, 1, "#633815"); P(hx - 4, hy - 6, 9, 1, "#633815");
+    P(hx, hy - 6, 1, 2, "#ffd43b"); P(hx - 4, hy - 9, 1, 1, "#e0b64a"); P(hx + 4, hy - 9, 1, 1, "#e0b64a"); P(hx - 4, hy - 4, 1, 1, "#e0b64a"); P(hx + 4, hy - 4, 1, 1, "#e0b64a");
+    P(hx - 2, hy - 5, 1, 1, "#e0b64a"); P(hx + 2, hy - 5, 1, 1, "#e0b64a");
+  },
+  camera(P, a, hx, hy) {                        // a silver top plate, a glass lens, a flash and the red shutter
+    box(P, hx - 1, hy - 2, 7, 5, "#343a4a"); P(hx - 1, hy + 2, 7, 1, "#c9ced8"); P(hx - 1, hy - 2, 7, 1, "#232733"); P(hx - 1, hy - 1, 2, 3, "#4a5266");
+    box(P, hx + 6, hy - 1, 2, 3, "#5a6275"); P(hx + 7, hy - 1, 1, 3, "#4fb8ff"); P(hx + 7, hy + 1, 1, 1, "#d6f3ff");
+    P(hx + 3, hy + 3, 2, 1, "#e9ecf2"); P(hx, hy + 3, 1, 1, "#ff4d4d"); P(hx + 4, hy + 1, 1, 1, "#ffe066"); P(hx + 2, hy, 2, 1, "#ff9f1c");
+  },
   magnifier(P, a, hx, hy, glint) {
-    limb(P, hx + 1, hy - 1, hx + 3, hy - 3, 2, "#6d4c41");
-    P(hx + 3, hy - 10, 7, 7, INK); P(hx + 4, hy - 9, 5, 5, glint ? "#ffffff" : "#bfe9ff"); P(hx + 5, hy - 6, 1, 1, "#ffffff");
+    limb(P, hx + 1, hy - 1, hx + 3, hy - 3, 2, "#a0622d"); P(hx + 1, hy - 1, 1, 1, "#c98646");
+    propLens(P, hx + 6, hy - 7, glint);
   },
   magnifierUp(P, a, hx, hy) {                   // carried at the ready, lens up
-    limb(P, hx + 1, hy + 1, hx + 2, hy + 3, 2, "#6d4c41");
-    P(hx + 1, hy + 4, 7, 7, INK); P(hx + 2, hy + 5, 5, 5, "#bfe9ff"); P(hx + 3, hy + 8, 1, 1, "#ffffff"); P(hx + 2, hy + 5, 5, 1, "#9fd3f2");
+    limb(P, hx + 1, hy + 1, hx + 2, hy + 3, 2, "#a0622d"); P(hx + 1, hy + 2, 1, 1, "#c98646");
+    propLens(P, hx + 4, hy + 7, false);
   },
-  mug(P, a, hx, hy) {
-    box(P, hx - 1, hy - 2, 5, 5, "#f7f7f7"); P(hx - 1, hy, 5, 1, "#e84393"); P(hx - 1, hy + 2, 5, 1, "#6b3e26");
-    P(hx - 3, hy - 1, 2, 3, INK); P(hx - 2, hy, 1, 1, "#f7f7f7");
+  mug(P, a, hx, hy) {                           // a favorite mug, full
+    P(hx - 3, hy - 1, 2, 3, "#c9ced8"); P(hx - 2, hy, 1, 1, "#8b93a3");
+    box(P, hx - 1, hy - 2, 5, 5, "#ffffff"); P(hx + 3, hy - 2, 1, 4, "#d5dae3"); P(hx - 1, hy - 2, 5, 1, "#d5dae3");
+    P(hx - 1, hy, 5, 1, "#ff5fa2"); P(hx + 1, hy - 1, 1, 1, "#ff5fa2"); P(hx - 1, hy + 2, 5, 1, "#7a4a22"); P(hx, hy + 2, 2, 1, "#c89b6a");
   },
 };
 function propClipboard(P, hx, hy, lines) {
-  box(P, hx - 1, hy - 4, 8, 10, "#a0703a"); P(hx, hy - 3, 6, 8, "#ffffff"); P(hx + 2, hy + 5, 2, 1, "#9aa0a6");
-  for (let i = 0; i < Math.min(lines, 4); i++) P(hx + 1, hy + 2 - i * 2, 2 + ((i * 7) % 3), 1, "#5f6368");
+  box(P, hx - 1, hy - 4, 8, 10, "#b9793a"); P(hx - 1, hy - 4, 8, 1, "#8a5226"); P(hx - 1, hy - 4, 1, 10, "#8a5226");
+  P(hx, hy - 3, 6, 8, "#ffffff"); P(hx, hy - 3, 6, 1, "#d5dae3");
+  P(hx + 1, hy + 5, 4, 1, "#8b93a3"); P(hx + 2, hy + 5, 2, 1, "#e9ecf2");
+  for (let i = 0; i < Math.min(lines, 4); i++) { P(hx + 2, hy + 2 - i * 2, 2 + ((i * 7) % 3), 1, "#5a6275"); P(hx, hy + 2 - i * 2, 1, 1, "#2fb344"); }
 }
-function propPencil(P, hx, hy) { P(hx, hy + 1, 1, 4, "#f2c94c"); P(hx, hy, 1, 1, "#444"); }
+function propPencil(P, hx, hy) { P(hx, hy + 1, 1, 3, "#ffd43b"); P(hx, hy + 4, 1, 1, "#c9ced8"); P(hx, hy + 5, 1, 1, "#ff8fa3"); P(hx, hy, 1, 1, "#3d3d45"); }
 function propShovel(P, hx, hy, down) {
   const by = down ? 1 : 4;
-  limb(P, hx, hy, hx + 8, by + 4, 2, "#8d6e63");
-  box(P, hx + 7, by, 5, 5, "#9aa3ad"); P(hx + 7, by + 4, 5, 1, "#c7ced6");
+  limb(P, hx, hy, hx + 8, by + 4, 2, "#b0713a"); P(hx - 1, hy + 1, 3, 1, "#e03131");
+  box(P, hx + 7, by, 5, 5, "#aab2bd"); P(hx + 7, by + 4, 5, 1, "#e9ecf2"); P(hx + 7, by, 5, 1, "#6b7488"); P(hx + 8, by + 1, 1, 3, "#d5dae3");
 }
-function propSpyglass(P, g, ext) {
+function propSpyglass(P, g, ext) {               // brass, a band at every joint, glass at the end
   const y = g.head + 4, n = Math.round(ext * 3);
-  box(P, 7, y, 6, 3, "#b8901c");
-  if (n > 0) box(P, 13, y, 6, 3, "#d4a72c");
-  if (n > 1) box(P, 19, y, 5, 3, "#e8c050");
-  if (n > 2) P(24, y, 1, 3, "#9fd8ff");
+  const tube = (x, w, c) => { box(P, x, y, w, 3, c); P(x, y + 2, w, 1, shade(c, 1.35)); P(x, y, w, 1, shade(c, 0.72)); P(x + w - 1, y, 1, 3, "#7a5a10"); };
+  tube(7, 6, "#c99a1c");
+  if (n > 0) tube(13, 6, "#dcae2c");
+  if (n > 1) tube(19, 5, "#ecc64a");
+  if (n > 2) { P(24, y, 1, 3, "#7fd0ff"); P(24, y + 2, 1, 1, "#ffffff"); }
 }
 function propLapLaptop(P, x, glow) {               // on the knees, the screen tipped back toward them
-  box(P, x, 8, 10, 2, "#a3a9b1"); P(x + 1, 9, 8, 1, "#c7ccd2");
-  limb(P, x + 10, 9, x + 12, 17, 2, "#5f6368"); P(x + 10, 11, 1, 5, glow ? "#c8f3ff" : "#7fd0ff");
+  box(P, x, 8, 10, 2, "#b9c0cc"); P(x + 1, 9, 8, 1, "#e9ecf2"); for (let i = 1; i < 9; i += 2) P(x + i, 9, 1, 1, "#8b93a3");
+  limb(P, x + 10, 9, x + 12, 17, 2, "#6b7488"); P(x + 10, 11, 1, 5, glow ? "#d6f8ff" : "#4fb8ff"); P(x + 10, 15, 1, 1, "#ffffff");
 }
 function propScroll(P, x, hy, len) {               // hangs from the hand to the floor, then rolls away along it
+  const paper = "#fbf1cf", ink = "#a8895a";
   if (len > 1) {
-    box(P, x, 1, 3, hy - 2, "#f6efd6"); for (let i = 3; i < hy - 4; i += 3) P(x + 1, i, 1, 1, "#b8a77a");
-    box(P, x, 1, len, 2, "#f6efd6"); for (let i = 5; i < len - 3; i += 4) P(x + i, 2, 2, 1, "#b8a77a");
+    box(P, x, 1, 3, hy - 2, paper); for (let i = 3; i < hy - 4; i += 3) P(x + 1, i, 1, 1, ink);
+    box(P, x, 1, len, 2, paper); P(x, 1, len, 1, "#e6d5a3"); for (let i = 5; i < len - 3; i += 4) P(x + i, 2, 2, 1, ink);
   }
-  box(P, x + len, 1, 4, 4, "#e2d2a0"); P(x + len + 1, 3, 2, 1, "#c9b67e");
+  box(P, x + len, 1, 4, 4, "#ecd99f"); P(x + len + 1, 3, 2, 1, "#c9b06a"); P(x + len, 1, 4, 1, "#c9b06a"); P(x + len + 1, 2, 1, 1, "#e03131");   // the roll, and its wax seal
 }
-function propStack(P, hx, hy, n, wob, colors) {
+function propStack(P, hx, hy, n, wob, colors) {   // books, spines out: a band on each, pages at the end
   for (let i = 0; i < n; i++) {
-    const dx = Math.round(Math.sin(wob + i * 0.7) * i * 0.6), w = 9 + (i % 2);
-    box(P, hx - 3 + dx, hy + i * 4, w, 3, colors[i % colors.length]); P(hx - 3 + dx + w - 1, hy + i * 4, 1, 3, "#f6f0dc");
+    const dx = Math.round(Math.sin(wob + i * 0.7) * i * 0.6), w = 9 + (i % 2), c = colors[i % colors.length], x = hx - 3 + dx, y = hy + i * 4;
+    box(P, x, y, w, 3, c); P(x, y + 2, w, 1, shade(c, 1.3)); P(x, y, w, 1, shade(c, 0.7));
+    P(x + 1, y, 1, 3, "#ffd43b"); P(x + 3, y + 1, 3, 1, shade(c, 1.5)); P(x + w - 1, y, 1, 3, "#fff4d6");
   }
 }
-function propPaper(P, hx, hy) { box(P, hx, hy, 5, 6, "#ffffff"); P(hx + 1, hy + 3, 3, 1, "#9aa0a6"); P(hx + 1, hy + 1, 3, 1, "#c0392b"); }
+function propPaper(P, hx, hy) { box(P, hx, hy, 5, 6, "#ffffff"); P(hx, hy, 5, 1, "#d5dae3"); P(hx + 1, hy + 4, 3, 1, "#5a6275"); P(hx + 1, hy + 3, 2, 1, "#aab2bd"); P(hx + 1, hy + 1, 3, 1, "#e03131"); P(hx + 4, hy + 5, 1, 1, "#d5dae3"); }
 
 // What each signature prop does to the pose while walking or standing about.
 const CARRY = {
@@ -999,6 +1054,7 @@ const Z = ["zzz", "..z", ".z.", "z..", "zzz"];
 // researcher keep holding their signature prop.
 
 const stand = extra => Object.assign({ armF: ["swing", 0], armB: ["swing", 0] }, extra);
+const breath = (r, t) => (Math.sin(t * 2.3 + r.a.phase) > 0.45 ? 1 : 0);   // a slow breath: the shoulders rise a pixel
 function walkPose(r, dist) {
   const ph = dist / (1.1 + r.a.legs * 0.12), s = Math.sin(ph), c = Math.cos(ph), off = Math.round(4 * s);
   return { legF: off, legB: -off, liftF: c > 0.6 ? 1 : 0, liftB: c < -0.6 ? 1 : 0, bob: Math.abs(s) < 0.4 ? 1 : 0,
@@ -1247,20 +1303,21 @@ const readTime = text => clamp(1.6 + text.length * 0.055, 1.8, 5);
 // A pixel map is a list of rows, top to bottom, drawn facing right; "." is empty and each letter a color.
 // "L" is left for the caller to choose (a flower's petals, a flask's liquid).
 const PAL = Object.assign({}, ICON_COLORS, { r: "#e03131", o: "#f08c00", G: "#2b8a3e", m: "#8ce99a", M: "#2f9e44",
-  b: "#4dabf7", B: "#8d5a2b", n: "#ced4da", N: "#495057", t: "#e9c46a", v: "#b197fc", h: "#fff3bf", c: "#ffa94d" });
+  b: "#4dabf7", B: "#8d5a2b", n: "#ced4da", N: "#495057", t: "#e9c46a", v: "#b197fc", h: "#fff3bf", c: "#ffa94d",
+  C: "#e8590c", W: "#fff4e6", D: "#1c7ed6", R: "#a61e1e", Y: "#f59f00" });
 const BILL = ["mmmmmmmm", "mMmMMmMm", "mmmmmmmm"];
 const FLOWER = [".LLL.", "LLyLL", ".LLL.", "..G..", ".GG..", "..GG.", "..G.."];
 const FLOWER_HELD = [".L.", "LyL", ".G.", ".G."];
-const BIRD_UP = ["b....b..", ".b..b...", "..bbbbo.", "..bbbb.."];
-const BIRD_DOWN = ["........", "..bbbbo.", ".bbbbb..", "b....b.."];
-const BIRD_SIT = ["...bb...", "..bbbo..", ".bbbb...", "..o.o..."];
-const CAT_A = ["........c.c.", "c.......cccc", ".c......cckc", ".ccccccccccc", "..ccccccccc.", "..c.c...c.c.", "..c.c...c.c."];
-const CAT_B = ["........c.c.", "c.......cccc", ".c......cckc", ".ccccccccccc", "..ccccccccc.", "...c.c..c.c.", "..c...c.c..c"];
-const CAT_SIT = [".....c.c", ".....ccc", ".....ckc", "..cccccc", ".ccccccc", "cccccccc", "c.cc.cc."];
-const ROCKET = ["..r..", ".rwr.", ".wbw.", ".www.", ".www.", "rwwwr", "r.n.r"];
+const BIRD_UP = ["D....D..", ".b..b...", "..bbkbo.", "..bWWb.."];
+const BIRD_DOWN = ["........", "..bbkbo.", ".bbWWb..", "D....D.."];
+const BIRD_SIT = ["...bb...", "..bkbo..", ".DDbW...", "..o.o..."];
+const CAT_A = ["........c.c.", "C.......cccc", ".c......cckW", ".cCccCccCccc", "..cWWWWWWcc.", "..c.c...c.c.", "..W.W...W.W."];
+const CAT_B = ["........c.c.", "C.......cccc", ".c......cckW", ".cCccCccCccc", "..cWWWWWWcc.", "...c.c..c.c.", "..W...W.W..W"];
+const CAT_SIT = [".....c.c", ".....ccc", ".....ckW", "..cCcccc", ".cCccWWc", "CcccCWWc", "C.cc.WW."];
+const ROCKET = ["..r..", ".rrR.", ".wbn.", ".wDn.", ".wwn.", "rwwnR", "r.N.R"];
 const PLANE = ["ww.......", ".wwwww...", "..wwwwwww", "..nnnn..."];
-const APPLE = ["..G..", ".rGr.", "rrrrr", "rrrrr", ".rrr."];
-const DUCK = ["...yy.", "...yko", "yyyyy.", "yyyyy.", ".yyy.."];
+const APPLE = ["..B..", ".rGm.", "rWrrR", "rrrrR", ".rRR."];
+const DUCK = ["...yy.", "...yko", "yyYyy.", "yyyYy.", ".YYY.."];
 const GERM_A = [".m.m.", "mmmmm", "mkmkm", "mmmmm", "m.m.m"];
 const GERM_B = ["m.m.m", "mmmmm", "mkmkm", "mmmmm", ".m.m."];
 const BFLY_A = ["v.k.v", "vvkvv", "vpkpv", "v.k.v"];
@@ -1291,7 +1348,7 @@ function drawMap(ctx, map, cx, by, flip, rot, pal) {
         const ch = map[i][j];
         if (ch === ".") continue;
         const x = ox + (flip < 0 ? w - 1 - j : j), y = oy + i;
-        if (pass === 0) { ctx.fillStyle = INK; ctx.fillRect(x - 1, y - 1, 3, 3); }
+        if (pass === 0) { ctx.fillStyle = darkOf((pal && pal[ch]) || PAL[ch] || INK); ctx.fillRect(x - 1, y - 1, 3, 3); }
         else { ctx.fillStyle = (pal && pal[ch]) || PAL[ch]; ctx.fillRect(x, y, 1, 1); }
       }
   ctx.restore();
@@ -1318,82 +1375,98 @@ function walkTo(r, s, dt, tx, gap = 9) {
 }
 
 function propBoard(P, x, rows, prog, q) {           // a chalkboard on an easel, filling with chalk "math"
-  thin(P, x + 3, 0, x + 5, 8, "#8d5a2b"); thin(P, x + 19, 0, x + 17, 8, "#8d5a2b");
-  P(x - 1, 7, 24, 17, "#8d5a2b"); P(x, 8, 22, 15, "#2b5847");
+  const wood = "#a0622d", woodD = "#70401a", woodL = "#c98646";
+  thin(P, x + 3, 0, x + 5, 8, woodD); thin(P, x + 19, 0, x + 17, 8, woodD); thin(P, x + 11, 0, x + 11, 6, woodD);
+  P(x - 1, 7, 24, 17, wood); P(x - 1, 23, 24, 1, woodL); P(x - 1, 7, 1, 17, woodD); P(x + 22, 7, 1, 17, woodD);
+  P(x, 8, 22, 15, "#2f6f55"); P(x, 22, 22, 1, "#3f8a6c"); P(x, 8, 22, 1, "#22523f"); P(x + 16, 9, 5, 2, "#3a7f63");
+  P(x - 2, 6, 26, 1, woodL); P(x - 2, 5, 26, 1, woodD);                             // the ledge, with chalk and a duster
+  P(x + 2, 7, 3, 1, "#ffffff"); P(x + 6, 7, 2, 1, "#ff9ec4"); P(x + 15, 7, 4, 1, "#5a6275"); P(x + 15, 8, 4, 1, "#e9ecf2");
   const total = rows.reduce((a, b) => a + b, 0);
   let left = Math.round(prog * total);
   rows.forEach((len, i) => {
-    const y = 20 - i * 3, n = Math.min(len, left);
+    const y = 20 - i * 3, n = Math.min(len, left), chalk = ["#ffffff", "#ffe066", "#a8e2ff", "#ffb3c7"][i % 4];
     left -= n;
     for (let c = 0; c < n; c++) {
       if (c % 4 === 3) continue;
-      P(x + 2 + c, y, 1, 1, "#f1f3f5");
-      if ((c * 7 + i * 3) % 5 === 0) P(x + 2 + c, y + 1, 1, 1, "#f1f3f5");
+      P(x + 2 + c, y, 1, 1, chalk);
+      if ((c * 7 + i * 3) % 5 === 0) P(x + 2 + c, y + 1, 1, 1, chalk);
     }
   });
   if (prog >= 1) {
     if (q) { P(x + 17, 18, 3, 1, "#ffe066"); P(x + 19, 15, 1, 3, "#ffe066"); P(x + 18, 14, 1, 1, "#ffe066"); P(x + 18, 11, 1, 1, "#ffe066"); }
-    else { const y = 20 - (rows.length - 1) * 3; P(x + 1, y - 1, rows[rows.length - 1] + 2, 1, "#ffe066"); P(x + 1, y + 2, rows[rows.length - 1] + 2, 1, "#ffe066"); }
+    else { const y = 20 - (rows.length - 1) * 3; P(x + 1, y - 1, rows[rows.length - 1] + 2, 1, "#ff6b6b"); P(x + 1, y + 2, rows[rows.length - 1] + 2, 1, "#ff6b6b"); }
   }
 }
 function propCork(P, x, pts, notes) {                 // a corkboard with sticky notes and red string
-  thin(P, x + 3, 0, x + 5, 7, "#8d5a2b"); thin(P, x + 19, 0, x + 17, 7, "#8d5a2b");
-  P(x - 1, 6, 24, 19, "#8d5a2b"); P(x, 7, 22, 17, "#c8a165");
+  const wood = "#a0622d", woodD = "#70401a", woodL = "#c98646", NOTE = ["#ffe066", "#ff9ec4", "#8fd3ff", "#b2f2bb", "#ffc078"];
+  thin(P, x + 3, 0, x + 5, 7, woodD); thin(P, x + 19, 0, x + 17, 7, woodD);
+  P(x - 1, 6, 24, 19, wood); P(x - 1, 24, 24, 1, woodL); P(x - 1, 6, 1, 19, woodD); P(x + 22, 6, 1, 19, woodD);
+  P(x, 7, 22, 17, "#d9a868"); P(x, 7, 22, 1, "#b98748");
+  for (let i = 0; i < 22; i += 3) for (let j = 0; j < 17; j += 4) P(x + (i + j * 2) % 22, 8 + j, 1, 1, (i + j) % 2 ? "#c39355" : "#e8bd80");   // the cork's grain
   for (let i = 1; i < notes; i++) thin(P, x + pts[i - 1][0] + 2, 9 + pts[i - 1][1], x + pts[i][0] + 2, 9 + pts[i][1], "#e03131");
-  for (let i = 0; i < notes; i++) { const [px, py] = pts[i]; P(x + px, 7 + py, 4, 4, "#ffe066"); P(x + px + 1, 8 + py, 2, 1, "#c9a227"); P(x + px + 2, 10 + py, 1, 1, "#e03131"); }
-}
-function propChart(P, x, y, n, crash) {               // a hand-held chart whose bars grow
-  P(x - 1, y - 1, 16, 13, INK); P(x, y, 14, 11, "#ffffff");
-  P(x + 1, y + 1, 1, 9, "#495057"); P(x + 1, y + 1, 12, 1, "#495057");
-  [2, 3, 5, 6, 8].forEach((h, i) => { if (i < n) P(x + 3 + i * 2, y + 2, 1, crash && i === 4 ? 1 : h, crash && i === 4 ? "#e03131" : "#4dabf7"); });
-  if (n >= 5 && !crash) { thin(P, x + 3, y + 4, x + 12, y + 10, "#2f9e44"); P(x + 11, y + 10, 2, 1, "#2f9e44"); P(x + 12, y + 9, 1, 1, "#2f9e44"); }
-}
-function propNotebook(P, hx, hy, lines) {
-  box(P, hx - 1, hy - 3, 7, 8, "#f8f9fa");
-  for (let i = 0; i < 3; i++) P(hx + i * 2, hy + 5, 1, 1, "#495057");
-  for (let i = 0; i < Math.min(lines, 3); i++) P(hx, hy + 2 - i * 2, 3 + (i % 2) * 2, 1, "#74c0fc");
-}
-function propMicroscope(P, x) {
-  box(P, x, 1, 8, 2, "#495057"); P(x + 1, 6, 6, 1, "#868e96"); P(x + 6, 3, 2, 9, "#495057");
-  limb(P, x + 6, 12, x + 3, 16, 2, "#ced4da"); P(x + 3, 7, 2, 3, "#adb5bd");
-}
-function propRocket(P, lx) { pmap(P, ROCKET, lx - 2, 0); }
-function propMortar(P, g) { const y = g.crown; box(P, -3, y - 1, 7, 2, "#212529"); P(-7, y + 1, 15, 1, "#212529"); P(6, y - 2, 1, 3, "#ffd43b"); }
-function propSheet(P, x, mark) { box(P, x, 1, 9, 2, "#ffffff"); if (mark) P(x + 3, 2, 3, 1, mark); }
-function propStamp(P, hx, hy) { box(P, hx - 2, hy - 4, 5, 2, "#495057"); P(hx - 2, hy - 5, 5, 1, "#c92a2a"); box(P, hx - 1, hy + 1, 3, 2, "#8d5a2b"); }
-function propNet(P, hx, hy, swing) {                 // a butterfly net; returns the middle of its hoop
-  const ex = swing ? hx + 12 : hx + 6, ey = swing ? hy + 2 : hy + 11;
-  limb(P, hx, hy, ex, ey, 1, "#8d5a2b");
-  P(ex - 2, ey, 5, 1, "#f8f9fa"); P(ex - 2, ey + 4, 5, 1, "#f8f9fa"); P(ex - 3, ey + 1, 1, 3, "#f8f9fa"); P(ex + 3, ey + 1, 1, 3, "#f8f9fa");
-  return [ex, ey + 2];
-}
-function propPizza(P, hx, hy, bites) {
-  const rows = Math.max(1, 6 - bites * 2);
-  box(P, hx - 2, hy - 2, 6, 1, "#c08a3e");
-  for (let i = 1; i < rows; i++) {
-    P(hx - 2, hy - 2 + i, Math.max(1, 6 - i), 1, "#ffd43b");
-    if (i === 2 || i === 4) P(hx - 1 + (i % 3), hy - 2 + i, 1, 1, "#e03131");
+  for (let i = 0; i < notes; i++) {
+    const [px, py] = pts[i], c = NOTE[i % NOTE.length];
+    P(x + px, 7 + py, 4, 4, c); P(x + px, 7 + py, 4, 1, shade(c, 0.78)); P(x + px + 1, 8 + py, 2, 1, shade(c, 0.6)); P(x + px + 2, 10 + py, 1, 1, "#e03131");
   }
 }
-function propPlant(P, x, grow, petal) {               // a seedling that grows into a flower
-  P(x, 0, 5, 1, "#8d5a2b");
+function propChart(P, x, y, n, crash) {               // a hand-held chart whose bars grow
+  const BAR = ["#4dabf7", "#51cf66", "#ffd43b", "#ff922b", "#e64980"];
+  P(x - 1, y - 1, 16, 13, INK); P(x, y, 14, 11, "#ffffff"); P(x, y + 10, 14, 1, "#4263eb"); P(x + 1, y + 10, 4, 1, "#bac8ff"); P(x, y, 14, 1, "#e9ecf2");
+  P(x + 1, y + 1, 1, 8, "#5a6275"); P(x + 1, y + 1, 12, 1, "#5a6275");
+  [2, 3, 5, 6, 8].forEach((h, i) => { if (i < n) { const hh = crash && i === 4 ? 1 : Math.min(h, 7); P(x + 3 + i * 2, y + 2, 1, hh, crash && i === 4 ? "#e03131" : BAR[i]); } });
+  if (n >= 5 && !crash) { thin(P, x + 3, y + 4, x + 12, y + 9, "#2f9e44"); P(x + 11, y + 9, 2, 1, "#2f9e44"); P(x + 12, y + 8, 1, 1, "#2f9e44"); }
+}
+function propNotebook(P, hx, hy, lines) {            // spiral-bound, a red margin, lines in blue ink
+  box(P, hx - 1, hy - 3, 7, 8, "#fffdf2"); P(hx - 1, hy - 3, 7, 1, "#e6dfc4"); P(hx - 1, hy - 3, 1, 8, "#ff8fa3");
+  for (let i = 0; i < 3; i++) { P(hx + i * 2, hy + 5, 1, 1, "#8b93a3"); P(hx + i * 2, hy + 4, 1, 1, "#d5dae3"); }
+  for (let i = 0; i < Math.min(lines, 3); i++) P(hx + 1, hy + 2 - i * 2, 2 + (i % 2) * 2, 1, "#3b82f6");
+}
+function propMicroscope(P, x) {                       // a heavy base, a stage with a slide, a brass focus knob
+  box(P, x, 1, 8, 2, "#3d4558"); P(x, 2, 8, 1, "#5a6275"); P(x + 1, 6, 6, 1, "#aab2bd"); P(x + 2, 7, 3, 1, "#8fd3ff");
+  P(x + 6, 3, 2, 9, "#3d4558"); P(x + 7, 3, 1, 9, "#5a6275"); P(x + 8, 8, 1, 2, "#ffd43b");
+  limb(P, x + 6, 12, x + 3, 16, 2, "#e9ecf2"); P(x + 3, 7, 2, 3, "#c9ced8"); P(x + 3, 7, 2, 1, "#4fb8ff"); P(x + 2, 17, 2, 1, "#3d4558");
+}
+function propRocket(P, lx) { pmap(P, ROCKET, lx - 2, 0); }
+function propMortar(P, g) { const y = g.crown; box(P, -3, y - 1, 7, 2, "#2b2f3d"); P(-7, y + 1, 15, 1, "#2b2f3d"); P(-6, y + 1, 6, 1, "#4a5266"); P(6, y - 2, 1, 3, "#ffd43b"); P(6, y - 3, 1, 1, "#f59f00"); P(0, y + 1, 1, 1, "#ffd43b"); }
+function propSheet(P, x, mark) { box(P, x, 1, 9, 2, "#ffffff"); P(x, 1, 9, 1, "#d5dae3"); if (mark) P(x + 3, 2, 3, 1, mark); }
+function propStamp(P, hx, hy) { box(P, hx - 2, hy - 4, 5, 2, "#5a6275"); P(hx - 2, hy - 3, 5, 1, "#8b93a3"); P(hx - 2, hy - 5, 5, 1, "#e03131"); box(P, hx - 1, hy + 1, 3, 2, "#a0622d"); P(hx - 1, hy + 2, 3, 1, "#c98646"); }
+function propNet(P, hx, hy, swing) {                 // a butterfly net; returns the middle of its hoop
+  const ex = swing ? hx + 12 : hx + 6, ey = swing ? hy + 2 : hy + 11;
+  limb(P, hx, hy, ex, ey, 1, "#a0622d");
+  P(ex - 2, ey, 5, 1, "#ffffff"); P(ex - 2, ey + 4, 5, 1, "#ffffff"); P(ex - 3, ey + 1, 1, 3, "#ffffff"); P(ex + 3, ey + 1, 1, 3, "#ffffff");
+  for (let i = 0; i < 3; i++) P(ex - 1 + i, ey + 1 + ((i + 1) % 2) * 2, 1, 1, "#d5dae3"); P(ex, ey + 2, 1, 1, "#d5dae3");   // the mesh
+  return [ex, ey + 2];
+}
+function propPizza(P, hx, hy, bites) {               // a slice: crust, cheese, pepperoni and a leaf of basil
+  const rows = Math.max(1, 6 - bites * 2);
+  box(P, hx - 2, hy - 2, 6, 1, "#d08a3e"); P(hx - 2, hy - 2, 2, 1, "#e8a85a");
+  for (let i = 1; i < rows; i++) {
+    P(hx - 2, hy - 2 + i, Math.max(1, 6 - i), 1, i % 2 ? "#ffd43b" : "#ffc21a");
+    if (i === 2 || i === 4) P(hx - 1 + (i % 3), hy - 2 + i, 1, 1, "#e03131");
+    if (i === 3) P(hx - 2, hy + 1, 1, 1, "#2fb344");
+  }
+}
+function propPlant(P, x, grow, petal) {               // a seedling in a terracotta pot that grows into a flower
+  P(x - 1, 2, 7, 1, "#e07a4a"); P(x, 0, 5, 2, "#c2623a"); P(x, 0, 1, 2, "#9a4a28"); P(x + 3, 1, 1, 1, "#e8946a"); P(x, 3, 5, 1, "#5a3418");
   if (grow <= 0) return;
-  const h = Math.round(grow * 7);
-  thin(P, x + 2, 1, x + 2, h, "#2b8a3e");
-  if (grow > 0.4) { P(x + 3, 3, 2, 1, "#40c057"); P(x, 4, 2, 1, "#40c057"); }
-  if (grow >= 1) { P(x + 1, h + 1, 3, 3, petal); P(x + 2, h + 2, 1, 1, "#ffe066"); }
+  const h = Math.round(grow * 7) + 3;
+  thin(P, x + 2, 4, x + 2, h, "#2b8a3e");
+  if (grow > 0.4) { P(x + 3, 6, 2, 1, "#40c057"); P(x, 7, 2, 1, "#40c057"); P(x + 4, 6, 1, 1, "#8ce99a"); }
+  if (grow >= 1) { P(x + 1, h + 1, 3, 3, petal); P(x + 1, h + 1, 1, 1, shade(petal, 0.75)); P(x + 3, h + 3, 1, 1, shade(petal, 1.3)); P(x + 2, h + 2, 1, 1, "#ffe066"); }
   else if (grow > 0.7) P(x + 2, h + 1, 1, 2, "#40c057");
 }
-function propCan(P, hx, hy) { box(P, hx - 1, hy - 3, 6, 5, "#74c0fc"); thin(P, hx + 5, hy, hx + 8, hy + 2, "#4dabf7"); P(hx - 2, hy - 1, 1, 3, "#4dabf7"); }
-function propGlobe(P, hx, hy, off) {
-  P(hx + 1, hy - 2, 5, 1, "#8d5a2b"); P(hx + 3, hy - 1, 1, 2, "#8d5a2b");
+function propCan(P, hx, hy) { box(P, hx - 1, hy - 3, 6, 5, "#4dabf7"); P(hx - 1, hy + 1, 6, 1, "#a5d8ff"); P(hx - 1, hy - 3, 6, 1, "#1c7ed6"); P(hx + 3, hy - 2, 1, 3, "#74c0fc"); thin(P, hx + 5, hy, hx + 8, hy + 2, "#1c7ed6"); P(hx + 8, hy + 3, 1, 1, "#a5d8ff"); P(hx - 2, hy - 1, 1, 3, "#1c7ed6"); }
+function propGlobe(P, hx, hy, off) {                 // on a brass stand, lit from the upper left
+  P(hx + 1, hy - 2, 5, 1, "#d9a520"); P(hx + 1, hy - 2, 2, 1, "#f2c94c"); P(hx + 3, hy - 1, 1, 2, "#a8780f");
   const cx = hx + 3, cy = hy + 5;
   for (let dy = -4; dy <= 4; dy++)
     for (let dx = -4; dx <= 4; dx++) {
       if (dx * dx + dy * dy > 18) continue;
       const land = ((dx + off + 90) % 9 < 3 && (dy + 9) % 4 !== 0) || ((dx + off + 94) % 9 === 6 && dy > -2);
-      P(cx + dx, cy + dy, 1, 1, land ? "#40c057" : "#4dabf7");
+      const dim = dx - dy > 3, lit = dy - dx > 3;
+      P(cx + dx, cy + dy, 1, 1, land ? (dim ? "#2b8a3e" : lit ? "#8ce99a" : "#40c057") : (dim ? "#1c7ed6" : lit ? "#a5d8ff" : "#4dabf7"));
     }
+  P(cx - 2, cy + 2, 1, 1, "#ffffff");
 }
 
 // Lines for the bits. They're said at the bit's big moment and replace whatever bubble was up.
@@ -1522,7 +1595,7 @@ const ACTIONS = {
       }
       if (s.turn > 0 && s.t > s.turn) { r.face *= -1; s.turn = -1; }
       if (s.t >= s.dur) s.done = true;
-      return stand({ carry: true, liftF: s.tap && Math.floor(s.t * 3) % 2 ? 1 : 0, eyes: s.t % 3.1 < 0.12 ? "closed" : "open" });
+      return stand({ carry: true, liftF: s.tap && Math.floor(s.t * 3) % 2 ? 1 : 0, bob: breath(r, s.t) });
     },
   },
   idle: {
@@ -1530,7 +1603,7 @@ const ACTIONS = {
     run(r, s) {
       if (s.turn > 0 && s.t > s.turn) { r.face *= -1; s.turn = -1; }
       if (s.t >= s.dur) s.done = true;
-      return stand({ carry: true, liftF: s.tap && Math.floor(s.t * 4) % 2 ? 1 : 0, eyes: s.t % 2.3 < 0.12 ? "closed" : "open" });
+      return stand({ carry: true, liftF: s.tap && Math.floor(s.t * 4) % 2 ? 1 : 0, bob: breath(r, s.t) });
     },
   },
   read: {
@@ -2494,6 +2567,7 @@ class Researcher {
     const b = this.bubble;                       // chatter while a bubble is up, unless the bit has its own mouth
     if (b && b.t < Math.min(1.8, b.dur * 0.6) && !pose.mouth && pose.eyes !== "closed")
       pose = Object.assign({}, pose, { mouth: Math.floor(b.t * 7) % 3 === 1 ? "o" : "none" });
+    if (!pose.eyes && (this.clock + this.a.phase) % 3.7 < 0.13) pose = Object.assign({}, pose, { eyes: "closed" });   // everyone blinks
     this.pose = pose;
     if (this.act === act && act.done && !this.gone) this.chooseNext();
   }
@@ -2506,24 +2580,31 @@ class Researcher {
 const INK_RGB = [0x1d, 0x1b, 0x22];
 let mask = null;
 function outline(off, comp) {
-  const img = off.getImageData(0, 0, OFF_W, OFF_H), d = img.data, n = OFF_W * OFF_H;
+  const img = off.getImageData(0, 0, OFF_W, OFF_H), d = img.data, n = OFF_W * OFF_H, W = OFF_W;
   if (!mask) mask = new Uint8Array(n);
   for (let i = 0, o = 0; i < n; i++, o += 4)                      // 0 empty, 1 ink, 2 color, 3 a soft line
     mask[i] = !d[o + 3] ? 0 : d[o] === INK_RGB[0] && d[o + 1] === INK_RGB[1] && d[o + 2] === INK_RGB[2] ? 1
       : d[o] < 140 && SOFT.has((d[o] << 16) | (d[o + 1] << 8) | d[o + 2]) ? 3 : 2;
-  const ink = i => { const o = i * 4; d[o] = INK_RGB[0]; d[o + 1] = INK_RGB[1]; d[o + 2] = INK_RGB[2]; d[o + 3] = 255; };
+  // The line takes the deep shade of the color it edges (the one below it, else beside, else above), so a white
+  // coat is edged in slate and a red cap in maroon; pure ink is kept for where there is no color to take.
+  const edits = [];
   for (let yy = 0, i = 0; yy < OFF_H; yy++)
-    for (let xx = 0; xx < OFF_W; xx++, i++) {
+    for (let xx = 0; xx < W; xx++, i++) {
       const m = mask[i];
-      if (m === 0) {
-        if ((xx > 0 && mask[i - 1] === 2) || (xx < OFF_W - 1 && mask[i + 1] === 2) ||
-            (yy > 0 && mask[i - OFF_W] === 2) || (yy < OFF_H - 1 && mask[i + OFF_W] === 2)) ink(i);
-      } else if (m === 3) {                                       // a soft line on the edge of the figure is its outline
-        if (xx === 0 || xx === OFF_W - 1 || yy === 0 || yy === OFF_H - 1 || !mask[i - 1] || !mask[i + 1] || !mask[i - OFF_W] || !mask[i + OFF_W]) ink(i);
-      }
+      if (m === 2) continue;
+      const dn = yy < OFF_H - 1 && mask[i + W] === 2 ? i + W : -1, rt = xx < W - 1 && mask[i + 1] === 2 ? i + 1 : -1,
+            lf = xx > 0 && mask[i - 1] === 2 ? i - 1 : -1, up = yy > 0 && mask[i - W] === 2 ? i - W : -1;
+      const from = dn >= 0 ? dn : rt >= 0 ? rt : lf >= 0 ? lf : up;
+      if (m === 0) { if (from >= 0) edits.push(i, from); }
+      else if (m === 1) { if (from >= 0) edits.push(i, from); }   // drawn ink takes its neighbor's shade too
+      else if (xx === 0 || xx === W - 1 || yy === 0 || yy === OFF_H - 1 || !mask[i - 1] || !mask[i + 1] || !mask[i - W] || !mask[i + W])
+        edits.push(i, from >= 0 ? from : i);                      // a soft line on the edge of the figure is its outline
     }
+  for (let k = 0; k < edits.length; k += 2) pending[k >> 1] = tintOf(d[edits[k + 1] * 4], d[edits[k + 1] * 4 + 1], d[edits[k + 1] * 4 + 2]);
+  for (let k = 0; k < edits.length; k += 2) { const o = edits[k] * 4, c = pending[k >> 1]; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
   comp.putImageData(img, 0, 0);
 }
+const pending = [];
 
 const OFF_W = 120, OFF_H = 96, OX = 60, OY = 86;   // the offscreen sprite canvas and the feet's place in it
 const stages = [];
@@ -2757,7 +2838,8 @@ class Stage {
         ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y, flat ? 6 : 3, flat ? 3 : 6);
         break;
       }
-      case "book": ctx.fillStyle = INK; ctx.fillRect(x - 1, y - 5, 12, 6); ctx.fillStyle = p.c; ctx.fillRect(x, y - 4, 10, 4); break;
+      case "book": ctx.fillStyle = darkOf(p.c); ctx.fillRect(x - 1, y - 5, 12, 6); ctx.fillStyle = p.c; ctx.fillRect(x, y - 4, 10, 4);
+        ctx.fillStyle = "#fff4d6"; ctx.fillRect(x + 9, y - 4, 1, 4); ctx.fillStyle = "#ffd43b"; ctx.fillRect(x + 1, y - 4, 1, 4); break;
     }
     ctx.globalAlpha = 1;
   }

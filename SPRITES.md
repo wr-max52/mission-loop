@@ -11,6 +11,11 @@ cat ears, a tail that wags, a flask and her own quirk).
 
 ## How animation works (why a spec never animates anything)
 
+The look is the handheld era's (think of a 16-bit town full of small people): saturated colors, every material
+shaded light to dark, outlines tinted instead of black. The engine does that part: it makes a spec's colors a
+little more vivid and derives the shades, so give flat base colors and let it shade them. Everyone also blinks and
+breathes without a spec asking.
+
 Each frame an action (walk, read, dig, eureka, ...) returns a **pose**: where the arms are (`["up", 0]`), the leg
 swing, a crouch, a nod, the eyes, the mouth, the brows. The body is then drawn from that pose: legs, torso, head
 and arms are placed from anchors (hips, shoulders, the head's base row, each hand), and every part is drawn
@@ -46,8 +51,9 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 6. **Content.** Sprites are cheerful researchers for a work tool. Refuse nudity or sexual content, gore,
    hateful symbols, real people's likenesses and brand logos; draw everyone clothed.
 7. **Keep it small and readable.** About 1 CSS pixel per sprite pixel: two to four colors per added part, no
-   single stray pixels (every colored pixel gets a dark outline, so a lone pixel becomes a 3x3 blob; draw thin
-   lines with `k`, which is never outlined again).
+   single stray pixels (every colored pixel gets an outline in the deep shade of its own color, the way
+   handheld-era sprites are edged, so a lone pixel becomes a 3x3 blob; draw thin lines with `k`, which is never
+   outlined again and takes the deep shade of the color beside it).
 8. **Check, then fix.** `validateSprite(spec)` returns `{ ok, errors }`; each error says what to change.
 
 ## The spec
