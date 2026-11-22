@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 301 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 302 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
