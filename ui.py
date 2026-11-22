@@ -16,7 +16,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, clock, orchestrator, settings, stopping, store
+import activity, agents, clock, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -63,6 +63,8 @@ MESSAGES = {
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "every_saved": "Saved. The next loop you start rests that long between looks for work.",
+    "library_saved": "Library settings saved. The Theorist and the chat use them on their next search.",
+    "library_indexing": "Indexing the library in the background. Refresh in a minute to see how far it got.",
     "auto_on": "Auto mode on. Briefs and new epics are approved for you; articles still wait for you to publish them.",
     "auto_off": "Auto mode off. Every brief and new epic waits for you again.",
     "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
@@ -101,6 +103,7 @@ ERRORS = {
     "state": "That mission isn't waiting for that action any more.",
     "running": "The loop is already running.",
     "every": "Give the rest between looks for work in whole minutes.",
+    "top_n": "Pick how many passages a library search returns from the list.",
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different, approved epic to move them to.",
@@ -824,6 +827,8 @@ def finder_panel() -> str:
 def _when(at: str) -> str:
     return escape(at[:16].replace("T", " ")) + " UTC" if at else ""
 
+BY = {"human": "you", "chat": "the chat assistant", "theorist": "the Theorist"}   # who changed the line
+
 def theorist_notes() -> str:
     """The Theorist's last turn and how the line got here, folded away under the inspiration box."""
     last, history = store.last_theory(), store.inspiration_history(6)
@@ -849,11 +854,14 @@ def theorist_notes() -> str:
             made.append(f'linked {mission_link(a)} and {mission_link(b)}')
         if made:
             parts.append(f"<p>It {', and '.join(made)}.</p>")
+        if last.get("lookups"):
+            parts.append("<p>It searched the library for:</p><ul>" + "".join(f"<li>{escape(q)}</li>"
+                                                                            for q in last["lookups"]) + "</ul>")
         if last.get("notes"):
             parts.append('<p class="hint">Code held it back: ' + escape("; ".join(last["notes"])) + "</p>")
     if history:
         rows = "".join(f'<li><span class="hint">{_when(h.get("at", ""))}, '
-                       f'{"you" if h.get("by") == "human" else "the Theorist"}:</span> '
+                       f'{BY.get(h.get("by"), "the Theorist")}:</span> '
                        f'{escape(h.get("line") or "(cleared)")}</li>' for h in reversed(history))
         parts.append(f"<p>The line over time, newest first:</p><ul>{rows}</ul>")
     return f'<details><summary>{icon("bulb")}Theorist\'s notes</summary>{"".join(parts)}</details>'
@@ -1212,6 +1220,59 @@ def connection_section(conn: dict) -> str:
             "cloud provider needs only its API key. Keys stay on this machine, in <code>data/providers.json</code> "
             "or <code>.env</code>, and are never committed.</p>"
             f'{cards}<h3 class="sub">Add a provider</h3>{add_provider_forms()}')
+
+EMBEDDY = re.compile(r"embed|bge|minilm|e5-|gte|arctic|mxbai|nomic", re.I)   # an Ollama embedding model's name
+
+def library_section(conn: dict) -> str:
+    """The desk's library (library.py): which provider and model embed its passages, and how many a search returns."""
+    current, env = settings.embed_model(), settings._env(settings.EMBED_ENV)
+    pid, name = settings.split_model(current) if current else ("none", "")
+    choices = [("none", "No embedding model: rank by words only")] + [
+        (p, settings.PROVIDERS[p]["name"]) for p in settings.embed_providers()]
+    if pid not in dict(choices):           # set to a provider since disconnected: keep it visible
+        choices.append((pid, settings.PROVIDERS.get(pid, {}).get("name", pid) + " (not connected)"))
+    opts = "".join(f'<option value="{p}"{" selected" if p == pid else ""}>{escape(label)}</option>' for p, label in choices)
+    names = [(m["name"], "Ollama") for m in conn["models"] if EMBEDDY.search(m["name"])]
+    for p in settings.embed_providers()[1:]:
+        names += [(n, settings.PROVIDERS[p]["name"]) for n in providers.models(p, embed=True)[0]]
+    suggestions = "".join(f'<option value="{escape(n, quote=True)}" label="{escape(label, quote=True)}">'
+                          for n, label in names)
+    tops = "".join(f'<option value="{n}"{" selected" if n == settings.library_top_n() else ""}>{n}</option>'
+                   for n in settings.TOP_N_CHOICES)
+    source = (" (from MISSION_LOOP_EMBED_MODEL in .env)" if env and current == env and not settings.saved().get("embed_model")
+              else "")
+    now = f" Embedding model: <code>{escape(current)}</code>{source}." if current else ""
+    return f"""{heading("book", "Library", anchor="library")}
+<p>The Theorist and Researcher Chat search the desk's library before they reason: every mission's objective, each
+brief's claims with the quotes they cite, counterpoints and sources, and every article section. It always ranks by
+words; an embedding model adds ranking by meaning. It keeps itself up to date and lives in <code>data/library.db</code>
+on this machine.</p>
+<div class="pubbox channel"><div class="head"><h3>Index</h3><span class="badge">On this machine</span></div>
+<p>{escape(library.summary())}.{now}</p>
+<form method="post" action="/settings/library" class="inline"><input type="hidden" name="do" value="index">
+  <button>Index now</button><span class="hint">embeds every new passage now instead of a minute's worth per search</span></form></div>
+<form method="post" action="/settings/library">
+  <input type="hidden" name="do" value="save">
+  <label for="embed_provider">Embedding provider <span class="hint">Ollama, or a connected provider with embeddings (Anthropic, DeepSeek and Groq have none)</span></label>
+  <select id="embed_provider" name="provider">{opts}</select>
+  <label for="embed_model">Embedding model <span class="hint">e.g. an Ollama embedding model you pulled, or the provider's own; checked before it is saved</span></label>
+  <input type="text" id="embed_model" name="model" maxlength="200" list="embed_models" value="{escape(name, quote=True)}" autocomplete="off">
+  <datalist id="embed_models">{suggestions}</datalist>
+  <label for="top_n">Passages per search (top N) <span class="hint">more gives the agents more to reason from and costs more of their context</span></label>
+  <select id="top_n" name="top_n">{tops}</select>
+  <p><button>Save</button></p>
+</form>"""
+
+def index_now() -> threading.Thread:
+    """Bring the whole library up to date in the background, embedding everything new (searches do a minute's worth)."""
+    def go():
+        try:
+            library.sync(time_limit=30 * 60)
+        except Exception as e:
+            print(f"library indexing failed: {type(e).__name__}: {e}", flush=True)
+    t = threading.Thread(target=go, name="library", daemon=True)
+    t.start()
+    return t
 
 def ollama_picks(conn: dict) -> dict[str, str]:
     """Which installed model each worker without one gets: the biggest to the Principal Investigator (writing), the
@@ -1590,6 +1651,7 @@ def settings_body(request: Request, error: str = "") -> str:
     return f"""{err}<h1>Settings</h1>
 {workers_section(conn, models)}
 {connection_section(conn)}
+{library_section(conn)}
 {heading("clock", "Loop")}
 <form method="post" action="/settings/loop-every" class="inline">
   <label for="every" style="margin:0">When it has nothing to do, the loop rests</label>
@@ -1663,6 +1725,36 @@ async def save_loop_every(request: Request) -> Response:
     except ValueError:
         return go("/settings", error="every")
     return go("/settings", done="every_saved")
+
+async def save_library(request: Request) -> Response:
+    """The Library section: index now, or save the embedding provider and model (checked with one embedding first)
+    and the top N."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "index":
+        index_now()
+        return go("/settings", done="library_indexing")
+    try:
+        top_n = int(str(form.get("top_n") or settings.TOP_N))
+        if top_n not in settings.TOP_N_CHOICES:
+            raise ValueError
+    except ValueError:
+        return go("/settings", error="top_n")
+    pid, model = str(form.get("provider") or "none"), str(form.get("model") or "").strip()[:200]
+    try:
+        if pid != "none" and pid not in settings.PROVIDERS:
+            raise ValueError("pick a provider")
+        if pid != "none" and not model:
+            raise ValueError("name the embedding model")
+        ref = settings.model_ref(pid, model) if pid != "none" else ""
+        if ref and ref != settings.embed_model():
+            await run_in_threadpool(library.check, ref)
+        settings.set_embed_model(ref)
+    except (ValueError, library.LibraryError) as e:
+        return page("Settings", settings_body(request, f"The embedding model was not saved: {e}"))
+    settings.set_library_top_n(top_n)
+    return go("/settings", done="library_saved")
 
 async def save_animations(request: Request) -> Response:
     if not same_origin(request):
@@ -1882,7 +1974,7 @@ def combine_proposals() -> list[str]:
         why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
         out.append(ask(
             "propose", c.topic, "Combine missions",
-            f'<div class="sub">The Theorist proposes combining these {len(c.members)} missions into one bigger '
+            f'<div class="sub">{"The chat assistant" if c.by == "chat" else "The Theorist"} proposes combining these {len(c.members)} missions into one bigger '
             f'mission. Approving queues it (its brief still comes to you) and stops these; any that reached writing '
             f'meanwhile carry on.{epic}</div>{why}<ul>{items}</ul>'
             f'<details><summary>Objective</summary><p>{escape(c.objective)}</p></details>',
@@ -1901,7 +1993,7 @@ def connections(m: Mission) -> str:
     for k in store.links_of(m.slug):
         other = store.get_mission(k.other(m.slug))
         state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
-        who = "the Theorist" if k.by == "theorist" else "you" if k.by == "human" else k.by
+        who = {"theorist": "the Theorist", "human": "you", "chat": "the chat assistant"}.get(k.by, k.by)
         why = f": {escape(k.why)}" if k.why else ""
         rows.append(f'<li class="link-row">Linked to {mission_link(k.other(m.slug))}{state} '
                     f'<span class="hint">by {escape(who)}</span>{why}'
@@ -2789,6 +2881,7 @@ app = Starlette(routes=[
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),
     Route("/auto", save_auto, methods=["POST"]),
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
+    Route("/settings/library", save_library, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),

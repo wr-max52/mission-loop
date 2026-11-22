@@ -1,9 +1,12 @@
 """Local MCP server that lets the chat assistant see what the loop is doing, without touching it.
 
-Every tool but two only reads: the database, data/activity.json, the agents' trails (trail.py), the channels'
-state files and the loop log. add_mission queues a new mission exactly like the UI's Add mission box (it still
-waits for human brief review) and set_mission_epic puts a mission in an epic like the Epic field on its page;
-neither changes a mission's stage or work. No tool takes the
+Most tools only read: the database, data/activity.json, the agents' trails (trail.py), the channels' state files
+and the loop log. add_mission queues a new mission exactly like the UI's Add mission box (it still waits for human
+brief review) and set_mission_epic puts a mission in an epic like the Epic field on its page. The rest give the chat
+assistant everything the Theorist can do, through the same checks (agents/theorist.py) and the same orchestrator
+functions: desk_overview reads the desk as the Theorist does, set_inspiration changes the line, propose_epic and
+propose_combine propose (they wait for the human), link_missions links two missions, and ask_theorist asks for the
+Theorist's turn. None of them changes a mission's stage or work. No tool takes the
 loop's lock or talks to a model, so asking never slows or redirects the work. Answers are short on purpose:
 the assistant has a small context.
 The chat assistant starts this through the "loop" entry in mcp.json; any other MCP client can too.
@@ -13,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 import activity, agents, orchestrator, settings, store, trail
-from agents import bluesky, f916, github
+from agents import bluesky, f916, github, theorist
 from contracts import Mission, State, epic_title, words
 
 LOG = Path("data/loop.log")
@@ -216,11 +219,13 @@ def theorist_notes() -> str:
         if c:
             lines.append(f"Proposed combining {', '.join(c.members)} into: {c.topic} ({c.status})")
         lines += [f"Linked: {a} <-> {b}" for a, b in last.get("links", [])]
+        lines += [f"Searched the library for: {q}" for q in last.get("lookups", [])]
         lines += [f"Code dropped: {n}" for n in last.get("notes", [])]
     history = store.inspiration_history(5)
     if history:
         lines.append("Line history, oldest first:")
-        lines += [f"- {_since(h['at'])}, by the {h['by']}: {h['line'] or '(cleared)'}" for h in history]
+        who = {"chat": "chat assistant (you)"}
+        lines += [f"- {_since(h['at'])}, by the {who.get(h['by'], h['by'])}: {h['line'] or '(cleared)'}" for h in history]
     return "\n".join(lines)
 
 @server.tool()
@@ -349,6 +354,116 @@ def set_mission_epic(slug: str, epic: str) -> str:
         return f"{m.topic[:80]} [{m.slug}] is no longer in an epic."
     title = store.get_epic(store.get_mission(m.slug).epic).title
     return f"{m.topic[:80]} [{m.slug}] is now in the epic {title}" + (" (a new epic)." if new else ".")
+
+# ---------- everything the Theorist can do ----------
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _wake() -> None:
+    if orchestrator.loop_running():
+        orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        orchestrator.WAKE_FLAG.touch()
+
+def _slugs(text: str) -> list[str]:
+    return [s for s in dict.fromkeys(p.strip() for p in text.replace(";", ",").split(",")) if s]
+
+def _dropped(notes: list[str]) -> str:
+    return "Not done: " + "; ".join(n.split(": ", 1)[-1] for n in notes) + "."
+
+@server.tool()
+def desk_overview() -> str:
+    """The whole desk as the Theorist reads it: the inspiration line and how it got here, every epic with its latest
+    missions, the missions in no epic, the latest published articles with the possibilities they left open, and the
+    links and combines so far (and the ones the human turned down). Use it to look for patterns across missions."""
+    line = store.get_inspiration() or "(none; the finder and the Theorist are off)"
+    return (f"Inspiration line: {line}\nHow it got here:\n{theorist.history_text(store.inspiration_history())}\n\n"
+            + theorist.desk_text(store.all_missions()))
+
+@server.tool()
+def set_inspiration(line: str, why: str = "") -> str:
+    """Change the inspiration line the mission finder searches around and the Theorist evolves, like the box on
+    the UI home page. Only when the human asks. Keep it to 1 to 3 questions, at most 500 characters, and evolve the
+    human's line rather than replace it unless they ask for a new one. why: one sentence, kept in the line's
+    history. An empty line turns the finder and the Theorist off."""
+    line = " ".join(line.split())
+    if len(line) > theorist.MAX_LINE:
+        return f"That line is {len(line)} characters; at most {theorist.MAX_LINE}."
+    before = store.get_inspiration()
+    if line == before:
+        return "The line is already that."
+    store.set_inspiration(line, by="chat", why=" ".join(why.split())[:theorist.MAX_WHY])
+    _wake()
+    advice = theorist.line_problems(line, before) if before and line else []
+    note = f" (the Theorist would not have written it: {'; '.join(advice)})" if advice else ""
+    return (f"Inspiration line is now: {line}{note}" if line
+            else "Inspiration line cleared: the mission finder and the Theorist are off.")
+
+@server.tool()
+def ask_theorist() -> str:
+    """Ask for the Theorist's turn: it looks across the desk and its library next time the loop works, without
+    waiting out its usual 6 hours, like the UI's Ask the Theorist button."""
+    if not store.get_inspiration():
+        return "The Theorist needs an inspiration line first (set_inspiration)."
+    orchestrator.THINK_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    orchestrator.THINK_FLAG.touch()
+    _wake()
+    return ("Asked. The Theorist goes next while the loop runs; read theorist_notes after." if orchestrator.loop_running()
+            else "Asked. The loop is off; the Theorist goes first when it starts.")
+
+@server.tool()
+def propose_epic(title: str, missions: str, why: str = "") -> str:
+    """Propose a new epic, as the Theorist does: a theme emerging across missions or a strand that has grown into a
+    line of inquiry of its own. title: 1 to 3 words, not an existing epic's. missions: the slugs of at least 2
+    existing missions that belong in it, separated by commas; they move there now, and go back to their old epic if
+    the human rejects it. Missions an agent is working on right now stay put. why: one sentence."""
+    notes: list[str] = []
+    e = theorist.settle_epic(theorist.NewEpic(title=title, why=why, missions=_slugs(missions)),
+                             store.all_missions(), notes)
+    if not e:
+        return _dropped(notes)
+    try:
+        epic, moved = orchestrator.propose_epic(e.title, e.missions, e.why, _now(), "chat",
+                                                {w["slug"] for w in _working()})
+    except ValueError as err:
+        return f"Not done: {err}."
+    return (f"Proposed the epic {epic.title} with {moved} mission(s); it waits for the human's approval on the UI "
+            f"home page" + (" (auto mode approves it shortly)." if settings.auto_mode() else "."))
+
+@server.tool()
+def propose_combine(missions: str, topic: str, objective: str, epic: str = "", why: str = "") -> str:
+    """Propose folding 2 to 4 missions that are really one question into one bigger mission, as the Theorist does.
+    Only missions queued, researching, with a brief in review, or parked. missions: their slugs, separated by commas.
+    topic: one line, as a question. objective: what each brings and what evidence would answer it. epic: optional
+    title. why: one sentence. It waits for the human; approving stops the missions and queues the bigger one."""
+    notes: list[str] = []
+    c = theorist.settle_combine(theorist.NewCombine(missions=_slugs(missions), topic=topic, objective=objective,
+                                                    epic=epic, why=why), store.all_missions(), [], notes)
+    if not c:
+        return _dropped(notes)
+    try:
+        made = orchestrator.propose_combine(c, _now(), "chat")
+    except ValueError as err:
+        return f"Not done: {err}."
+    return (f"Proposed combining {', '.join(made.members)} into: {made.topic}. It waits for the human under Needs "
+            f"you" + (" (auto mode approves it shortly)." if settings.auto_mode() else "."))
+
+@server.tool()
+def link_missions(mission: str, to: str, why: str) -> str:
+    """Link two missions that should stay separate but bear on each other, as the Theorist does, so each one's
+    research sees the other. mission: an open (unpublished) mission's slug. to: another open mission's slug, or a
+    published article's. why: one sentence naming the shared thread (actor, mechanism, number, date, money trail).
+    The human can unlink it from the mission's page."""
+    notes: list[str] = []
+    kept = theorist.settle_links([theorist.NewLink(mission=mission, to=to, why=why)], store.all_missions(), None, notes)
+    if not kept:
+        return _dropped(notes)
+    k = kept[0]
+    try:
+        orchestrator.link(k.mission, k.to, k.why, _now(), by="chat")
+    except ValueError as err:
+        return f"Not done: {err}."
+    return f"Linked {k.mission} <-> {k.to}: {k.why}"
 
 if __name__ == "__main__":
     server.run()

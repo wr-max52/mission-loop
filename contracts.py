@@ -69,7 +69,7 @@ class Link(BaseModel):
     a: str
     b: str
     why: str = ""
-    by: str = "theorist"                   # "theorist" or "human"
+    by: str = "theorist"                   # "theorist", "chat" (the chat assistant) or "human"
     at: str = ""                           # ISO time
     status: Literal["active", "removed"] = "active"
 
@@ -87,6 +87,7 @@ class Combine(BaseModel):
     why: str = ""
     at: str = ""
     status: Literal["proposed", "approved", "rejected"] = "proposed"
+    by: str = "theorist"                   # who proposed it: "theorist" or "chat" (the chat assistant)
 
 class Epic(BaseModel):
     """A long-running line of inquiry: a short thematic title, not a goal. The missions in it describe it,
