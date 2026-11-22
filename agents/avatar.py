@@ -56,7 +56,7 @@ Examples (the avatar is a researcher in a lab coat unless its spec says otherwis
   "outfit": "hoodie", "top": "#2f9e44"}, "reply": "Red beanie on, and a green hoodie to match."}
 - "make them grumpy" -> {"refused": false, "change": {"brow": "stern", "mouth": "flat"}, "reply": "Now they frown at
   every footnote."}
-- "cat ears" -> {"refused": false, "change": {"maps": [{"layer": "head", "at": [-4, 12], "rows": [".h.....h.",
+- "cat ears" -> {"refused": false, "change": {"maps": [{"layer": "head", "at": [-4, 14], "rows": [".h.....h.",
   "hrh...hrh", "hhh...hhh"], "pal": {"r": "#ffb3c7"}}]}, "reply": "Two cat ears in their hair colour, pink inside."}
 - "a yellow scarf" -> {"refused": false, "change": {"maps": [{"layer": "body", "at": [-5, 9], "rows": ["yyyyyyyyyy",
   "yYyYyYyYyy", ".....yy...", ".....Yy..."], "pal": {"y": "#f1c40f", "Y": "#d4a017"}}]}, "reply": "A cozy yellow

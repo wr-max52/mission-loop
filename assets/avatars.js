@@ -43,7 +43,7 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 // ---------- the pieces ----------
 
 const NAMES = {
-  style: { short: "Short", receding: "Receding", bob: "Bob", bigcurly: "Big curls", long: "Long", crop: "Crop", neat: "Side part", spiky: "Spiky" },
+  style: { short: "Short", tousled: "Tousled", receding: "Receding", bob: "Bob", bigcurly: "Big curls", long: "Long", crop: "Crop", neat: "Side part", spiky: "Spiky" },
   head: { null: "None", hijab: "Hijab", cap: "Cap", beanie: "Beanie", hardhat: "Hard hat", deerstalker: "Deerstalker", propeller: "Propeller" },
   outfit: { labcoat: "Lab coat", suit: "Suit", hoodie: "Hoodie", sweater: "Sweater", cardigan: "Cardigan", vest: "Hi-vis", overalls: "Overalls",
             jacket: "Jacket", abaya: "Abaya", trench: "Trench", tshirt: "T-shirt" },
@@ -146,7 +146,7 @@ function snapshot(spec, opts = {}) {             // a still of the avatar, cropp
 function tile(spec, crop, scale) {               // a canvas showing the avatar (or its head, or down to the waist)
   if (crop === "head" || crop === "bust") { spec = clone(spec); spec.prop = null; delete spec.propMap; }   // nothing in front of the face
   const c = h("canvas", { class: "px", "aria-hidden": "true" }), snap = snapshot(spec);
-  const box = { head: [24, 21], bust: [30, 40], full: [36, 62] }[crop || "full"];
+  const box = { head: [24, 24], bust: [30, 40], full: [36, 62] }[crop || "full"];
   c.width = box[0] * scale; c.height = box[1] * scale;
   c.style.width = c.width / 2 + "px"; c.style.height = c.height / 2 + "px";   // drawn at double density, crisp on any screen
   if (!snap) return c;
