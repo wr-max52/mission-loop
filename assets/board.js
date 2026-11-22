@@ -123,7 +123,15 @@
         els.set(n.id, el);
       }
       const html = noteHtml(n);
-      if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+      if (el.dataset.html !== html) {
+        const visitor = el.querySelector("canvas.lab-stage");      // a researcher standing on it stays
+        el.innerHTML = html; el.dataset.html = html;
+        if (visitor) el.appendChild(visitor);
+      }
+      if (n.live && data.animations) {                              // assets/researchers.js sends someone over
+        el.dataset.lab = "busy";
+        if (n.worker) el.dataset.worker = n.worker; else delete el.dataset.worker;
+      } else { delete el.dataset.lab; delete el.dataset.worker; }
       el.className = ["note", n.kind, n.paper || "", n.live ? "live" : "", n.faded ? "combined" : "",
                       n.proposed ? "proposed" : ""].filter(Boolean).join(" ");
       if (el !== dragEl) {
@@ -135,6 +143,7 @@
     for (const [id, el] of els) if (!seen.has(id)) { el.remove(); els.delete(id); }
     strings();
     shade();
+    if (window.Researchers) window.Researchers.rescan();
   }
   function pinOf(id) {
     const n = byId(id), el = els.get(id);
@@ -147,11 +156,13 @@
       const [x1, y1] = pinOf(s.a), [x2, y2] = pinOf(s.b), d = Math.hypot(x2 - x1, y2 - y1);
       const kind = data.style ? data.style.string : "string";
       const sag = kind === "laser" ? 0 : (s.kind === "epic" ? .12 : s.kind === "link" ? .08 : .05) * (kind === "wire" ? .5 : 1);
-      const path = `M${x1},${y1} Q${(x1 + x2) / 2},${(y1 + y2) / 2 + d * sag} ${x2},${y2}`;
+      const my = Math.round((y1 + y2) / 2);
+      const path = kind === "pixel" ? `M${x1},${y1} V${my} H${x2} V${y2}`
+        : `M${x1},${y1} Q${(x1 + x2) / 2},${(y1 + y2) / 2 + d * sag} ${x2},${y2}`;
       const g = document.createElementNS(NS, "g");
       g.dataset.a = s.a; g.dataset.b = s.b;
       g.setAttribute("class", "str " + s.kind);
-      for (const cls of kind === "string" ? ["line", "hit"] : ["line", "core", "hit"]) {
+      for (const cls of kind === "string" || kind === "pixel" ? ["line", "hit"] : ["line", "core", "hit"]) {
         const p = document.createElementNS(NS, "path");
         p.setAttribute("d", path); p.setAttribute("class", cls);
         g.appendChild(p);
@@ -424,5 +435,6 @@
     setTimeout(() => { glide({ z, x: w / 2 - n.x * z, y: h / 2 - n.y * z }); setTimeout(() => showPop(focus), GLIDE_MS); }, 250);
   }
   window.addEventListener("resize", () => { fill(); placePop(); });
+  window.addEventListener("load", () => { if (window.Researchers) window.Researchers.rescan(); });
   setInterval(poll, data.poll || 4000);
 })();

@@ -276,14 +276,15 @@ def set_chat_color(value: str) -> str:
 
 # The cork board's look (board.py, ui.board_page): the surface, the cards, and what joins them. Saved only when
 # not the default (cork, sticky notes, red string), like the theme.
-BOARD_SURFACES = {"cork": "Cork", "paper": "Paper", "grid": "Grid", "dark": "Night", "fridge": "Fridge"}
-BOARD_CARDS = {"sticky": "Sticky notes", "magnets": "Fridge magnets", "hologram": "Hologram"}
+BOARD_SURFACES = {"cork": "Cork", "paper": "Paper", "grid": "Grid", "dark": "Night", "fridge": "Fridge", "arcade": "Arcade"}
+BOARD_CARDS = {"sticky": "Sticky notes", "magnets": "Fridge magnets", "hologram": "Hologram", "pixel": "Pixel"}
 BOARD_STRINGS = {                                # kind -> its colours (a human may also pick any colour)
     "string": {"Red": "#c0242b", "Black": "#2b2620", "Blue": "#2f5fb0", "Green": "#2f8a4a", "Gold": "#c99a1e"},
     "laser": {"Red": "#ff3344", "Green": "#39ff88", "Blue": "#3fb8ff", "Violet": "#b45cff"},
     "wire": {"Copper": "#c87533", "Steel": "#8d99a6", "Brass": "#b5a642"},
+    "pixel": {"Red": "#ff004d", "Yellow": "#ffec27", "Blue": "#29adff", "Green": "#00e436", "White": "#fff1e8"},
 }
-BOARD_STRING_NAMES = {"string": "String", "laser": "Laser", "wire": "Wire"}
+BOARD_STRING_NAMES = {"string": "String", "laser": "Laser", "wire": "Wire", "pixel": "Pixel"}
 BOARD_DEFAULT = {"surface": "cork", "cards": "sticky", "string": "string", "color": "#c0242b"}
 
 def board_style() -> dict:

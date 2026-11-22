@@ -207,3 +207,21 @@ def test_the_gear_and_the_settings_page_change_the_same_look(client):
     assert client.get("/api/board").json()["style"]["cards"] == "magnets"
     assert client.post("/board/style", json={"cards": "tarot"}).status_code == 400
     assert client.post("/board/style", json={"cards": "sticky"}, headers={"origin": "https://evil.example"}).status_code == 403
+
+def test_a_note_a_model_works_on_names_whose_crew_visits_it(client, monkeypatch):
+    import activity
+    store.save_mission(Mission(slug="w", topic="Being written", state=State.WRITING))
+    store.save_mission(Mission(slug="q", topic="Queued topic"))
+    monkeypatch.setattr(ui, "running_now", lambda: [{"worker": "pi", "slug": "w", "agent": "writer", "since": 0}])
+    data = client.get("/api/board").json()
+    assert (note(data, "m:w")["live"], note(data, "m:w")["worker"]) == (True, "pi")
+    assert (note(data, "m:q")["live"], note(data, "m:q")["worker"]) == (False, "")
+    assert "/assets/researchers.js" in client.get("/board").text          # animations are on by default
+    import settings
+    settings.set_animations(False)
+    assert "/assets/researchers.js" not in client.get("/board").text
+
+def test_pixel_cards_arcade_and_pixel_string():
+    import settings
+    style = settings.set_board_style(surface="arcade", cards="pixel", string="pixel")
+    assert style == {"surface": "arcade", "cards": "pixel", "string": "pixel", "color": "#ff004d"}

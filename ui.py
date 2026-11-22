@@ -2609,7 +2609,7 @@ def board_state() -> dict:
     data = board.layout()
     missions = {m.slug: m for m in store.all_missions()}
     epics = {e.slug: e for e in store.all_epics()}
-    live = {e["slug"] for e in running_now()}
+    live = {e["slug"]: settings.seat_worker(e["worker"]) for e in running_now()}   # slug -> whose crew visits it
     strung: dict[str, int] = {}
     for s in data["strings"]:
         if s["kind"] != "epic":
@@ -2636,7 +2636,8 @@ def board_state() -> dict:
                      thesis_label="Thesis" if thesis else "Objective", stage=label(m), paper=paper(m),
                      epic=epics[m.epic].title if m.epic in epics else "", url=f"/m/{quote(m.slug)}",
                      open="Open article" if article else "Open brief" if brief else "Open mission",
-                     meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED)
+                     meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED,
+                     worker=live.get(m.slug) if live.get(m.slug) in settings.WORKERS else "")
         else:
             count = members.get(n["slug"], 0)
             e = epics.get(n["slug"])
@@ -2764,7 +2765,7 @@ async def board_page(request: Request) -> Response:
             f'<button type="button" data-tool="style" title="Board style" aria-label="Board style" '
             f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
             f'</div><script type="application/json" id="board-data">{raw}</script>'
-            f'<script src="/assets/board.js" defer></script>')
+            f'<script src="/assets/board.js" defer></script>{RESEARCHERS if data["animations"] else ""}')
     return page("Board", body)
 
 BOARD_CSS = """
@@ -2792,6 +2793,7 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap .str .hit { stroke:transparent; stroke-width:12; pointer-events:stroke; }
 .board-wrap .str.epic .hit { pointer-events:none; }
 .board-wrap .faded { opacity:.2; filter:saturate(.3); transition:opacity .3s; }
+.board-wrap .note { border:none; margin:0; }                /* not the site's .note */
 .board-wrap .note { --s:1; position:absolute; transform:translate(-50%,-50%) rotate(var(--r,0deg));
   width:calc(160px * var(--s)); padding:calc(20px * var(--s)) calc(13px * var(--s)) calc(11px * var(--s));
   font-size:calc(13px * var(--s)); line-height:1.3; background:var(--paper,#fff3a3); color:#2b2620; border-radius:2px;
@@ -3023,6 +3025,61 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-style .dot.own input { position:absolute; inset:-6px; width:40px; height:40px; opacity:0; cursor:pointer; }
 .board-style .more { display:block; margin-top:.8rem; font-size:12px; }
 .board-tools button svg { width:18px; height:18px; fill:none; stroke:var(--fg); stroke-width:1.8; }
+/* ---------- researchers walk on top of a note a model is working on (assets/researchers.js) ---------- */
+.board-wrap .note canvas.lab-stage { position:absolute; left:0; top:auto; bottom:100%; width:100%; height:150px;
+  pointer-events:none; image-rendering:pixelated; }
+.board-wrap .note[data-lab] { --r:0deg !important; }        /* level ground to walk on */
+
+/* ---------- surface: arcade ---------- */
+.board-wrap.surface-arcade { background-color:#1d2b53; border-radius:0;
+  background-image:linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 125%, rgba(126,37,83,.6), transparent 62%);
+  background-size:calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), calc(var(--gz,1) * 32px) calc(var(--gz,1) * 32px), 100% 100%;
+  background-position:var(--gx,0) var(--gy,0), var(--gx,0) var(--gy,0), 0 0;
+  box-shadow:inset 0 0 0 6px #000, inset 0 0 0 10px #5f574f, inset 0 0 0 12px #000; }
+.board-wrap.surface-arcade .note.unsorted, .board-wrap.surface-arcade .board-empty { color:#fff1e8; }
+
+/* ---------- strings: pixel (right-angle elbows) ---------- */
+.board-wrap.str-pixel .str path { stroke-linecap:square; stroke-linejoin:miter; }
+.board-wrap.str-pixel .str .line { stroke-width:3; filter:drop-shadow(2px 2px 0 rgba(0,0,0,.45)); }
+.board-wrap.str-pixel .str.link .line { stroke-width:2.5; }
+.board-wrap.str-pixel .str.mention .line { stroke-width:2; stroke-dasharray:6 6; opacity:.9; }
+.board-wrap.str-pixel .board-legend i { border-top-width:3px; }
+
+/* ---------- cards: pixel (flat 8-bit colours, stepped borders, hard shadows) ---------- */
+.board-wrap.cards-pixel .note { --px:calc(3px * var(--s)); --ink:#1d1d1f; transform:translate(-50%,-50%);
+  background:var(--pix,#c2c3c7); color:var(--ink); border-radius:0; letter-spacing:.01em;
+  font:700 calc(12px * var(--s))/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding:calc(17px * var(--s)) calc(12px * var(--s)) calc(10px * var(--s));
+  box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink), calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink),
+    inset var(--px) var(--px) 0 0 rgba(255,255,255,.5), inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 0 rgba(0,0,0,.18),
+    calc(3 * var(--px)) calc(3 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note.lifted { box-shadow:0 calc(-1 * var(--px)) 0 0 var(--ink), 0 var(--px) 0 0 var(--ink),
+  calc(-1 * var(--px)) 0 0 0 var(--ink), var(--px) 0 0 0 var(--ink), calc(5 * var(--px)) calc(5 * var(--px)) 0 0 rgba(0,0,0,.35); }
+.board-wrap.cards-pixel .note .t { font-family:inherit; font-weight:800; }
+.board-wrap.cards-pixel .note .pin { border-radius:0; width:calc(8px * var(--s)); height:calc(8px * var(--s)); top:calc(5px * var(--s));
+  margin-left:calc(-4px * var(--s)); background:#ff004d; box-shadow:0 0 0 2px var(--ink), 2px 2px 0 2px rgba(0,0,0,.3); }
+.board-wrap.cards-pixel .note .stage { color:rgba(0,0,0,.7); font-size:.78em; }
+.board-wrap.cards-pixel .note .stage::before { border-radius:0; background:var(--ink); }
+.board-wrap.cards-pixel .note .stamp { transform:none; border-radius:0; border-width:2px; color:var(--ink); border-color:var(--ink);
+  background:rgba(255,255,255,.55); opacity:1; }
+.board-wrap.cards-pixel .note .now { border-radius:0; background:#00e436; color:#1d1d1f; font:800 9.5px/1 ui-monospace, Menlo, monospace;
+  box-shadow:0 0 0 2px #1d1d1f, 2px 2px 0 2px rgba(0,0,0,.35); top:-12px; }
+.board-wrap.cards-pixel .note.live { outline:3px dashed #00e436; outline-offset:6px; }
+.board-wrap.cards-pixel .queued   { --pix:#c2c3c7; } .board-wrap.cards-pixel .research { --pix:#ffec27; }
+.board-wrap.cards-pixel .review   { --pix:#29adff; } .board-wrap.cards-pixel .writing  { --pix:#ffa300; }
+.board-wrap.cards-pixel .publish  { --pix:#00e436; } .board-wrap.cards-pixel .done     { --pix:#fff1e8; }
+.board-wrap.cards-pixel .parked   { --pix:#ff77a8; }
+.board-wrap.cards-pixel .note.epic { --pix:#7e2553; --ink:#000; color:#fff1e8; background-image:none;
+  font:700 calc(13px * var(--s))/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.board-wrap.cards-pixel .note.epic::before { display:none; }
+.board-wrap.cards-pixel .note.epic .k { color:#ffec27; font:800 .7em/1 ui-monospace, Menlo, monospace; letter-spacing:.2em; }
+.board-wrap.cards-pixel .note.epic .t { font-family:inherit; font-weight:800; font-size:1.4em; }
+.board-wrap.cards-pixel .note.epic .n { color:#fff1e8; opacity:.85; }
+.board-wrap.cards-pixel .note.epic .pin { background:#ffec27; }
+.board-wrap.cards-pixel .note.epic.proposed { outline:3px dashed #ffec27; outline-offset:6px; }
+.board-wrap.cards-pixel .note.unsorted { background:none; box-shadow:none; }
+.board-wrap.cards-pixel .note .grip { background:linear-gradient(135deg, transparent 50%, var(--ink) 50%); }
 """
 
 # ---------- actions (POST, then redirect back) ----------

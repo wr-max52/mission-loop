@@ -19,7 +19,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink`
-- Tests: `pytest -q` (expects 541 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 543 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -387,11 +387,16 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   in place, so a new mission appears on its own. Every mission card and mission page has "On the board"
   (`/board?focus=<slug>`, zoomed onto it). Its look (#68) is the gear on the board or Settings → Display → Board, the
   same setting (`settings.board_style`, saved in `data/settings.json` only when not cork, sticky notes and red
-  string): a surface (cork, paper, grid, night, fridge; grid and night move with the view), cards (sticky notes;
+  string): a surface (cork, paper, grid, night, fridge, arcade; grid, night and arcade move with the view), cards (sticky notes;
   fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
   tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
-  panels glowing in their stage's colour), and what joins them (string, laser, wire) in a preset or any colour.
-  Laser pulses and holograms flicker only while Animations are on.
+  panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
+  joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour. A card's colour is its
+  stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
+  a model is working on gets `data-lab` and its worker (`data-worker`), so `assets/researchers.js` sends a pixel
+  researcher from that worker's crew to walk on top of it, as on the mission cards. Laser pulses and holograms
+  flicker only while Animations are on. Board notes override the published site's `.note` and `.epic` styles,
+  which share their class names.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
