@@ -15,7 +15,7 @@ Nothing leaves this machine.
 import json
 from pathlib import Path
 import settings, store
-from contracts import Mission, ResearchBrief, Article
+from contracts import Mission, State, ResearchBrief, Article
 from render import article_html, article_text, index_html, about_html, feed_json, feed_xml
 
 SITE = Path("site")
@@ -55,20 +55,40 @@ def epic_label(m: Mission) -> str:
     epic = store.get_epic(m.epic) if m.epic else None
     return epic.title if epic and epic.status == "active" else ""
 
-def write_page(m: Mission, brief: ResearchBrief, article: Article, published_at) -> Path:
-    """The article page and its meta.json. Also used to redraw a published page when its epic changes."""
+def connected(m: Mission, publishing: str = "") -> list[tuple[str, str, str]]:
+    """(slug, title, why) for each published article linked to this one: what its page points to. publishing:
+    the article being published right now, which counts as published already."""
+    found = []
+    for k in store.links_of(m.slug):
+        other = store.get_mission(k.other(m.slug))
+        out = other and (other.state == State.DONE or other.slug == publishing)
+        data = store.load_artifact(other.slug, "article") if out else None
+        if data:
+            found.append((other.slug, Article(**data).title, k.why))
+    return found
+
+def write_page(m: Mission, brief: ResearchBrief, article: Article, published_at, publishing: str = "") -> Path:
+    """The article page and its meta.json. Also used to redraw a published page when its epic or links change."""
     folder = SITE / m.slug
     folder.mkdir(parents=True, exist_ok=True)
     page = folder / "index.html"
     epic = epic_label(m)
     checks = dict(brief_checked=not m.unchecked_brief, article_checked=not m.unchecked_article)
-    page.write_text(article_html(brief, article, published_at=published_at, epic=epic, slug=m.slug, **checks))
+    page.write_text(article_html(brief, article, published_at=published_at, epic=epic, slug=m.slug,
+                                 connected=connected(m, publishing), **checks))
     (folder / "meta.json").write_text(json.dumps({
         "slug": m.slug, "title": article.title, "dek": article.dek, "published_at": published_at.isoformat(),
         "epic": epic, "text": article_text(brief, article, **checks)}))
     return page
 
 def publish(m: Mission, brief: ResearchBrief, article: Article, now) -> Path:
+    """The article's page, then the pages of the published articles linked to it, so they point back."""
     page = write_page(m, brief, article, now)
+    for slug, _, _ in connected(m):
+        other = store.get_mission(slug)
+        b = store.load_artifact(slug, "brief")
+        if other and b and other.published_at:
+            write_page(other, ResearchBrief(**b), Article(**store.load_artifact(slug, "article")), other.published_at,
+                       publishing=m.slug)
     rebuild_index()
     return page

@@ -1,7 +1,7 @@
 import json, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from contracts import Mission, Epic, epic_title, slugify
+from contracts import Mission, Epic, Link, Combine, epic_title, slugify
 
 DB = Path("data/loop.db")
 INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder, which the Theorist evolves
@@ -71,6 +71,10 @@ def init():
             from_state TEXT, to_state TEXT, note TEXT);
         CREATE TABLE IF NOT EXISTS epics(
             slug TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active');
+        CREATE TABLE IF NOT EXISTS links(
+            a TEXT, b TEXT, data TEXT NOT NULL, PRIMARY KEY (a, b));
+        CREATE TABLE IF NOT EXISTS combines(
+            slug TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
         """)
 
 def save_mission(m: Mission):
@@ -89,7 +93,7 @@ def all_missions() -> list[Mission]:
     return [Mission.model_validate_json(r["data"]) for r in rows]
 
 def active_missions() -> list[Mission]:
-    return [m for m in all_missions() if m.state.value not in ("DONE", "PARKED")]
+    return [m for m in all_missions() if m.state.value not in ("DONE", "PARKED", "COMBINED")]
 
 def save_artifact(slug: str, kind: str, obj):
     if isinstance(obj, list):
@@ -159,3 +163,52 @@ def delete_epic(slug: str):
 def epic_titles() -> dict[str, str]:
     """slug -> title for every epic, for labels."""
     return {e.slug: e.title for e in all_epics()}
+
+# ---------- links and combines: the Theorist connecting dots ----------
+# Links and combine proposals live in their own tables, never on the mission, so a worker saving the mission it
+# is busy with can't save over one.
+
+def _pair(a: str, b: str) -> tuple[str, str]:
+    return (a, b) if a < b else (b, a)
+
+def get_link(a: str, b: str) -> Link | None:
+    a, b = _pair(a, b)
+    row = conn().execute("SELECT data FROM links WHERE a = ? AND b = ?", (a, b)).fetchone()
+    return Link.model_validate_json(row["data"]) if row else None
+
+def save_link(link: Link) -> Link:
+    link.a, link.b = _pair(link.a, link.b)
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO links VALUES (?, ?, ?)", (link.a, link.b, link.model_dump_json()))
+    return link
+
+def delete_link(a: str, b: str) -> None:
+    a, b = _pair(a, b)
+    with conn() as c:
+        c.execute("DELETE FROM links WHERE a = ? AND b = ?", (a, b))
+
+def all_links(status: str | None = "active") -> list[Link]:
+    rows = conn().execute("SELECT data FROM links ORDER BY rowid").fetchall()
+    found = [Link.model_validate_json(r["data"]) for r in rows]
+    return [k for k in found if status in (None, k.status)]
+
+def links_of(slug: str, status: str | None = "active") -> list[Link]:
+    return [k for k in all_links(status) if slug in (k.a, k.b)]
+
+def get_combine(slug: str) -> Combine | None:
+    row = conn().execute("SELECT data FROM combines WHERE slug = ?", (slug,)).fetchone()
+    return Combine.model_validate_json(row["data"]) if row else None
+
+def save_combine(c_: Combine) -> None:
+    with conn() as c:
+        c.execute("INSERT INTO combines VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET "
+                  "status = excluded.status, data = excluded.data", (c_.slug, c_.status, c_.model_dump_json()))
+
+def delete_combine(slug: str) -> None:
+    with conn() as c:
+        c.execute("DELETE FROM combines WHERE slug = ?", (slug,))
+
+def all_combines(status: str | None = None) -> list[Combine]:
+    rows = conn().execute("SELECT data FROM combines ORDER BY rowid").fetchall()
+    found = [Combine.model_validate_json(r["data"]) for r in rows]
+    return [c for c in found if status in (None, c.status)]

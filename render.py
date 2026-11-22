@@ -115,6 +115,8 @@ h2 { font-size: 1.3rem; margin: 2.2rem 0 .6rem; }
         border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 1.5rem; }
 sup a { text-decoration: none; font: 600 0.7rem -apple-system, system-ui, sans-serif; }
 ol.sources { padding-left: 1.4rem; font-size: 0.95rem; }
+ul.connected { padding-left: 1.2rem; } ul.connected li { margin-bottom: .5rem; }
+ul.connected .why { color: var(--muted); font-size: .9rem; }
 ol.sources li { margin-bottom: 1rem; }
 ol.sources blockquote { margin: .35rem 0 0; padding: .5rem .75rem; background: var(--quote);
                         border-left: 3px solid var(--rule); }
@@ -216,11 +218,13 @@ def tag_href(home: str, tag: str) -> str:
     return f"{home}?tag={quote(tag)}"
 
 def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../",
-                 brief_checked: bool = True, article_checked: bool = True, epic: str = "", slug: str = "") -> str:
+                 brief_checked: bool = True, article_checked: bool = True, epic: str = "", slug: str = "",
+                 connected: list[tuple[str, str, str]] = ()) -> str:
     """brief_checked / article_checked are False when a human pushed that work past a failed check;
     the page must then not claim the check passed. With a slug the page is on the site: it gets the site's
     links, a way back to every article and the newer and older articles (read from the feed, so they stay
-    current as more are published); without one it is a preview."""
+    current as more are published); without one it is a preview. connected: (slug, title, why) for the
+    published articles linked to it, listed on the site page."""
     nums = _source_numbers(b, a)
 
     def cite(match) -> str:
@@ -248,7 +252,12 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
                     f'<a href="{escape(s.url)}">{escape(s.title)}</a>{_archived(s.url)}'
                     f"<blockquote>{escape(s.quote)}</blockquote></li>")
     body.append("</ol>")
-    body.append(f'<p class="note">{check_note(a, brief_checked, article_checked)}</p></article>')
+    body.append(f'<p class="note">{check_note(a, brief_checked, article_checked)}</p>')
+    if slug and connected:
+        items = "".join(f'<li><a href="{home}{escape(s)}/">{escape(t)}</a>'
+                        + (f'<br><span class="why">{escape(w)}</span>' if w else "") + "</li>" for s, t, w in connected)
+        body.append(f'<h2>Connected articles</h2><ul class="connected">{items}</ul>')
+    body.append("</article>")
     if slug:
         body.append(f'<nav class="pager" data-slug="{escape(slug)}" data-feed="{home}feed.json" aria-label="More articles">'
                     f'</nav>{PAGER_JS}')
@@ -391,7 +400,9 @@ ABOUT_FLOW = flowchart.CSS + ABOUT_CSS
 AGENT_NOTES = [
     ("Theorist", "Principal Investigator",
      "Looks across every mission and published article for patterns inside each tag and themes emerging between "
-     "them, then sharpens the desk's guiding questions. Now and then it proposes a new tag or one new mission."),
+     "them, then sharpens the desk's guiding questions and connects the dots: it links missions that bear on each "
+     "other or on a published article, and proposes combining missions that are really one question. Now and then "
+     "it proposes a new tag or one new mission."),
     ("Mission finder", "both models",
      "Searches around those guiding questions from a couple of unexpected angles and proposes up to three new "
      "missions, each resting on a page it actually found."),

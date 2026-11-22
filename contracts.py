@@ -13,6 +13,7 @@ class State(str, Enum):
     ARTICLE_READY = "ARTICLE_READY"        # waits for human review
     DONE = "DONE"
     PARKED = "PARKED"
+    COMBINED = "COMBINED"                  # folded into a bigger mission (combined_into); out of the flow
 
 class ChannelPost(BaseModel):
     """One place an article was published: when, and where to find it (a path or a URL)."""
@@ -50,6 +51,41 @@ class Mission(BaseModel):
     publish_requests: dict[str, datetime] = {}   # "site" or a channel key -> when a human asked to (re)publish there
     epic: str = ""                         # slug of the epic this mission belongs to ("" = none yet)
     epic_fallback: str = ""                # finder's best existing epic, used if its proposed new epic is rejected
+    combines: list[str] = []               # the missions this one was made from (a combine the human approved)
+    combined_into: str = ""                # set with State.COMBINED: the bigger mission that took this one over
+
+# Before writing starts, a mission can still be folded into a bigger one; after that it is nearly an article.
+COMBINABLE = {State.QUEUED, State.RESEARCHING, State.BRIEF_READY, State.PARKED}
+
+def is_open(m: Mission) -> bool:
+    """Not published yet and still the desk's own work (not combined into another mission)."""
+    return m.state not in (State.DONE, State.COMBINED)
+
+class Link(BaseModel):
+    """Two missions the Theorist (or a human) connected while keeping them separate: two open missions, or an
+    open mission and a published article. Stored once per pair, a < b. A link a human removes stays as
+    "removed", so the Theorist doesn't make it again."""
+    a: str
+    b: str
+    why: str = ""
+    by: str = "theorist"                   # "theorist" or "human"
+    at: str = ""                           # ISO time
+    status: Literal["active", "removed"] = "active"
+
+    def other(self, slug: str) -> str:
+        return self.b if slug == self.a else self.a
+
+class Combine(BaseModel):
+    """The Theorist's proposal to fold 2+ open missions into one bigger mission. It waits for the human (or auto
+    mode) like a proposed epic; approving makes the mission and retires the members (State.COMBINED)."""
+    slug: str                              # the new mission's slug (made fresh again if taken by then)
+    topic: str
+    objective: str
+    members: list[str]
+    epic: str = ""                         # an epic's title, or ""
+    why: str = ""
+    at: str = ""
+    status: Literal["proposed", "approved", "rejected"] = "proposed"
 
 class Epic(BaseModel):
     """A long-running line of inquiry: a short thematic title, not a goal. The missions in it describe it,
