@@ -21,7 +21,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 673 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 675 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -300,7 +300,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
     (`assets/about.js` drives it through `assets/flow.js`; `data-demo` means nothing is polled), says what each
     agent does (`render.AGENT_NOTES`), and has a floor where a researcher or two drops by for a short visit and
     says something (`window.RESEARCHERS_PACE`). Rebuilding the index rewrites it and copies those three scripts to
-    `site/assets/`. `about` and `assets` are the site's own folders, so no mission gets them as its slug
+    `site/assets/`, and starting the UI copies any that differ from the code's (`publisher.refresh_assets`), so an
+    updated script reaches the site without waiting for the next article. The UI serves `/assets` and `/site` with
+    `Cache-Control: no-cache` (`ui.FreshFiles`) and writes every script's address with a stamp of its contents
+    (`ui.asset`, `ui.script`: `/assets/researchers.js?v=1a2b3c4d`), so a browser never keeps drawing with an old script. `about` and `assets` are the site's own folders, so no mission gets them as its slug
     (`contracts.SITE_FOLDERS`).
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
     `CHANNELS` in `agents/__init__.py`; `agents.channels()` is those plus the custom ones). When the loop starts,
@@ -544,8 +547,8 @@ come from a shuffled cast and their lines from a shuffled deck of 500+ academic 
 repeats soon. Nobody is ever on the page twice at once (the chat's guide included), and the last three arrivals wait
 while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
 giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
-the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), `tools/sprites.html` the
-playground, and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. The avatar
+the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), the sprite studio the place to try one (`/sprites` in the app,
+from Settings → Avatars; it is `tools/sprites.html`, which also opens from a served copy of the repo), and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. The avatar
 studio (`/avatars`, `assets/avatars.js`) builds them: pieces drawn as your own avatar wearing them, a live preview,
 and "Ask a model" (`agents/avatar.py`, `agents.edit_avatar`: one call held to a JSON schema of the real parts, thinking
 off, a picture only to a local model Ollama says can see, every result checked in the browser with up to two repair
@@ -566,6 +569,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
+| Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
 | Set the published site's name, tagline and About statement | Settings → Publication |
 | Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |

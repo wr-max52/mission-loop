@@ -222,6 +222,10 @@ def test_about_page_plays_the_pipeline_and_explains_the_agents():
         assert Path("site/assets", name).read_bytes() == (publisher.ASSETS / name).read_bytes()
         assert f'src="../assets/{name}"' in about
     assert 'aria-current="page">About' in about
+    Path("site/assets/researchers.js").write_text("an older drawing")              # the code moved on since
+    assert publisher.refresh_assets() == ["researchers.js"]                        # only what differs is copied
+    assert Path("site/assets/researchers.js").read_bytes() == (publisher.ASSETS / "researchers.js").read_bytes()
+    assert publisher.refresh_assets() == []
 
 def test_no_mission_takes_a_site_folder_as_its_slug():
     assert orchestrator._new_slug("About", set()) == "about-2"

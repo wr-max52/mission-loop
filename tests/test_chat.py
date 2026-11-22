@@ -329,7 +329,7 @@ def test_model_picker_lists_models_and_reports_ollama_down(monkeypatch):
 def test_panel_is_researcher_chat_with_a_guide_only_while_animations_are_on():
     client = TestClient(ui.app)
     html = client.get("/settings").text
-    assert "<strong>Researcher Chat</strong>" in html and 'data-sprites="/assets/researchers.js"' in html
+    assert "<strong>Researcher Chat</strong>" in html and 'data-sprites="/assets/researchers.js?v=' in html
     settings.set_animations(False)
     html = client.get("/published").text
     assert "Researcher Chat" in html and 'class="chat-guide"' not in html and "researchers.js" not in html

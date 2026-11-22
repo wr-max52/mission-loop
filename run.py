@@ -259,6 +259,8 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
     Path("site").mkdir(exist_ok=True)      # /site errors if the folder is missing; publishing creates it later
     if not (publisher.SITE / "index.html").exists():
         publisher.rebuild_index()          # so the site and its About page open before anything is published
+    else:
+        publisher.refresh_assets()         # the site's own copies of the scripts follow the code's
     url = f"http://127.0.0.1:{port}"
     print(f"Mission Loop UI: {url}  (Ctrl-C to quit)", flush=True)
     if open_browser:

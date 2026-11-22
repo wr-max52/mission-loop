@@ -11,7 +11,14 @@
 (() => {
 "use strict";
 const R = window.Researchers, root = document.getElementById("studio");
-if (!R || !root || !R.renderSprite) return;
+if (!root) return;
+if (!R || !R.renderSprite) {                    // the drawing script didn't load, or the browser kept an old copy of it
+  const p = document.createElement("p");
+  p.className = "error";
+  p.textContent = "The studio's drawing code didn't load. Reload the page; if it stays like this, hold Shift while you reload.";
+  root.appendChild(p);
+  return;
+}
 
 // ---------- small helpers ----------
 
