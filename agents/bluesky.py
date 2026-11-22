@@ -8,7 +8,8 @@ was checked against; a login in .env uses BLUESKY_SERVICE (default https://bsky.
 
 A post is at most 300 characters, so it carries only the title and the dek; the full article, with its sources and
 its "Possibility, not verified" labels, is behind the link. The link goes to the article on the published site when
-a site address is set (settings.site_url), else to its 1F916 post if it has one; with neither, the post has no link.
+a site address is set (settings.site_url, which is the GitHub Pages address once a repo is linked), else to its 1F916
+post if it has one; with neither, the post has no link. With GitHub Pages on, an entry waits until it is on the site.
 After each post the channel waits POST_GAP, so a backlog goes out about one a pass instead of all at once.
 The orchestrator decides which entry goes next (see agents/channel.py); this module only talks to Bluesky.
 """
@@ -116,6 +117,15 @@ def post_text(entry: dict) -> str:
         dek = f"{UNCHECKED} {dek}"
     return title + "\n\n" + _clip(dek, TEXT_MAX - len(title) - 2)
 
+def _waiting_for_site(entry: dict) -> bool:
+    """True while the GitHub Pages channel is on and hasn't put this entry on the site yet, so the link would
+    lead nowhere. It posts first in a pass (agents.CHANNELS), so this only holds while GitHub is failing."""
+    from agents import github
+    if not github.enabled() or settings.site_url() != github.site_address():
+        return False
+    m = store.get_mission(entry["slug"])
+    return bool(m) and github.KEY not in m.channels
+
 def article_link(entry: dict) -> str:
     """Where readers can read the whole article, or "" when there is no public copy."""
     if settings.site_url():
@@ -160,6 +170,8 @@ def web_url(uri: str, actor: str) -> str:
 def post(entry: dict, now: datetime) -> str:
     """Announce one feed entry. Returns the post's bsky.app address. Raises NoAllowance (rate limited),
     Refused, or anything else for "try again next pass" (noted in the state file for the UI)."""
+    if _waiting_for_site(entry):
+        raise NoAllowance("waiting for GitHub Pages to put the article on the site")
     try:
         where = _send(entry, now)
     except Refused:

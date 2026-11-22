@@ -5,7 +5,7 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
-from agents import bluesky, f916, publisher
+from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ChannelPost, epic_title, slugify)
@@ -442,7 +442,7 @@ def find_new_missions(now) -> int:
 
 # ---------- publishing channels beyond the local site ----------
 
-CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME, bluesky.KEY: bluesky.NAME}
+CHANNEL_NAMES = {"site": "Local site", f916.KEY: f916.NAME, github.KEY: github.NAME, bluesky.KEY: bluesky.NAME}
 
 def channels(m: Mission) -> dict[str, ChannelPost]:
     """Everywhere this mission was published. Missions published before channels were recorded
@@ -470,6 +470,12 @@ def post_to(channel, now, max_tries: int = 3) -> int:
     """Post waiting entries until the channel has no allowance left. A refused entry costs nothing, so the
     next one is tried; any other failure stops this channel until its next turn. Returns how many posted."""
     posted = 0
+    if hasattr(channel, "sync"):
+        try:
+            channel.sync(now)
+        except Exception as e:             # nothing is lost, try next turn
+            print(f"{channel.NAME} update failed: {type(e).__name__}: {e}", flush=True)
+            return 0
     for entry in queue(channel)[:max_tries]:
         until = channel.wait_until()
         if until and now < until:

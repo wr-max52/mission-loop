@@ -6,22 +6,26 @@ The code lives in the private GitHub repo `wr-max52/mission-loop` (`origin`). Pu
 Never commit or push `missions.yaml`, `missions/`, `data/`, `site/`, or `.env`; they stay on this
 machine. A local `pre-push` hook blocks commits containing them. Branches started before the repo
 moved to GitHub must be rebased onto `origin/main` before pushing. Publishing writes a static site
-into `site/` on this machine, posts the article text to 1f916.ai only once `data/1f916.json` holds a key, and
-announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the Settings page) or `.env` has
-`BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole identity (no recovery) and
-`data/bluesky.json` holds an app password: never commit, print or move either.
+into `site/` on this machine, posts the article text to 1f916.ai only once `data/1f916.json` holds a key, pushes
+`site/` to a separate public GitHub Pages repo only once GitHub is connected and a repo linked (`data/github.json`,
+from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
+Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
+identity (no recovery), `data/github.json` holds a GitHub token and `data/bluesky.json` an app password: never
+commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 321 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
-  Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
+- Tests: `pytest -q` (expects 339 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky or
+  the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are cleared so a real
+  `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
-  Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
-  `.env` (see `.env.example`), and only a service address falls back to that service's public default (Ollama's
-  local `http://127.0.0.1:11434`, `https://1f916.ai`, `https://bsky.social`). Models have no default: with none
+  Bluesky servers, the GitHub server and OAuth app, and the site address are looked up in `data/settings.json` (the
+  Settings page writes it), then `.env` (see `.env.example`), and only a service address falls back to that
+  service's public default (Ollama's local `http://127.0.0.1:11434`, `https://1f916.ai`, `https://bsky.social`,
+  `https://github.com`; the site address falls back to the linked GitHub Pages address). Models have no default: with none
   chosen the loop won't start and says so. All lookups live in `settings.py`; don't add a model name or server
   address anywhere else. Tests set their own fake models in `tests/conftest.py`.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
@@ -120,6 +124,20 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site allows one post per
     UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out right after
     publishing if the day's post is free, and the rest wait, newest first.
+  - `github`: `agents/github.py` keeps a separate public GitHub repo identical to `site/`, so GitHub Pages serves
+    the site. Set up once on the Settings page: Connect GitHub (GitHub's device flow: the page shows a code to
+    enter at github.com/login/device; scope `public_repo` only; token saved to `data/github.json`, mode 600), then
+    create the site's repo (default `<login>.github.io`, which GitHub serves with nothing to switch on) or paste
+    the link of one. Linking turns Pages on where the API allows it, else names the repo settings page to do it in,
+    and refuses private repos, repos it can't push to and repos holding other files (the site replaces everything
+    except `KEEP`: CNAME, README, licence). The channel's `sync` runs before its queue on every channel turn (an
+    optional hook in `agents/channel.py`) and pushes whatever changed as one commit through the Git Data API (only
+    changed files are uploaded; no git needed; `data/github_state.json` remembers the last push, so an unchanged
+    site costs no request). Each entry's post records its page there. While no site address is typed in, the
+    Pages address is the site address (`settings.site_url`), so the feeds use it and Bluesky links to it, and
+    Bluesky holds an entry until GitHub has it. The sign-in uses mission-loop's OAuth app
+    (`settings.GITHUB_CLIENT_ID`; a client ID is public, there is no secret); a copy without one asks for one on
+    the Settings page (`MISSION_LOOP_GITHUB_CLIENT_ID` in `.env` also works).
   - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky with a short post (title and dek, at most
     300 characters; a possibility in the dek keeps its "Possibility, not verified" label, and a pushed-through
     article starts with "[Failed automated checks]"). Its link card goes to the article on the site when
@@ -221,6 +239,7 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | View the site | open `site/index.html`, or `python -m http.server 8765 -d site` |
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the site address on the Settings page once it is hosted |
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
+| Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on | the chat bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
 | Pick each worker's model, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |

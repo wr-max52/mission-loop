@@ -232,6 +232,8 @@ def _channel_summary(m) -> str:
     names = [orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)]
     if agents.f916_enabled() and "1f916" not in m.channels:
         names.append("1F916 queued")
+    if agents.github_enabled() and "github" not in m.channels:
+        names.append("GitHub Pages queued")
     if agents.bluesky_enabled() and "bluesky" not in m.channels:
         names.append("Bluesky queued")
     return " published: " + ", ".join(names)
@@ -247,6 +249,11 @@ def status():
         queued, until = len(orchestrator.queue(f916)), f916.spent_until()
         when = f"next post after {until:%m-%d %H:%M} UTC" if until and until > clock.now() else "can post now"
         print(f"1F916 as {f916.key()['handle']}: {queued} queued, {when}")
+    if agents.github_enabled():
+        from agents import github
+        note = github.load_state().get("note", "")
+        print(f"GitHub Pages: {github.repo()} -> {github.site_address()}, {len(orchestrator.queue(github))} queued"
+              + (f" (last push failed: {note})" if note else ""))
     if agents.bluesky_enabled():
         from agents import bluesky
         note = bluesky.load_state().get("note", "")
