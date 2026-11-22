@@ -2,14 +2,17 @@
  * are in progress. Each in-progress card gets its own random schedule: the first visitor turns up after a
  * random wait, walks in from a side, stays 15-30 seconds doing comic researcher things, walks off, and
  * after a random 10-20 second gap the next one comes. Never more than two are on the page at once, and
- * arrivals come one at a time, a random 4-15 seconds apart; stages that have waited longest go first. Visitors are drawn from a shuffled roster, so every character gets a
- * turn before anyone repeats.
+ * arrivals come one at a time, a random 4-15 seconds apart; stages that have waited longest go first.
+ * Visitors are drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every
+ * character belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones
+ * to the Principal Investigator), and a stage tagged with data-worker only gets visitors from that crew.
+ * On the Settings page each worker's card has its whole crew standing about (a "crew" stage).
  *
- * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). While a
- * step is lit, one researcher stays with it doing that step's kind of work. When the same mission moves on
- * (sources -> brief -> check), they run after it. When the work ends or moves to another mission (say a
- * brief passed its check and went to your review), they say a closing line and walk off, and a new one
- * walks in for whatever started. assets/flow.js says when that happens with a "flowchange" event.
+ * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). Each
+ * busy worker's lit step gets one researcher from that worker's crew, doing that step's kind of work.
+ * When the worker's mission moves on (sources -> brief -> check), they run after it. When the work ends,
+ * moves to another mission, or passes to the other worker, they say a closing line and walk off, and a new
+ * one walks in for whatever started. assets/flow.js says when that happens with a "flowchange" event.
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -72,47 +75,49 @@ const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c
 
 // Each character keeps their look (outfit, hair, headwear, signature prop); height, build and some
 // colors vary per visit. `fav` boosts the actions they're known for; everything else can still happen.
+// `worker` is whose crew they're in: "assistant" (young, the small model) or "pi" (tenured, the big model).
 const ROSTER = {
-  aris:   { name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "mustache",
+  aris:   { worker: "pi", name: "Dr. Aris", skin: [6, 7, 5], hair: ["#cfcfcf", "#b5b5b5"], style: "receding", facial: "mustache",
             brows: true, outfit: "labcoat", shirt: ["#5b7fa6", "#6c8fb8"], pants: ["#3a3a40"], shoes: ["#6b3e26"],
             prop: "tablet", fav: { read: 2, citation: 2.5, notes: 1.5 } },
-  aisha:  { name: "Aisha", skin: [5, 6, 4, 3], head: "hijab", hijab: ["#1f3a5f", "#2d2d4a", "#4a2240", "#1e4d4a"],
+  aisha:  { worker: "pi", name: "Aisha", skin: [5, 6, 4, 3], head: "hijab", hijab: ["#1f3a5f", "#2d2d4a", "#4a2240", "#1e4d4a"],
             outfit: "abaya", top: ["#a9cbe8", "#c4b5e0", "#b5d8c6"], pants: ["#2c3e57"], shoes: ["#2b2b30"],
             prop: "tablet", fav: { notes: 2.5, search: 1.5, typing: 1.5 } },
-  ben:    { name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short",
+  ben:    { worker: "assistant", name: "Ben", skin: [1, 2, 3], hair: ["#6e4527", "#93602f", "#4b3021"], style: "short",
             outfit: "sweater", top: ["#7d8691", "#5f7f6b", "#8a6f5a"], pants: ["#c8b48a", "#b5a27a"],
             shoes: ["#6b3e26"], pack: ["#6b4a2e", "#3d5a80"], prop: null, fav: { stack: 3, telescope: 1.5, eureka: 1.5 } },
-  mei:    { name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "glasses",
+  mei:    { worker: "assistant", name: "Mei", skin: [1, 2, 0], hair: ["#141414", "#2a1d17"], style: "bob", face: "glasses",
             outfit: "labcoat", shirt: ["#6f8fb3", "#8aa3c2"], pants: ["#2c3340"], shoes: ["#2b2b30"],
             prop: "laptop", fav: { typing: 3, read: 1.5, scroll: 1.5 } },
-  sam:    { name: "Sam", skin: [2, 3, 4], hair: ["#1d1d1d"], style: "short", head: "cap", cap: ["#2f3640", "#3d3d55", "#7a2e3b"],
+  sam:    { worker: "assistant", name: "Sam", skin: [2, 3, 4], hair: ["#1d1d1d"], style: "short", head: "cap", cap: ["#2f3640", "#3d3d55", "#7a2e3b"],
             outfit: "hoodie", top: ["#7a7f87", "#5c6370", "#6b5b7b"], pants: ["#4a78b5", "#3c5a99"], shoes: ["#e8e8e8"],
             prop: "phone", fav: { typing: 2.5, confused: 1.5, citation: 1.5 } },
-  evelyn: { name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly",
+  evelyn: { worker: "pi", name: "Prof. Evelyn", skin: [0, 1, 2], hair: ["#cfcfcf", "#e4e4e4"], style: "bigcurly",
             outfit: "cardigan", top: ["#8a5a3c", "#6e5a8a", "#4f6e5a"], shirt: ["#efe6d6"], legs: "skirt",
             skirt: ["#2f3640", "#3a2f40"], pants: ["#d8b89a"], shoes: ["#6b3e26"], prop: "book",
             fav: { read: 3, coffee: 2, sleep: 1.5 } },
-  david:  { name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit",
+  david:  { worker: "pi", name: "David", skin: [6, 7, 5], hair: ["#141414"], style: "crop", outfit: "suit",
             top: ["#22346b", "#2b2e38", "#3b3f48"], tie: ["#e8e8e8", "#c0392b", "#d4a017"], shoes: ["#2b2b30"],
             prop: ["briefcase", "tablet"], fav: { citation: 2, papers: 2, notes: 1.5 } },
-  javier: { name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", head: "hardhat", outfit: "vest",
-            shirt: ["#9cc3e6", "#a8b8c8"], pants: ["#3a4250"], shoes: ["#6b3e26"], prop: null,
+  javier: { worker: "assistant", name: "Javier", skin: [3, 4, 5], hair: ["#2a1a12"], style: "short", outfit: "overalls",
+            shirt: ["#b5473a", "#5f7f6b", "#e8e4da", "#8a6f9e"], pants: ["#3f5f8a", "#4a6f9e"], shoes: ["#6b3e26"], prop: null,
             fav: { dig: 3.5, search: 1.5, telescope: 1 } },
-  hanna:  { name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
+  hanna:  { worker: "assistant", name: "Hanna", skin: [1, 2, 0], hair: ["#a07850", "#6e4527", "#c9a46a"], style: "long", head: "beanie",
             beanie: ["#5d6b55", "#7a4a4a", "#45556b"], outfit: "jacket", top: ["#566152", "#4a5568", "#6b5a45"],
             pants: ["#4a6f9e"], shoes: ["#e8e8e8"], pack: ["#3a3f45", "#5a3f2e"], prop: "laptop",
             fav: { typing: 2, telescope: 1.5, scroll: 1.5 } },
-  kenji:  { name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "glasses", outfit: "labcoat",
+  kenji:  { worker: "pi", name: "Kenji", skin: [1, 2, 3], hair: ["#141414"], style: "neat", face: "glasses", outfit: "labcoat",
             shirt: ["#5a7fa6", "#4f6d8a"], pants: ["#2f3640"], shoes: ["#2b2b30"], prop: "camera",
             fav: { search: 2.5, telescope: 2, eureka: 1.5 } },
-  quill:  { name: "Det. Quill", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: NATURAL_HAIR, style: "short", head: "deerstalker",
+  quill:  { worker: "pi", name: "Det. Quill", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: NATURAL_HAIR, style: "short", head: "deerstalker",
             outfit: "trench", top: ["#b8925a", "#a07c4c"], pants: ["#3a3a40"], shoes: ["#5d4037"], prop: "magnifier",
             facial: ["mustache", null], fav: { search: 4, confused: 1.5 } },
-  pip:    { name: "Intern Pip", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: ["#c9572d", "#e1c27f", "#17110e"], style: "spiky",
+  pip:    { worker: "assistant", name: "Intern Pip", skin: [0, 1, 2, 3, 4, 5, 6, 7], hair: ["#c9572d", "#e1c27f", "#17110e"], style: "spiky",
             head: "propeller", outfit: "tshirt", top: ["#e84393", "#0abde3", "#f39c12", "#27ae60"], pants: ["#556b2f", "#34495e"],
             shoes: ["#c0392b", "#e8e8e8"], prop: "mug", fav: { papers: 2.5, coffee: 2.5, stack: 1.5 } },
 };
 const CAST = Object.keys(ROSTER);
+const crewOf = worker => CAST.filter(k => !worker || ROSTER[k].worker === worker);
 
 function makeLook(kind, seed) {
   const r = rng(seed), t = ROSTER[kind] || ROSTER.aris;
@@ -135,7 +140,7 @@ function makeLook(kind, seed) {
   a.hijab = one(t.hijab) || "#1f3a5f"; a.cap = one(t.cap) || "#2f3640"; a.beanie = one(t.beanie) || "#5d6b55";
   a.prop = one(t.prop) || null;
   a.sleeve = { labcoat: a.coat, suit: a.top, hoodie: a.top, sweater: a.top, cardigan: a.top, jacket: a.top,
-               abaya: a.top, trench: a.top, vest: a.shirt, tshirt: a.top }[a.outfit] || a.top;
+               abaya: a.top, trench: a.top, vest: a.shirt, overalls: a.shirt, tshirt: a.top }[a.outfit] || a.top;
   a.sleeveD = shade(a.sleeve, 0.78);
   a.short = a.outfit === "tshirt";            // short sleeves
   a.legs = 11 + Math.floor(r() * 7);          // 11..17 px: short to lanky
@@ -231,6 +236,15 @@ function drawTorso(P, a, g) {
       P(tl + 1, hip, W - 2, T - 2, "#ff8a1a"); P(-1, hip, 2, T - 2, "#e5741a");
       P(tl + 1, hip + 3, W - 2, 2, "#ffe14d"); P(-4, hip + 5, 2, T - 7, "#ffe14d"); P(2, hip + 5, 2, T - 7, "#ffe14d");
       break;
+    case "overalls": {                                             // a shirt under a denim bib and straps
+      const bib = T - 5;
+      plain(a.shirt, a.shirtD);
+      P(tl + 1, hip, W - 2, bib, a.pants); P(tl + 1, hip, 2, bib, a.pantsD);
+      P(-3, hip + bib, 2, 5, a.pants); P(2, hip + bib, 2, 5, a.pants);
+      P(-3, hip + bib - 1, 1, 1, "#d8b36a"); P(3, hip + bib - 1, 1, 1, "#d8b36a");   // brass buttons
+      P(-1, hip + 2, 3, 2, a.pantsD);                                                // bib pocket
+      break;
+    }
     case "jacket":
       plain(a.top, a.topD);
       P(0, hip, 1, T, a.topD); P(-2, sh - 1, 5, 2, a.topD); P(tr - 4, hip + 2, 3, 1, a.topD);
@@ -1667,6 +1681,9 @@ const MOODS = {
   // the loop is off: a slow day at the lab, with the odd nap
   idle: Object.assign({ idle: 2, sleep: 1, coffee: 2.5, read: 1.2, notebook: 1.2, notes: 1, confused: 0.4, telescope: 0.4,
                         beaker: 0.4, chalkboard: 0.4, duck: 0.4 }, Object.fromEntries(Object.entries(LIFE).map(([k, v]) => [k, v * 2]))),
+  // standing by their worker's card on the Settings page: mostly still, now and then a little bit of business
+  crew: { idle: 6, read: 1.2, notes: 1, notebook: 0.8, coffee: 1.2, typing: 0.8, citation: 0.6, scroll: 0.6, confused: 0.4,
+          eureka: 0.4, telescope: 0.4, sleep: 0.3, globe: 0.3, pizza: 0.3, bird: 0.25 },
 };
 
 // On the pipeline strip the mood is the lit step, so the researcher does that step's kind of work.
@@ -1709,11 +1726,14 @@ const CLOSERS = {
   AWAITING_COMMENTS: ["Now we wait for replies."],
   finder: ["New missions on the board!", "Leads found. Go get 'em!", "That's the hunt done."],
   posted: ["Posted!", "Out in the world!", "Told the world."],
+  handoff: ["Passing the baton.", "Over to my colleague!", "Your turn, colleague."],
+  gathered: ["Sources gathered. PI's turn!", "Over to you, Professor.", "Notes are on your desk, Prof."],
   off: ["Clocking out.", "Loop's off. Nap time.", "Shift's over!"],
   other: ["Done here!", "That's a wrap.", "My work here is cited.", "Fin."],
 };
 function closer(c) {
-  const key = !c.running ? "off" : c.from.step === "finder" ? "finder"
+  const key = !c.running ? "off" : c.handoff ? (c.worker === "assistant" ? "gathered" : "handoff")
+    : c.from.step === "finder" ? "finder"
     : (c.from.step === "1f916" || c.from.step === "bluesky") && c.outcome === "DONE" ? "posted"
     : CLOSERS[c.outcome] ? c.outcome : "other";
   return pick(Math.random, CLOSERS[key]);
@@ -1722,13 +1742,14 @@ function closer(c) {
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
 const BAG = "researcher:bag";
-function nextCharacter(busy) {
-  let bag = (memory.get(BAG) || []).filter(k => ROSTER[k]);
-  if (!bag.length) bag = shuffle(CAST);
+function nextCharacter(busy, worker) {           // worker: only that crew; none: anyone
+  const key = BAG + (worker ? ":" + worker : ""), crew = crewOf(worker);
+  let bag = (memory.get(key) || []).filter(k => crew.includes(k));
+  if (!bag.length) bag = shuffle(crew);
   let i = bag.findIndex(k => !busy.has(k));      // skip anyone already on stage elsewhere
   if (i < 0) i = 0;
   const [kind] = bag.splice(i, 1);
-  memory.set(BAG, bag);
+  memory.set(key, bag);
   return kind;
 }
 
@@ -1744,10 +1765,12 @@ class Researcher {
     this.face = carry && carry.face ? carry.face : (this.rand() < 0.5 ? 1 : -1);
     this.y = 0; this.alpha = 1; this.squash = 1; this.tilt = 0; this.caffeine = 0;
     this.bubble = null; this.badge = null; this.headTop = 48; this.topY = 52; this.prev = null; this.clock = 0;
-    this.quipIn = between(this.rand, 8, 18);
+    this.quipIn = stage.mood === "crew" ? between(this.rand, 6, 40) : between(this.rand, 8, 18);
     this.begin(carry ? "idle" : "spawn");
   }
-  say(text, dur) { this.bubble = { text, t: 0, dur: dur || readTime(text), y: null, lines: null }; }
+  say(text, dur) {
+    if (this.stage.kind === "crew" && this.stage.talking(this)) return;   // a crew takes turns to speak
+    this.bubble = { text, t: 0, dur: dur || readTime(text), y: null, lines: null }; }
   quip(key) {                                    // a line for the bit, or one from the big library
     if (this.rand() < 0.5) return;               // about every other bit goes by without a word
     const own = QUOTES[key];
@@ -1767,9 +1790,9 @@ class Researcher {
   chooseNext() {
     if (this.next) { const [n, o] = this.next; this.next = null; return this.begin(n, o); }
     const after = this.act.name;
-    if (after !== "walk" && after !== "stack" && this.rand() < 0.55) return this.begin("walk");
+    if (after !== "walk" && after !== "stack" && this.rand() < (this.mood === "crew" ? 0.18 : 0.55)) return this.begin("walk");
     const table = Object.assign({}, MOODS[this.mood] || MOODS.busy);
-    for (const k in this.a.fav) if (k in table || this.mood !== "idle") table[k] = (table[k] || 0.5) * this.a.fav[k];
+    for (const k in this.a.fav) if (k in table || !["idle", "crew"].includes(this.mood)) table[k] = (table[k] || 0.5) * this.a.fav[k];
     delete table[after];
     this.begin(weighted(this.rand, table));
   }
@@ -1799,7 +1822,7 @@ class Researcher {
     if (this.bubble && (this.bubble.t += dt) > this.bubble.dur) this.bubble = null;
     if (this.badge && (this.badge.t += dt) > this.badge.dur) this.badge = null;
     if ((this.quipIn -= dt) <= 0) {               // now and then, an unprompted remark
-      this.quipIn = between(this.rand, 16, 32);
+      this.quipIn = this.mood === "crew" ? between(this.rand, 25, 60) : between(this.rand, 16, 32);
       if (!this.bubble && !this.badge && !this.leaving && ["walk", "idle"].includes(this.act.name)) this.say(nextQuip());
     }
     const act = this.act;
@@ -1825,8 +1848,9 @@ const stages = [];
 class Stage {
   constructor(host, kind) {
     this.host = host; this.kind = kind;
-    this.key = "researcher:" + (kind === "flow" ? "flow" : host.getAttribute("href"));
-    this.mood = host.dataset.lab || "busy";
+    this.key = "researcher:" + (kind === "flow" ? "flow" : kind === "crew" ? "crew:" + host.dataset.crew : host.getAttribute("href"));
+    this.mood = kind === "crew" ? "crew" : host.dataset.lab || "busy";
+    this.worker = host.dataset.worker || null;   // whose crew visits a card
     this.canvas = document.createElement("canvas");
     this.canvas.className = "lab-stage";
     this.canvas.setAttribute("aria-hidden", "true");
@@ -1848,7 +1872,10 @@ class Stage {
     this.host.removeEventListener("mouseenter", this.poke);
     this.host = host; host.appendChild(this.canvas);
     host.addEventListener("mouseenter", this.poke);
-    if (this.kind === "card") { this.mood = host.dataset.lab || "busy"; if (this.resident) this.resident.mood = this.mood; }
+    if (this.kind === "card") {                  // the fresh copy may say a new mood, or a new worker's next step
+      this.mood = host.dataset.lab || "busy"; this.worker = host.dataset.worker || null;
+      if (this.resident) this.resident.mood = this.mood;
+    }
     this.layout();
   }
   kill() { if (this.ro) this.ro.disconnect(); this.canvas.remove(); }
@@ -1889,6 +1916,7 @@ class Stage {
     const t = now();
     let rec = memory.get(this.key);
     if (rec && (!(rec.life <= LIFE_MAX) || !ROSTER[rec.kind])) rec = null;
+    if (rec && rec.kind && this.worker && ROSTER[rec.kind].worker !== this.worker) rec = null;   // the step changed hands
     const out = stages.filter(s => s !== this && s.resident).length;
     if (rec && t < rec.born + rec.life - 1 && out < MAX_ON_STAGE) this.spawn(rec, true);
     else if (rec && rec.next && t < rec.next) this.nextAt = rec.next;
@@ -1897,7 +1925,7 @@ class Stage {
   spawn(rec, resume) {
     if (!rec) {
       const busy = new Set(stages.filter(s => s !== this && s.resident).map(s => s.resident.a.kind));
-      rec = { kind: nextCharacter(busy), seed: Math.floor(Math.random() * 2 ** 31), born: now(),
+      rec = { kind: nextCharacter(busy, this.worker), seed: Math.floor(Math.random() * 2 ** 31), born: now(),
               life: between(Math.random, LIFE_MIN, LIFE_MAX) };
       memory.set(this.key, rec);
     }
@@ -2070,21 +2098,30 @@ class Stage {
   }
 }
 
-// The pipeline strip. Its researcher follows the lit step rather than a timer: it stays as long as the
-// step is lit, runs after its mission when the mission moves on, and hands off to a newcomer (a closing
-// line, a walk off the nearer end) when the work ends or another mission's work starts.
+// The pipeline strip. Each busy worker's lit step gets its own researcher, from that worker's crew, who stays
+// as long as the step is lit, runs after the worker's mission when it moves on, and hands off to a newcomer
+// (a closing line, a walk off the nearer end) when the work ends, moves to another mission or passes to the
+// other worker. Each researcher stands on a slot: the stage with its own home step and mood.
+const crewKey = w => (CAST.some(k => ROSTER[k].worker === w) ? w : null);   // "desk" work: anyone
+const fits = (kind, w) => !crewKey(w) || ROSTER[kind].worker === w;
 class FlowStage extends Stage {
   constructor(host) { super(host, "flow"); }
-  lit() { const f = this.host.closest("#flow"); return { step: (f && f.dataset.step) || null, slug: (f && f.dataset.slug) || "" }; }
+  lit() {                                        // [{worker, step, slug}], from the strip's data-working
+    const f = this.host.closest("#flow");
+    try { return JSON.parse((f && f.dataset.working) || "[]"); } catch (e) { return []; }
+  }
   layout() {
     if (!this.host.isConnected || !this.host.clientWidth) return;
     const nodes = [...this.host.querySelectorAll(".step, .check")];
     if (!nodes.length) return;
-    const on = this.host.querySelector(".step.on, .check.on");
     this.platforms = nodes.map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]);
-    this.home = on ? this.span(on) : null;
-    this.mood = on ? on.dataset.step : "busy";
     this.size(this.host.clientWidth, this.host.clientHeight, nodes[0].offsetTop - 1);
+    for (const c of Object.values(this.crew || {})) this.aim(c.slot, c.step);
+  }
+  aim(slot, step) {                              // point a slot at a step: where to stand, what kind of work
+    const el = step && this.host.querySelector(`.step[data-step="${step}"], .check[data-step="${step}"]`);
+    slot.home = el ? this.span(el) : null;
+    slot.mood = step || "busy";
   }
   span(el) {                                     // where a researcher can stand on a step; a check is just a post
     const a = el.offsetLeft, b = a + el.offsetWidth, c = (a + b) / 2;
@@ -2094,6 +2131,7 @@ class FlowStage extends Stage {
     const p = this.platforms || [[8, (this.W || 200) - 8]];
     return [p[0][0] + 6, p[p.length - 1][1] - 6];
   }
+  // On a slot, `this.home` is that researcher's own step.
   spawnX(r) { return this.home ? between(r, this.home[0], this.home[1]) : super.spawnX(r); }
   pickTarget(r) { return this.home ? between(r.rand, this.home[0], this.home[1]) : r.x; }   // stay with the work
   hop(x) {                                       // jump the gaps between steps, higher over a wide one
@@ -2105,60 +2143,113 @@ class FlowStage extends Stage {
     }
     return 0;
   }
-  cast() { return (this.leavers || []).concat(this.resident ? [this.resident] : []); }
-  schedule() {
-    this.leavers = []; this.pending = null;
-    const { step, slug } = this.lit();
-    if (!step) return;
-    const rec = memory.get(this.key);
-    if (rec && rec.step === step && rec.slug === slug && ROSTER[rec.kind]) this.spawn(rec, true);   // back on the page
-    else this.pending = { at: now() + 0.4 };
+  cast() { return (this.leavers || []).concat(Object.values(this.crew || {}).map(c => c.r).filter(Boolean)); }
+  slot(step, slug, pending) {
+    const c = { step, slug, slot: Object.create(this), pending };
+    this.aim(c.slot, step);
+    return c;
   }
-  spawn(rec, resume) {
-    const { step, slug } = this.lit();
+  schedule() {
+    this.leavers = []; this.crew = {};
+    const saved = memory.get(this.key) || {};
+    for (const e of this.lit()) {
+      const rec = saved[e.worker];
+      this.crew[e.worker] = this.slot(e.step, e.slug, now() + 0.4);
+      if (rec && rec.step === e.step && rec.slug === e.slug && ROSTER[rec.kind] && fits(rec.kind, e.worker)) this.spawn(e.worker, rec, true);
+    }
+  }
+  spawn(worker, rec, resume) {
+    const c = this.crew[worker];
+    if (!c) return;
     if (!rec) {
       const busy = new Set(stages.flatMap(s => s.cast()).map(r => r.a.kind));
-      rec = { kind: nextCharacter(busy), seed: Math.floor(Math.random() * 2 ** 31) };
+      rec = { kind: nextCharacter(busy, crewKey(worker)), seed: Math.floor(Math.random() * 2 ** 31) };
     }
-    this.rec = Object.assign({}, rec, { step, slug });
-    this.resident = new Researcher(this, this.rec, resume ? rec : null);
+    c.rec = Object.assign({}, rec, { step: c.step, slug: c.slug });
+    c.r = new Researcher(c.slot, c.rec, resume ? rec : null);
+    c.pending = null;
     if (!resume) entered();
-    // Still at most two on the page: the card visitor who has stayed longest heads off to make room.
-    const cards = stages.filter(s => s.kind === "card" && s.resident && !s.resident.leaving);
-    if (cards.length >= MAX_ON_STAGE && !REDUCE) cards.sort((a, b) => a.rec.born - b.rec.born)[0].resident.leave();
+    if (REDUCE) return;
+    // Still at most two on the page: the card visitors who have stayed longest head off to make room.
+    const cards = stages.filter(s => s.kind === "card" && s.resident && !s.resident.leaving).sort((a, b) => a.rec.born - b.rec.born);
+    let over = this.cast().filter(r => !r.leaving).length + cards.length - MAX_ON_STAGE;
+    for (const s of cards) if (over-- > 0) s.resident.leave();
   }
   save() {
-    const r = this.resident;
-    memory.set(this.key, r ? Object.assign({}, this.rec, { x: r.x, face: r.face }) : null);
+    const out = {};
+    for (const [w, c] of Object.entries(this.crew || {})) if (c.r) out[w] = Object.assign({}, c.rec, { x: c.r.x, face: c.r.face });
+    memory.set(this.key, out);
   }
-  // assets/flow.js says the lit step changed: chase, hand off, or clear the stage.
+  // assets/flow.js says one worker's step changed: chase, hand off, or clear its slot.
   change(c) {
     this.layout();
-    const r = this.resident;
+    const w = c.worker, cur = this.crew[w], r = cur && cur.r;
     if (!c.to.step) {
-      this.pending = null;
       if (r) this.dismiss(r, closer(c));
+      delete this.crew[w];
     } else if (r && c.from.step && c.to.slug && c.from.slug === c.to.slug) {
-      this.rec.step = c.to.step;
-      if (REDUCE) r.x = this.spawnX(r.rand); else r.chase();
+      cur.step = c.to.step; cur.rec.step = c.to.step;
+      this.aim(cur.slot, c.to.step);
+      if (REDUCE) r.x = cur.slot.spawnX(r.rand); else r.chase();
     } else {
       if (r) this.dismiss(r, closer(c));
-      this.pending = { at: now() + (r ? 1.5 : 0.2) };   // the newcomer follows a beat behind the one leaving
+      this.crew[w] = this.slot(c.to.step, c.to.slug, now() + (r ? 1.5 : 0.2));   // a beat behind the one leaving
     }
     if (REDUCE) still();
   }
   dismiss(r, text) {
-    this.resident = null;
     if (REDUCE) return;
     this.leavers.push(r);
     r.leave(text);
   }
   update(dt) {
-    if (this.pending && now() >= this.pending.at && !this.resident) { this.pending = null; if (this.home) this.spawn(); }
+    for (const [w, c] of Object.entries(this.crew)) {
+      if (c.pending && now() >= c.pending && !c.r) { if (c.slot.home) this.spawn(w); else c.pending = null; }
+    }
     for (const r of this.cast()) r.update(dt);
-    if (this.resident && this.resident.gone) this.resident = null;
+    for (const c of Object.values(this.crew)) if (c.r && c.r.gone) c.r = null;
     this.leavers = this.leavers.filter(r => !r.gone);
     this.tick(dt);
+  }
+}
+
+// ---------- a crew: a worker's whole cast standing about on its Settings card ----------
+
+class Crew extends Stage {
+  constructor(host) {
+    super(host, "crew");
+    const crew = crewOf(host.dataset.crew);
+    this.slots = crew.map((kind, i) => {
+      const slot = Object.create(this);          // each researcher keeps to its own patch of floor
+      slot.range = () => { const w = (this.W || 320) / crew.length; return [w * i + 10, w * (i + 1) - 10]; };
+      const seed = [...kind].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261) >>> 0;
+      const [lo, hi] = slot.range();
+      const r = new Researcher(slot, { kind, seed }, { x: (lo + hi) / 2, face: i < crew.length / 2 ? 1 : -1 });
+      r.act.t = -Math.random() * 3;               // so they don't all fidget in step
+      return r;
+    });
+    host.addEventListener("mouseenter", () => this.slots.length && pick(Math.random, this.slots).poke());
+  }
+  schedule() {}                                   // always on stage: nobody visits, nobody leaves
+  talking(who) { return (this.slots || []).some(r => r !== who && (r.bubble || r.badge)); }
+  layout() {
+    super.layout();
+    for (const r of this.slots || []) { const [lo, hi] = r.stage.range(); r.x = clamp(r.x, lo, hi); }
+  }
+  update(dt) {
+    for (const r of this.slots) r.update(dt);
+    this.resident = null;
+    super.update(dt);                             // effects and marks
+  }
+  draw() {
+    const ctx = this.ctx, k = this.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    for (const r of this.slots) if (r.pose) this.drawResearcher(ctx, r);
+    for (const p of this.fx) this.drawFx(ctx, p);
+    for (const r of this.slots) this.drawOverlay(ctx, r);
   }
 }
 
@@ -2190,22 +2281,25 @@ let nextEntry = 0;
 function entered() { nextEntry = Math.max(nextEntry, now() + between(Math.random, ENTRY_MIN, ENTRY_MAX)); }
 function admit() {
   const t = now();
-  if (t < nextEntry || stages.filter(s => s.resident).length >= MAX_ON_STAGE) return;
+  if (t < nextEntry || stages.reduce((n, s) => n + s.cast().length, 0) >= MAX_ON_STAGE) return;
   const ready = stages.filter(s => s.kind === "card" && !s.resident && s.nextAt && t >= s.nextAt).sort((a, b) => a.nextAt - b.nextAt);
   if (ready.length) { ready[0].spawn(); entered(); }
 }
 
-// Reduced motion: still figures only, one on the lit step and at most one more on a card.
+// Reduced motion: still figures only, one on each lit step and the rest on cards while there's room.
 function still() {
   const flow = stages.find(s => s.kind === "flow");
-  if (flow && flow.home && !flow.resident) flow.spawn(null, true);
-  let room = MAX_ON_STAGE - stages.filter(s => s.resident).length;
+  if (flow) for (const [w, c] of Object.entries(flow.crew || {})) if (!c.r && c.slot.home) flow.spawn(w, null, true);
+  let room = MAX_ON_STAGE - stages.reduce((n, s) => n + s.cast().length, 0);
   for (const s of stages) if (s.kind === "card" && !s.resident && room-- > 0) s.spawn(null, true);
   for (const s of stages) { for (const r of s.cast()) r.update(0); s.draw(); }
+  for (const c of crews) { c.slots.forEach(r => r.update(0)); c.draw(); }
 }
 
 // Find the stages on the page. After the page swaps in fresh HTML, a stage whose card (or strip) came
 // back keeps its researcher on the new copy; one whose card went away saves where it was and goes.
+// A worker's crew on the Settings page is its own kind of stage (Crew), found here too.
+const crews = [];
 function rescan() {
   for (const s of stages.slice()) {
     if (s.host.isConnected) continue;
@@ -2218,17 +2312,19 @@ function rescan() {
   document.querySelectorAll(".card[data-lab]").forEach(c => { if (!stages.some(s => s.host === c)) stages.push(new Stage(c, "card")); });
   const track = document.querySelector(".flow-track[data-lab]");
   if (track && !stages.some(s => s.host === track)) stages.push(new FlowStage(track));
+  document.querySelectorAll(".crew[data-crew]").forEach(c => { if (!crews.some(o => o.host === c)) crews.push(new Crew(c)); });
   start();
 }
 
 function tick(dt) {
   admit();
   for (const s of stages) { s.update(dt); s.draw(); }
+  for (const c of crews) { c.update(dt); c.draw(); }
 }
 let started = false;
 function start() {
   if (REDUCE) { still(); return; }
-  if (started || !stages.length) return;
+  if (started || !(stages.length || crews.length)) return;
   started = true;
   let last = performance.now();
   const frame = t => {
@@ -2243,6 +2339,6 @@ function boot() {
   document.addEventListener("flowchange", e => { const f = stages.find(s => s.kind === "flow"); if (f) f.change(e.detail); });
   rescan();
 }
-window.Researchers = { stages, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Researcher, rescan, tick, QUIPS };   // handy from the console
+window.Researchers = { stages, crews, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS };   // handy from the console
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

@@ -66,6 +66,15 @@ def test_join_from_the_ui_saves_the_key_like_the_cli(client, site):
     html = client.get("/settings").text
     assert "posting as <strong>loop-desk</strong>" in html and "join-1f916" not in html
 
+def test_join_from_the_ui_on_another_server(client, site):
+    r = client.post("/settings/join-1f916", data={"handle": "loop-desk", "f916_url": "https://staging.1f916.example/"},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/settings?done=joined"
+    assert f916.key()["api"] == "https://staging.1f916.example" == settings.f916_url()
+    assert "on https://staging.1f916.example" in client.get("/settings").text
+    r = client.post("/settings/join-1f916", data={"handle": "second"}, follow_redirects=False)
+    assert "error=state" in r.headers["location"]           # one citizen; its server can't be swapped under it
+
 def test_join_failures_are_shown_and_bad_handles_never_reach_the_site(client, joined):
     r = client.post("/settings/join-1f916", data={"handle": "a"}, follow_redirects=False)
     assert r.headers["location"] == "/settings?error=handle"
@@ -92,7 +101,8 @@ def test_animations_toggle_is_on_by_default_and_hides_the_researchers_when_off(c
     activity.begin("b", "sources")
     html = client.get("/").text
     assert "researchers.js" not in html and 'data-lab' not in html.split("</style>")[1]
-    assert 'value="on" checked' not in client.get("/settings").text
+    assert 'name="animations" value="on" checked' not in client.get("/settings").text
+    assert 'class="crew"' not in client.get("/settings").text and "researchers.js" not in client.get("/settings").text
     client.post("/settings/animations", data={"animations": "on"})
     assert settings.animations() and settings.saved() == {}              # back on: nothing stored
     assert '<div class="flow-track" data-lab>' in client.get("/").text

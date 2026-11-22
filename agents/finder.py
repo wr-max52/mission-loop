@@ -134,6 +134,11 @@ async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[
         except llm.Cut as cut:             # stopped: keep whatever leads got written
             ideas = stopping.salvage(cut.text, MissionIdeas)
             return _keep(ideas.missions, results, topics) if ideas else []
+        except llm.Overrun as e:           # stuck: keep the leads it wrote before, if any
+            ideas = stopping.salvage(e.text, MissionIdeas)
+            if ideas is None:
+                raise FinderFailed(f"the finder got stuck: {e}")
+            return _keep(ideas.missions, results, topics)
         try:
             return _keep(MissionIdeas.model_validate_json(msg.content).missions, results, topics)
         except ValidationError as e:

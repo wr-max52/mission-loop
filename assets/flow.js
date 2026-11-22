@@ -1,8 +1,9 @@
 /* The pipeline strip, kept live. Every two seconds it asks /api/flow what is happening and relights the
- * strip in place: the step working right now, the counts waiting at each human review and parked at each
- * check, and the line underneath. It never reloads the page, so the pixel researchers on the strip keep
- * walking. When the working step changes it fires a "flowchange" event on #flow saying where the work
- * went, which assets/researchers.js turns into a researcher chasing the work or handing it off.
+ * strip in place: the steps working right now (one per busy worker), the counts waiting at each human review
+ * and parked at each check, and the lines underneath. It never reloads the page, so the pixel researchers on
+ * the strip keep walking. When a worker's step changes it fires a "flowchange" event on #flow saying which
+ * worker and where its work went, which assets/researchers.js turns into that worker's researcher chasing
+ * the work or handing it off.
  */
 (() => {
 "use strict";
@@ -16,7 +17,7 @@ function attach() {
   if (!el) return;
   if (el !== root) {
     root = el;
-    last = { step: el.dataset.step || null, slug: el.dataset.slug || null, waiting: {} };
+    last = { working: byWorker(JSON.parse(el.dataset.working || "[]")), waiting: {} };
     el.querySelectorAll(".human[data-step]").forEach(h => {
       last.waiting[h.dataset.step] = Number(h.querySelector(".count").textContent) || 0;
     });
@@ -25,6 +26,12 @@ function attach() {
     timer = setInterval(poll, EVERY);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
   }
+}
+
+function byWorker(list) {                       // {worker: {step, slug}}
+  const out = {};
+  for (const e of list) out[e.worker] = { step: e.step, slug: e.slug };
+  return out;
 }
 
 async function poll() {
@@ -39,12 +46,14 @@ async function poll() {
 
 function apply(d) {
   const shown = new Set([...root.querySelectorAll(".flow-track [data-step]")].map(e => e.dataset.step));
-  const step = d.step && shown.has(d.step) ? d.step : null;
+  const working = d.working.filter(e => shown.has(e.step)), lit = {};
+  for (const e of working) lit[e.step] = e.worker;
   root.classList.toggle("off", !d.running);
   root.querySelectorAll(".step[data-step], .check[data-step]").forEach(e => {
-    const on = e.dataset.step === step;
-    e.classList.toggle("on", on);
-    if (on) e.setAttribute("aria-current", "step"); else e.removeAttribute("aria-current");
+    const w = lit[e.dataset.step];
+    e.classList.toggle("on", !!w);
+    if (w) { e.setAttribute("aria-current", "step"); e.dataset.worker = w; }
+    else { e.removeAttribute("aria-current"); delete e.dataset.worker; }
   });
   root.querySelectorAll(".human[data-step]").forEach(h => {
     const key = h.dataset.step, n = d.waiting[key] || 0, count = h.querySelector(".count");
@@ -60,14 +69,20 @@ function apply(d) {
   const now = root.querySelector(".now");
   if (now && now.dataset.html !== d.now) { now.innerHTML = d.now; now.dataset.html = d.now; }
 
-  const from = { step: last.step, slug: last.slug }, to = { step, slug: step ? d.slug : null };
-  const moved = from.step !== to.step || from.slug !== to.slug, flipped = last.running !== undefined && last.running !== d.running;
-  root.dataset.step = to.step || ""; root.dataset.slug = to.slug || "";
-  last.step = to.step; last.slug = to.slug; last.running = d.running;
-  if (moved) {
+  // One event per worker whose step changed. A mission another worker has just picked up was handed over.
+  const atWork = byWorker(working), flipped = last.running !== undefined && last.running !== d.running;
+  root.dataset.working = JSON.stringify(working.map(e => ({ worker: e.worker, step: e.step, slug: e.slug })));
+  let moved = false;
+  for (const w of new Set([...Object.keys(last.working), ...Object.keys(atWork)])) {
+    const was = last.working[w] || {}, is = atWork[w] || {};
+    const from = { step: was.step || null, slug: was.slug ?? null }, to = { step: is.step || null, slug: is.slug ?? null };
+    if (from.step === to.step && from.slug === to.slug) continue;
+    moved = true;
     const outcome = from.slug ? d.states[from.slug] || null : null;
-    root.dispatchEvent(new CustomEvent("flowchange", { bubbles: true, detail: { from, to, outcome, running: d.running } }));
+    const handoff = !!from.slug && working.some(e => e.worker !== w && e.slug === from.slug);
+    root.dispatchEvent(new CustomEvent("flowchange", { bubbles: true, detail: { worker: w, from, to, outcome, handoff, running: d.running } }));
   }
+  last.working = atWork; last.running = d.running;
   if ((moved || flipped) && window.checkPage) setTimeout(window.checkPage, 300);   // bring the rest of the page up to date too
 }
 

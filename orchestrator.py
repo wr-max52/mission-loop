@@ -1,12 +1,13 @@
 import fcntl
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timedelta
 from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
-import stopping, store
+import settings, stopping, store
 from agents import bluesky, f916, publisher
 from agents.channel import NoAllowance, Refused
-from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
+from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ChannelPost, epic_title, slugify)
 from render import brief_markdown, article_markdown, article_html
 
@@ -46,6 +47,86 @@ def _write_article_review(m: Mission, brief: ResearchBrief, article: Article) ->
                                                       epic=publisher.epic_label(m)))
     return folder / "preview.html"
 
+def role(m: Mission) -> str | None:
+    """Which worker role the mission's next task needs: "assistant" (the small model's legwork), "pi" (the
+    big model's writing), or None when it needs no model (a quick step) or is blocked."""
+    if m.state == State.RESEARCHING:
+        return "pi" if m.gathered or m.interrupted_brief else "assistant"
+    if m.state == State.WRITING:
+        return "pi"
+    return None
+
+def upcoming_role(m: Mission) -> str | None:
+    """The role of the next model step for a mission in progress, even while it waits (for the UI's visitors)."""
+    if m.state == State.QUEUED:
+        return "assistant"
+    if m.state in (State.BRIEF_READY, State.AWAITING_COMMENTS):
+        return "pi"
+    return role(m)
+
+def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str:
+    m.validator_notes = notes
+    if brief is not None:              # keep the failed brief for the next attempt and for humans
+        m.rejected_brief = RejectedBrief(brief=brief, notes=notes)
+        path = Path("missions") / m.slug / "brief.rejected.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(brief_markdown(m.slug, brief) + f"\n## Validator notes\n{notes}\n")
+    if m.attempts >= m.max_attempts:
+        m.state = State.PARKED
+        return f"parked after {m.attempts} attempts"
+    return f"attempt {m.attempts} failed validation"
+
+def _gather(m: Mission, now) -> str:
+    """The Research Assistant's half of a research attempt: find and read sources. What it found is saved,
+    so the Principal Investigator can write the brief from it in this pass or a later one."""
+    m.attempts += 1                    # an attempt starts with its search
+    try:
+        activity.begin(m.slug, "sources")
+        evidence = agents.gather(m, now)
+    except Exception as e:             # model, tool or network failure counts as a failed attempt
+        return _research_failed(m, None, f"research crashed: {type(e).__name__}: {e}")
+    store.save_artifact(m.slug, "evidence", evidence)
+    m.gathered = True
+    if stopping.requested():
+        return "stopped after finding sources; the brief is written from them when the loop starts again"
+    return f"sources found on attempt {m.attempts}; the brief is next"
+
+def _write_brief(m: Mission, now) -> str:
+    """The Principal Investigator's half: write the brief from the gathered sources, then check it."""
+    m.attempts = max(m.attempts, 1)    # a draft saved by a stop before attempts were counted this way
+    brief, m.interrupted_brief = m.interrupted_brief, None   # a stop's draft: check it, don't redo it
+    try:
+        if brief is None:
+            activity.begin(m.slug, "brief")
+            evidence = Evidence(**(store.load_artifact(m.slug, "evidence") or {}))
+            brief = agents.write_brief(m, evidence, now)
+            if stopping.requested():   # finished, but leave checking it for the next pass
+                raise stopping.Interrupted(brief)
+        activity.begin(m.slug, "source_check")
+        ok, notes = agents.validate(m, brief)
+    except stopping.Interrupted as e:  # a stopped attempt isn't a failed one
+        m.interrupted_brief = e.draft
+        if e.draft:                    # the draft replaces the sources; without one, the brief is rewritten from them
+            _drop_evidence(m)
+        saved = "its draft is checked" if e.draft else "the brief is written again from the same sources"
+        return f"stopped mid-brief; {saved} when the loop starts again"
+    except Exception as e:             # a crash is a failed attempt; the next one searches again
+        brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
+    _drop_evidence(m)
+    if ok:
+        store.save_artifact(m.slug, "brief", brief)
+        m.unchecked_brief = ""
+        path = _write_brief_md(m, brief)
+        m.validator_notes = ""
+        m.rejected_brief = None
+        m.state = State.BRIEF_READY
+        return f"brief passed on attempt {m.attempts}; review {path}"
+    return _research_failed(m, brief, notes)
+
+def _drop_evidence(m: Mission) -> None:
+    m.gathered = False
+    store.delete_artifact(m.slug, "evidence")
+
 def step(m: Mission, now) -> str | None:
     """Run at most one task. Return a note if the mission changed, None if blocked."""
     if m.state == State.QUEUED:
@@ -53,41 +134,9 @@ def step(m: Mission, now) -> str | None:
         return "started"
 
     if m.state == State.RESEARCHING:
-        m.attempts += 1
-        brief, m.interrupted_brief = m.interrupted_brief, None   # a stop's draft: check it, don't redo it
-        try:
-            if brief is None:
-                activity.begin(m.slug, "sources")
-                brief = agents.research(m, now)
-                if stopping.requested():   # finished, but leave checking it for the next pass
-                    raise stopping.Interrupted(brief)
-            activity.begin(m.slug, "source_check")
-            ok, notes = agents.validate(m, brief)
-        except stopping.Interrupted as e:  # a stopped attempt isn't a failed one
-            m.attempts -= 1
-            m.interrupted_brief = e.draft
-            saved = "its draft is checked" if e.draft else "nothing usable was written; research restarts"
-            return f"stopped mid-research; {saved} when the loop starts again"
-        except Exception as e:             # model, tool or network failure counts as a failed attempt
-            brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
-        if ok:
-            store.save_artifact(m.slug, "brief", brief)
-            m.unchecked_brief = ""
-            path = _write_brief_md(m, brief)
-            m.validator_notes = ""
-            m.rejected_brief = None
-            m.state = State.BRIEF_READY
-            return f"brief passed on attempt {m.attempts}; review {path}"
-        m.validator_notes = notes
-        if brief is not None:              # keep the failed brief for the next attempt and for humans
-            m.rejected_brief = RejectedBrief(brief=brief, notes=notes)
-            path = Path("missions") / m.slug / "brief.rejected.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(brief_markdown(m.slug, brief) + f"\n## Validator notes\n{notes}\n")
-        if m.attempts >= m.max_attempts:
-            m.state = State.PARKED
-            return f"parked after {m.attempts} attempts"
-        return f"attempt {m.attempts} failed validation"
+        if m.gathered or m.interrupted_brief:
+            return _write_brief(m, now)
+        return _gather(m, now)
 
     if m.state == State.BRIEF_READY:
         if not m.approved:
@@ -216,21 +265,75 @@ def push_through(m: Mission, now) -> None:
     store.save_mission(m)
     store.log_event(m.slug, now, before.value, m.state.value, note)
 
-def tick(now) -> int:
+def _record(m: Mission, before: State, note: str | None, now) -> int:
+    if note is None:
+        return 0
+    store.save_mission(m)              # saved after every task = resumable
+    store.log_event(m.slug, now, before.value, m.state.value, note)
+    return 1
+
+def _quick_steps(m: Mission, now_fn) -> int:
+    """Steps that need no model (start, outreach, the comment wait, publishing) run right away, in order."""
     changed = 0
-    for m in store.active_missions():
-        if STOP_FLAG.exists():
-            break                          # mid-task, a stop gets agents to write out what they have
+    while role(m) is None and m.state not in (State.DONE, State.PARKED) and not STOP_FLAG.exists():
         before = m.state
         try:
-            note = step(m, now)
+            note = step(m, now_fn())
         finally:
             activity.clear()
-        if note is not None:
-            store.save_mission(m)          # saved after every task = resumable
-            store.log_event(m.slug, now, before.value, m.state.value, note)
-            changed += 1
+        if not _record(m, before, note, now_fn()):
+            break
+        changed += 1
     return changed
+
+def _as_worker(worker: str, fn, *args):
+    """Run one task on a worker's thread, so its activity shows under that worker."""
+    activity.work_as(worker)
+    try:
+        return fn(*args)
+    finally:
+        activity.clear()
+
+MAX_TASKS = 500                            # per pass: a safety net against a mission that never settles
+
+def work(now_fn, max_tasks: int = MAX_TASKS) -> int:
+    """Run every mission until each is blocked, with the two workers side by side. Each worker takes the
+    next task for its role, so the small model can search for one mission while the big model writes another;
+    a worker that is off hands its role to the other, which then does everything one task at a time.
+    Existing missions go first: the mission finder runs once, when the Research Assistant's role has
+    nothing else to do, and whatever it finds is worked on in the same pass. Returns how many changes."""
+    changed = tasks = 0
+    finder_done = False
+    running: dict = {}                     # future -> (worker, mission or None for the finder, its state before)
+    POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
+    with ThreadPoolExecutor(max_workers=len(settings.WORKERS), thread_name_prefix="worker") as pool:
+        while True:
+            if not STOP_FLAG.exists() and tasks < max_tasks:
+                busy = {m.slug for _, m, _ in running.values() if m}
+                missions = [m for m in store.active_missions() if m.slug not in busy]
+                for m in missions:
+                    changed += _quick_steps(m, now_fn)
+                waiting = [m for m in missions if role(m)]
+                taken = {w for w, _, _ in running.values()}
+                for worker in settings.WORKERS:
+                    if worker in taken or not settings.worker_on(worker):
+                        continue
+                    m = next((m for m in waiting if settings.worker_for(role(m)) == worker), None)
+                    if m:
+                        waiting.remove(m)
+                        running[pool.submit(_as_worker, worker, step, m, now_fn())] = (worker, m, m.state)
+                        tasks += 1
+                    elif not finder_done and settings.worker_for("assistant") == worker \
+                            and not any(role(m) == "assistant" for m in waiting):
+                        finder_done = True
+                        running[pool.submit(_as_worker, worker, find_new_missions, now_fn())] = (worker, None, None)
+            if not running:
+                return changed
+            done, _ = wait(running, timeout=POLL, return_when=FIRST_COMPLETED)
+            for future in done:
+                worker, m, before = running.pop(future)
+                result = future.result()   # a bug in the loop itself still stops the pass, as before
+                changed += result if m is None else _record(m, before, result, now_fn())
 
 def _new_slug(topic: str, taken: set[str]) -> str:
     base = slugify(topic)[:54].strip("-") or "mission"
@@ -443,24 +546,11 @@ def rename_epic(slug: str, title: str, now) -> None:
     store.save_epic(epic)
     _refresh_pages(_in_epic(slug))
 
-def _run_missions(now_fn, max_ticks: int) -> int:
-    total = 0
-    for _ in range(max_ticks):
-        if STOP_FLAG.exists():
-            break
-        n = tick(now_fn())
-        total += n
-        if n == 0:
-            break
-    return total
-
-def run_until_idle(now_fn, max_ticks: int = 100) -> int:
-    """One pass. Existing missions go first so the finder never delays work a human just approved;
-    whatever it finds is then researched in the same pass. Last, every channel that is set up posts from
-    the feed whatever it has not posted yet, as far as its allowance goes (1F916: one a day)."""
+def run_until_idle(now_fn, max_tasks: int = MAX_TASKS) -> int:
+    """One pass. Missions run with both workers side by side, and the mission finder joins once existing
+    missions have given the Research Assistant nothing to do (see work). Last, every channel that is set up
+    posts from the feed whatever it has not posted yet, as far as its allowance goes (1F916: one a day)."""
+    activity.reset()
     refresh_feed()
-    total = _run_missions(now_fn, max_ticks)
-    found = find_new_missions(now_fn())
-    if found:
-        total += found + _run_missions(now_fn, max_ticks)
+    total = work(now_fn, max_tasks)
     return total + post_to_channels(now_fn())

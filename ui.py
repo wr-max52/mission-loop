@@ -5,7 +5,7 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import hashlib, os, re, subprocess, sys, time
+import hashlib, json, os, re, subprocess, sys, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -17,6 +17,7 @@ from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
+from agents import llm
 from agents import bluesky, f916, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify
 from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
@@ -52,6 +53,10 @@ MESSAGES = {
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "animations_on": "Animations on. Researchers will drop by in-progress missions.",
     "animations_off": "Animations off. The Missions page stays still.",
+    "ollama_saved": "LLM connection saved. Workers use the Ollama at that address from their next task.",
+    "worker_saved": "Worker saved. It takes its next task with that model.",
+    "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
+    "worker_off": "Worker off. The other worker does its steps, one task at a time.",
     "joined": "Joined 1F916. Published articles post there from the next pass, one a day, newest first.",
 }
 ERRORS = {
@@ -66,6 +71,11 @@ ERRORS = {
     "epic_target": "Pick a different, approved epic to move them to.",
     "site_url": "The site address must be a full http:// or https:// address, or empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
+    "worker_model": "Pick a model the LLM connection has.",
+    "ollama_host": "The Ollama address must be a full http:// or https:// address, or empty for the default.",
+    "server": "A server address must be a full http:// or https:// address, or empty for the default.",
+    "worker_last": "One worker has to stay on: it does the other's steps while that one is off.",
+    "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
 }
 
@@ -74,9 +84,9 @@ ERRORS = {
 def loop_running() -> bool:
     return orchestrator.loop_running()
 
-def running_now() -> dict | None:
-    """The agent working this moment, or None. The record only counts while the loop is alive."""
-    return activity.current() if loop_running() else None
+def running_now() -> list[dict]:
+    """Every agent working this moment, at most one per worker. The record only counts while the loop is alive."""
+    return activity.working() if loop_running() else []
 
 def start_loop(every: float) -> None:
     """Start `run.py loop` in the background, detached from the UI, logging to data/loop.log."""
@@ -147,9 +157,10 @@ def _article(slug: str) -> Article | None:
     data = store.load_artifact(slug, "article")
     return Article(**data) if data else None
 
-def working_on(m: Mission, now: dict | None) -> str:
+def working_on(m: Mission, now: list[dict]) -> str:
     """A line saying which agent is on this mission right now, or "" if none is."""
-    return f'{activity.AGENTS[now["agent"]]} is working on this now.' if now and now["slug"] == m.slug else ""
+    e = next((e for e in now or [] if e["slug"] == m.slug), None)
+    return f'{activity.AGENTS[e["agent"]]} is working on this now.' if e else ""
 
 def elapsed(since: float) -> str:
     seconds = max(0, int(time.time() - since))
@@ -161,8 +172,7 @@ def signature() -> str:
         rows = c.execute("SELECT data FROM missions ORDER BY rowid").fetchall()
         rows += c.execute("SELECT slug || title || status AS data FROM epics ORDER BY rowid").fetchall()
         last = c.execute("SELECT max(id) FROM events").fetchone()[0]
-    now = running_now()
-    working = f'{now["slug"]}:{now["agent"]}' if now else ""
+    working = ",".join(f'{e["worker"]}:{e["slug"]}:{e["agent"]}' for e in running_now())
     raw = "".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
@@ -350,6 +360,25 @@ canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-renderi
 @media (min-width: 761px) { body.chat-open main { margin-left:calc(max(33.333vw, 20rem) + 1.5rem); } }
 @media (max-width: 760px) { .chat-panel { width:100vw; }
                             body.chat-open .chat-bubble { display:none; } }
+.workers { display:grid; grid-template-columns:repeat(auto-fit, minmax(16rem, 1fr)); gap:1rem; margin:1rem 0 1.5rem; }
+.worker { border:1px solid var(--rule); border-radius:10px; padding:1rem 1rem 0; margin:0; display:flex;
+          flex-direction:column; overflow:hidden; }
+.worker.off { border-style:dashed; }
+.worker.off .crew { opacity:.45; filter:grayscale(1); }
+.worker .head { display:flex; justify-content:space-between; align-items:center; gap:.6rem; }
+.worker h3 { margin:0; font-family:Georgia, serif; font-size:1.15rem; }
+.worker .tagline { margin:.3rem 0 0; }
+.worker select { width:100%; }
+.worker ul { margin:.3rem 0 .6rem; padding-left:1.1rem; font-size:.9rem; }
+.worker ul li { margin:.15rem 0; }
+.worker .note { font-size:.85rem; margin:.2rem 0 .6rem; }
+.worker .grow { flex:1; }
+.crew { position:relative; height:116px; margin:0 -1rem; border-top:1px solid var(--rule);
+        background:linear-gradient(var(--quote), var(--quote)) bottom / 100% 9px no-repeat; }
+.crew canvas.lab-stage { bottom:0; height:116px; }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.who { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+table.models td.size { white-space:nowrap; color:var(--muted); }
 """
 
 ELAPSED_JS = """<script>
@@ -466,19 +495,37 @@ def flow_steps() -> list[tuple[str, str, str]]:
     on = {"contacts": settings.OUTREACH, "1f916": agents.f916_enabled(), "bluesky": agents.bluesky_enabled()}
     return [s for s in FLOW if on.get(s[0], True)]
 
+def doing(e: dict) -> str:
+    """What one working agent is doing, e.g. "Source finder is working on <topic> · 2m 3s"."""
+    since = f' · <span data-since="{float(e["since"])}">{elapsed(e["since"])}</span>'
+    if not e["slug"]:                      # the mission finder works for the desk, not one mission
+        return f'<strong>{activity.AGENTS[e["agent"]]}</strong> is looking for new missions{since}'
+    m = store.get_mission(e["slug"])
+    return (f'<strong>{activity.AGENTS[e["agent"]]}</strong> is working on '
+            f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
+
+def flow_status(now: list[dict], running: bool) -> str:
+    """The lines under the strip: who is working on what, and for how long. With both workers busy,
+    one line each, named."""
+    lines = [(f'<span class="who">{settings.WORKERS[e["worker"]]}</span> ' if e["worker"] in settings.WORKERS
+              and len(now) > 1 else "") + doing(e) for e in now]
+    return "<br>".join(lines) or ("No agent is working right now." if running else "Loop is off, so every step is idle.")
+
 def flow_state() -> dict:
-    """What the strip shows: the step working right now (if the loop runs), how many missions wait at
-    each human review, and how many each check has parked. /api/flow serves it to the page every few
-    seconds, with every mission's state, so the page can tell where a mission went when its step ends."""
+    """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
+    many missions wait at each human review, and how many each check has parked. /api/flow serves it to
+    the page every few seconds, with every mission's state, so the page can tell where a mission went
+    when a worker's step ends."""
     running = loop_running()
-    now = activity.current() if running else None
+    shown = {k for k, _, _ in flow_steps()}
+    now = [e for e in running_now() if e["agent"] in shown]   # a channel switched off mid-pass: nothing to light
     missions = store.all_missions()
     parked = [m for m in missions if m.state == State.PARKED]
     writing = sum(orchestrator.parked_while_writing(m) for m in parked)
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
-        "step": now["agent"] if now else None, "slug": now["slug"] if now else None,
-        "since": float(now["since"]) if now else None,
+        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"])}
+                    for e in now],
         "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
@@ -486,38 +533,23 @@ def flow_state() -> dict:
         "now": flow_status(now, running),
     }
 
-def flow_status(now: dict | None, running: bool) -> str:
-    """The line under the strip: who is working on what, and for how long."""
-    if now and not now["slug"]:            # the mission finder works for the desk, not one mission
-        return (f'<strong>{activity.AGENTS[now["agent"]]}</strong> is looking for new missions'
-                f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
-    if now:
-        m = store.get_mission(now["slug"])
-        return (f'<strong>{activity.AGENTS[now["agent"]]}</strong> is working on '
-                f'<a href="/m/{quote(now["slug"])}">{escape(m.topic if m else now["slug"])}</a>'
-                f' · <span data-since="{float(now["since"])}">{elapsed(now["since"])}</span>')
-    return "No agent is working right now." if running else "Loop is off, so every step is idle."
-
 def flow_strip(state: dict) -> str:
     """The pipeline strip. It is always drawn; with the loop off nothing on it is lit. assets/flow.js
     keeps it current without reloading the page, and the pixel researchers live on its track."""
-    steps, lit = flow_steps(), state["step"]
-    if lit and lit not in {k for k, _, _ in steps}:
-        lit = None                         # a channel switched off mid-pass: nothing to light
+    steps, lit = flow_steps(), {e["step"]: e["worker"] for e in state["working"]}
     parts, before = [], None
     for key, kind, text in steps:
-        on = key == lit
-        cur = ' aria-current="step"' if on else ""
+        on = " on" if key in lit else ""
+        cur = f' aria-current="step" data-worker="{lit[key]}"' if on else ""
         if kind == "agent":
             if before in ("agent", "check", "human"):
                 parts.append('<span class="join" aria-hidden="true"></span>')
-            parts.append(f'<span class="step{" on" if on else ""}" data-step="{key}" '
-                         f'title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
+            parts.append(f'<span class="step{on}" data-step="{key}" title="{escape(activity.AGENTS[key])}"{cur}>{text}</span>')
         elif kind == "check":
             parts.append('<span class="join short" aria-hidden="true"></span>')
             n = state["parked"].get(key, 0)
             title = CHECK_TITLE.format(name=activity.AGENTS[key], n=Mission.model_fields["max_attempts"].default)
-            parts.append(f'<span class="check{" on" if on else ""}" data-step="{key}" title="{escape(title)}"{cur}>'
+            parts.append(f'<span class="check{on}" data-step="{key}" title="{escape(title)}"{cur}>'
                          f'<span class="label">{text}</span>'
                          f'<b class="parked-count" title="{n} parked here"{"" if n else " hidden"}>{n}</b></span>')
         else:
@@ -528,8 +560,8 @@ def flow_strip(state: dict) -> str:
                          f'<b class="count"{"" if n else " hidden"}>{n}</b></a></span>')
         before = kind
     lab = " data-lab" if settings.animations() else ""
-    attrs = (f'data-shape="{",".join(k for k, _, _ in steps)}" data-step="{lit or ""}" '
-             f'data-slug="{escape(state["slug"] or "", quote=True)}"')
+    working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
+    attrs = f'data-shape="{",".join(k for k, _, _ in steps)}" data-working="{escape(working, quote=True)}"'
     off = "" if state["running"] else " off"
     return (f'<section id="flow" class="flow{off}" {attrs} aria-label="Pipeline">'
             f'<div class="flow-scroll"><div class="flow-track"{lab}>{"".join(parts)}</div></div>'
@@ -585,7 +617,7 @@ def f916_status() -> str:
     else:
         when = "can post on the next pass" if queued else "nothing waiting"
     problem = state.get("note", "") if not state.get("spent_until") else ""
-    line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong>, one article a day, newest first · '
+    line = (f'1F916: posting as <strong>{escape(f916.key()["handle"])}</strong> on {escape(f916.api())}, one article a day, newest first · '
             f"{queued} queued · {when}")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
 
@@ -596,12 +628,156 @@ def bluesky_status() -> str:
                 "or set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env and run "
                 "<code>python run.py check-bluesky</code>.")
     queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
-    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>, about one article a pass, "
+    server = "" if bluesky._service() == settings.BLUESKY_DEFAULT else f" on {escape(bluesky._service())}"
+    line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, about one article a pass, "
             f"newest first · {queued} queued")
     if not settings.site_url():
         line += ('<br><span class="hint">No site address, so posts link to the 1F916 copy when there '
                  "is one and otherwise carry no link.</span>")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
+
+
+# ---------- settings: the two workers and the LLM connection ----------
+
+WORKER_BLURBS = {
+    "assistant": "Young, quick and tireless. Does the legwork: searching and reading pages, with the small model.",
+    "pi": "Tenured, slow and thorough. Does the thinking and the writing, with the big model.",
+}
+ROLE_STEPS = {                             # where each worker's model is used; the rest of the pipeline is code
+    "assistant": ["<strong>Source finder</strong>: searches the web and reads pages for each mission (up to 15 minutes)",
+                  "<strong>Mission finder</strong>: its searches around your inspiration line",
+                  "<strong>Contact finder</strong>: looks for people to interview (only while outreach is on)"],
+    "pi": ["<strong>Brief writer</strong>: turns the gathered sources into the research brief",
+           "<strong>Article writer</strong>: writes the article from the approved brief",
+           "<strong>Mission finder</strong>: picks the new missions from what the searches found"],
+}
+
+def gb(size: int) -> str:
+    return f"{size / 1e9:.1f} GB" if size >= 1e8 else f"{size / 1e6:.0f} MB"
+
+def model_options(current: str, conn: dict) -> str:
+    names = [m["name"] for m in conn["models"]]
+    opts = [f'<option value="{escape(m["name"], quote=True)}"{" selected" if m["name"] == current else ""}>'
+            f'{escape(m["name"])} · {gb(m["size"])}{" · loaded" if m["name"] in conn["loaded"] else ""}</option>'
+            for m in conn["models"]]
+    if not current:                        # nothing chosen on this machine yet: the code has no default
+        opts.insert(0, '<option value="" selected disabled>Choose a model</option>')
+    elif current not in names:             # saved before, or Ollama is closed: still show what it is set to
+        missing = "not pulled" if conn["ok"] else "Ollama not reachable"
+        opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
+    return "".join(opts)
+
+def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
+    on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
+    name, other_name = settings.WORKERS[worker], settings.WORKERS[other]
+    steps = "".join(f"<li>{s}</li>" for s in ROLE_STEPS[worker])
+    if not on:
+        note = (f'<p class="note hint">Off: the {other_name} does these steps with '
+                f"<code>{escape(settings.worker_model(other) or 'its model')}</code>, one task at a time.</p>")
+    elif not model:
+        note = '<p class="note"><strong>No model chosen yet.</strong> The loop waits until this worker has one.</p>'
+    else:
+        extra = "" if settings.worker_on(other) else (f'<li>and, while the {other_name} is off, every one of '
+                                                      "its steps too</li>")
+        steps += extra
+        busy = next((e for e in now if e["worker"] == worker), None)
+        note = f'<p class="note">Now: {doing(busy)}</p>' if busy else ""
+    checked = " checked" if on else ""
+    crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
+    return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
+  <input type="hidden" name="worker" value="{worker}">
+  <div class="head"><h3>{name}</h3>
+    <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.submit()" aria-label="{name} on"></label></div>
+  <p class="tagline hint">{WORKER_BLURBS[worker]}</p>
+  <label for="{worker}_model">Model</label>
+  <select id="{worker}_model" name="model" onchange="this.form.submit()">{model_options(model, conn)}</select>
+  <label>Uses this model for</label>
+  <ul>{steps}</ul>
+  {note}<div class="grow"></div>
+  <noscript><p><button>Save</button></p></noscript>
+  {crew}
+</form>"""
+
+def workers_section(conn: dict) -> str:
+    now = running_now()
+    a, p = (f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>" for w in settings.WORKERS)
+    if settings.parallel():
+        lead = (f"Both workers are on, so they work at the same time whenever each has a task: the Research "
+                f"Assistant searches with {a} while the Principal Investigator writes with {p}.")
+    else:
+        w = next(w for w in settings.WORKERS if settings.worker_on(w))
+        lead = (f"Only the {settings.WORKERS[w]} is on: it does every step with "
+                f"<code>{escape(settings.worker_model(w) or 'no model yet')}</code>, one task at a time.")
+    if settings.missing_models():          # the code has no models of its own: this machine picks them
+        lead = ("<strong>Choose a model for each worker that is on; the loop won't start until you do.</strong> "
+                "Both on: they work at the same time whenever each has a task.")
+    else:
+        lead += " Models are this machine's choice, saved in <code>data/settings.json</code>; nothing is built in."
+    cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
+    return (f'<h2 class="group">Workers</h2><p>{lead} The source checker, article checker and publisher are '
+            f'code and use no model.</p><div class="workers">{cards}</div>')
+
+def ollama_form() -> str:
+    saved, env = settings.saved().get("ollama_host", ""), settings._env("OLLAMA_HOST")
+    source = ("from OLLAMA_HOST in .env" if env and not saved else
+              "saved on this page" if saved else "the standard local address")
+    return f"""<form method="post" action="/settings/ollama" class="inline">
+  <label for="ollama_host" class="sr">Ollama address</label>
+  <input type="text" id="ollama_host" name="ollama_host" maxlength="300" value="{escape(saved, quote=True)}" placeholder="{escape(env or settings.OLLAMA_DEFAULT, quote=True)}">
+  <button>Save address</button><span class="hint">now {source}; empty goes back to .env or {settings.OLLAMA_DEFAULT}</span>
+</form>"""
+
+def connection_section(conn: dict) -> str:
+    host = escape(conn["host"])
+    if not conn["ok"]:
+        return (f'<h2 class="group">LLM connection</h2><p>Ollama at <code>{host}</code> is not reachable '
+                f'({escape(conn["error"])}). Start the Ollama app, or point this at the machine running it; its '
+                "models show here and in the workers' model lists once it answers.</p>" + ollama_form())
+    users: dict[str, list[str]] = {}
+    for w in settings.WORKERS:
+        if settings.worker_on(w):
+            users.setdefault(settings.worker_model(w), []).append(settings.WORKERS[w])
+    rows = "".join(
+        f'<tr><td><code>{escape(m["name"])}</code></td><td class="size">{gb(m["size"])}</td>'
+        f'<td class="size">{"in memory, " + gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
+        f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
+    count = len(conn["models"])
+    return (f'<h2 class="group">LLM connection</h2><p>Ollama at <code>{host}</code> · connected · '
+            f'{count} model{"" if count == 1 else "s"}. The workers can use any of them; '
+            f'<code>ollama pull &lt;model&gt;</code> adds more.</p>{ollama_form()}'
+            f'<table class="events models"><tr><td class="when">Model</td><td class="when">On disk</td>'
+            f'<td class="when">Loaded</td><td class="when">Used by</td></tr>{rows}</table>')
+
+async def save_ollama(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        settings.set_ollama_host(str((await request.form()).get("ollama_host") or "")[:300])
+    except ValueError:
+        return go("/settings", error="ollama_host")
+    return go("/settings", done="ollama_saved")
+
+async def save_worker(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    worker, on = str(form.get("worker") or ""), form.get("on") == "on"   # an unticked switch sends nothing
+    model = str(form.get("model") or "").strip()[:200]
+    if worker not in settings.WORKERS:
+        return go("/settings", error="worker_model")
+    was_on = settings.worker_on(worker)
+    if model != settings.worker_model(worker):
+        conn = await run_in_threadpool(llm.connection)
+        if not conn["ok"]:
+            return go("/settings", error="ollama")
+        if model not in {m["name"] for m in conn["models"]}:
+            return go("/settings", error="worker_model")
+    try:
+        settings.set_worker(worker, model, on)
+    except ValueError as e:
+        return go("/settings", error="worker_last" if "stay on" in str(e) else "worker_model")
+    done = "worker_saved" if on == was_on else "worker_on" if on else "worker_off"
+    return go("/settings", done=done)
 
 
 # ---------- settings: the feed and channels ----------
@@ -625,11 +801,13 @@ def settings_body(request: Request, error: str = "") -> str:
     elif os.environ.get("MISSION_LOOP_STUBS") == "1":
         f916_row = "<p>1F916 is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
     else:
-        f916_row = """<p>Off. Joining makes a permanent, public citizen on <a href="https://1f916.ai" target="_blank" rel="noopener">1f916.ai</a>.
+        f916_row = f"""<p>Off. Joining makes a permanent, public citizen on <a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>.
 Its secret key is saved to <code>data/1f916.json</code> on this machine only; there is no recovery if it is lost.</p>
 <form method="post" action="/settings/join-1f916" class="actions">
   <label for="handle" style="margin-top:0">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
-  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{2,32}" placeholder="e.g. loop-desk">
+  <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="e.g. loop-desk">
+  <label for="f916_url">Server <span class="hint">the 1F916 to join; the key only works there, so it is saved with the key</span></label>
+  <input type="text" id="f916_url" name="f916_url" maxlength="300" value="{escape(settings.f916_url(), quote=True)}">
   <p><button>Join 1F916</button></p>
 </form>"""
     if agents.bluesky_enabled():
@@ -640,7 +818,7 @@ Its secret key is saved to <code>data/1f916.json</code> on this machine only; th
     elif os.environ.get("MISSION_LOOP_STUBS") == "1":
         bluesky_row = "<p>Bluesky is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
     else:
-        bluesky_row = """<p>Off. Each published article gets a short post (title and dek) linking to the full text.
+        bluesky_row = f"""<p>Off. Each published article gets a short post (title and dek) linking to the full text.
 Use an app password from Bluesky's Settings &gt; Privacy and security &gt; App passwords, never your account password.
 It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this machine only.</p>
 <form method="post" action="/settings/bluesky" class="actions">
@@ -648,15 +826,21 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
   <input type="text" id="bsky_handle" name="handle" required maxlength="253" autocomplete="username" placeholder="yourname.bsky.social">
   <label for="bsky_password">App password</label>
   <input type="password" id="bsky_password" name="app_password" required maxlength="64" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
+  <label for="bsky_service">Server <span class="hint">optional: only for an account on another Bluesky server</span></label>
+  <input type="text" id="bsky_service" name="service" maxlength="300" placeholder="{escape(settings.bluesky_service(), quote=True)}">
   <p><button>Check and turn on Bluesky</button></p>
 </form>"""
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
+    conn = llm.connection()
+    sprites = RESEARCHERS if settings.animations() else ""
     return f"""{err}<h1>Settings</h1>
+{workers_section(conn)}
+{connection_section(conn)}
 <h2 class="group">Display</h2>
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
-  Animations <span class="hint">little pixel researchers who drop by in-progress missions on the Missions page</span></label>
+  Animations <span class="hint">little pixel researchers who drop by in-progress missions on the Missions page, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
 <h2 class="group">Feed</h2>
@@ -671,7 +855,8 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
 <h2 class="group">Channels</h2>
 <h3>Local site and feeds</h3><p>Always on.</p>
 <h3>1F916</h3>{f916_row}
-<h3>Bluesky</h3>{bluesky_row}"""
+<h3>Bluesky</h3>{bluesky_row}
+{sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
     return page("Settings", settings_body(request))
@@ -698,12 +883,18 @@ async def join_1f916(request: Request) -> Response:
     """The same registration as `python run.py join-1f916`, which saves the key before anything else."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
-    handle = str((await request.form()).get("handle") or "").strip()
+    form = await request.form()
+    handle = str(form.get("handle") or "").strip()
     if not HANDLE.fullmatch(handle):
         return go("/settings", error="handle")
-    from agents.llm import MODEL
+    if f916.enabled():                     # one citizen, on the server that issued its key
+        return go("/settings", error="state")
     try:
-        await run_in_threadpool(f916.register, handle, MODEL)
+        settings.set_f916_url(str(form.get("f916_url") or "")[:300])
+    except ValueError:
+        return go("/settings", error="server")
+    try:
+        await run_in_threadpool(f916.register, handle, settings.model_for("pi") or "unknown")
     except (FileExistsError, RuntimeError) as e:
         return page("Settings", settings_body(request, f"1F916 did not join: {e}"))
     if loop_running():
@@ -721,11 +912,16 @@ async def save_bluesky(request: Request) -> Response:
     handle, password = str(form.get("handle") or "")[:253], str(form.get("app_password") or "")[:64]
     if not (handle.strip() and password.strip()):
         return go("/settings", error="bluesky")
+    service = str(form.get("service") or "").strip()[:300]
     try:
-        await run_in_threadpool(bluesky.check_login, handle, password)
+        service = settings._http_address(service) if service else settings.bluesky_service()
+    except ValueError:
+        return go("/settings", error="server")
+    try:
+        await run_in_threadpool(bluesky.check_login, handle, password, service)
     except Exception as e:                 # wrong password, rate limit, network: nothing is saved
         return page("Settings", settings_body(request, f"Bluesky did not accept that login: {e}"))
-    bluesky.save_credentials(handle, password)
+    bluesky.save_credentials(handle, password, service)
     if loop_running():
         wake()
     return go("/settings", done="bluesky_on")
@@ -781,14 +977,14 @@ def epic_list(missions: list[Mission]) -> str:
         for e in active)
     return f'<details><summary>Epics ({len(active)})</summary>{rows}</details>'
 
-def lab_mood(m: Mission, now: dict | None) -> str:
+def lab_mood(m: Mission, now: list[dict]) -> str:
     """How the pixel researcher on an in-progress card behaves: busy while an agent works on this
     mission, waiting while the loop runs other work, idle (mostly napping) while the loop is off."""
     if working_on(m, now):
         return "busy"
     return "waiting" if loop_running() else "idle"
 
-def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = None, lab: str = "") -> str:
+def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: str = "") -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
     working = working_on(m, now)
@@ -797,6 +993,9 @@ def card(m: Mission, now: dict | None = None, epics: dict[str, Epic] | None = No
         sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     stage = f' data-lab="{lab}"' if lab else ""
+    role = orchestrator.upcoming_role(m) if lab else None
+    if role:                               # visitors come from the crew of the worker that does its next step
+        stage += f' data-worker="{settings.worker_for(role)}"'
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
@@ -1072,7 +1271,7 @@ def chat_widget() -> str:
 
 async def chat_models(request: Request) -> JSONResponse:
     """Installed models for the picker. Ollama being closed is reported, not an error page."""
-    from agents.assistant import MODEL
+    MODEL = settings.chat_model()
     try:
         names = await run_in_threadpool(agents.chat_models)
     except Exception:
@@ -1268,6 +1467,8 @@ app = Starlette(routes=[
     Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
+    Route("/settings/worker", save_worker, methods=["POST"]),
+    Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/m/{slug}", mission),

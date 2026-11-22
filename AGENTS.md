@@ -16,8 +16,14 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 274 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 303 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
+- Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
+  Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
+  `.env` (see `.env.example`), and only a service address falls back to that service's public default (Ollama's
+  local `http://127.0.0.1:11434`, `https://1f916.ai`, `https://bsky.social`). Models have no default: with none
+  chosen the loop won't start and says so. All lookups live in `settings.py`; don't add a model name or server
+  address anywhere else. Tests set their own fake models in `tests/conftest.py`.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -44,10 +50,20 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   waits on the UI home page (approve, rename and approve, move to another epic, or reject, which puts
   each mission back in the finder's best fit, `Mission.epic_fallback`). Epics show as pills on the
   board and the published site (approved epics only); renaming redraws the published pages.
-- Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`.
-  A small model (`MISSION_LOOP_SEARCH_MODEL`, default `bonsai-2:4b`) runs the search/fetch tool loop
-  for at most 15 minutes (`SOURCE_TIME_LIMIT`), then the main model (`MISSION_LOOP_MODEL`) writes the
-  brief from whatever was found. `page_tools.py` adds `find_in_page` (exact sentences from the text
+- Workers: two, set on the Settings page (`settings.WORKERS`, saved in `data/settings.json`). The
+  Research Assistant (the small model: `assistant_model` in settings.json, else `MISSION_LOOP_SEARCH_MODEL`) does
+  the "assistant" role: searching and reading. The Principal Investigator (the big model: `pi_model`, else
+  `MISSION_LOOP_MODEL`) does the "pi" role: the brief, the article and the finder's picks. Each pass runs them on
+  two threads (`orchestrator.work`): each takes the next task for its role (`orchestrator.role`), so one
+  mission's search runs while another's article is written; steps with no model run between tasks on the
+  main thread. A worker switched off hands its role to the other (`settings.worker_for`), which then works one
+  task at a time; one always stays on. Model choices come from the LLM connection (`llm.connection`: the Ollama at
+  `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per worker.
+- Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`, in two
+  steps that can land in different passes. `gather` (Research Assistant) runs the search/fetch tool loop
+  for at most 15 minutes (`SOURCE_TIME_LIMIT`) and saves the transcript as the mission's `evidence` artifact
+  (`Mission.gathered`); a research attempt counts from here. `write_brief` (Principal Investigator) writes the
+  brief from it, then the evidence is dropped. A stop during the search keeps the evidence. `page_tools.py` adds `find_in_page` (exact sentences from the text
   the validator checks), `page_links` (a page's links to other sites) and `wayback_versions` (the Wayback
   Machine's copies of a page: the ones that changed, spread over time, and the one nearest a date), and
   requests only public addresses. `wayback.py` (code, no model) makes an archived copy work like a live page:
@@ -62,6 +78,14 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
 - Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
+- Every model call goes through `agents/llm.py`, which keeps it bounded. Before the call, tool results
+  are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
+  request stay whole), because Ollama otherwise drops the start of the prompt or, on the MLX runner,
+  lets the model run on forever. Replies are capped at `REPLY_TOKENS` (8192; a brief is about 4k) or
+  `TURN_TOKENS` (2048) for tool turns, and at `REPLY_TIME_LIMIT` (10 minutes; a brief takes about 2).
+  A reply that hits either limit raises `llm.Overrun`: a stuck search turn ends the search, and a stuck
+  brief, article or finder reply keeps whatever valid JSON it wrote before (checked as usual), else the
+  attempt fails.
 - Publishing goes out to channels, recorded per mission in `Mission.channels` (key -> when and where):
   - `site`: `agents/publisher.py` writes `site/<slug>/index.html` and `meta.json` (with the article as plain
     text, `render.article_text`), then rebuilds `site/index.html` and the feeds `site/feed.json` (JSON Feed 1.1)
@@ -74,7 +98,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     enabled channel its queue: feed entries it hasn't posted yet, newest first, refused ones last. A refusal
     costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried next pass. Stub runs have no channels.
-  - `1f916`: `agents/f916.py` posts the feed entry's title and text to https://1f916.ai as our citizen. On only
+  - `1f916`: `agents/f916.py` posts the feed entry's title and text to 1F916 as our citizen. The server to join is
+    config (`settings.f916_url`: Settings page, `MISSION_LOOP_1F916_URL`, else https://1f916.ai); the key file records
+    the server that issued it (`api`) and posting always goes there (`f916.api`). On only
     when `data/1f916.json` has a key (`python run.py join-1f916 <handle>`, once). The site allows one post per
     UTC day (`data/1f916_state.json` remembers when it is spent), so a just-published article goes out that same
     pass if the day's post is free, and the rest wait, newest first.
@@ -84,7 +110,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     a site address is set (Settings page or `MISSION_LOOP_SITE_URL`), else to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one
     counts), else there is no link. On only with a handle and app password (never the account password): the
     Settings page checks them with Bluesky and saves them to `data/bluesky.json` (mode 600, wins over `.env`'s
-    `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. After each
+    `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
+    the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
     post it waits `POST_GAP` (10 minutes), so a backlog goes out about one a pass. `data/bluesky_state.json`
     holds that wait and the last failure, which the UI and `status` show.
 - Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
@@ -112,7 +139,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   from the `loop` MCP server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`, `agent_steps`,
   `search_missions`), plus `search` when `BRAVE_API_KEY` is set. They only read the database, `data/activity.json`,
   the trails and `data/loop.log`, so asking never touches a running agent. By default it uses the small model with
-  the loop's options (`MISSION_LOOP_CHAT_MODEL` overrides), so Ollama reuses the loaded copy instead of reloading it.
+  the loop's options (`settings.chat_model`: `chat_model` in settings.json, then `MISSION_LOOP_CHAT_MODEL`, else
+  the Research Assistant's model), so Ollama reuses the loaded copy instead of reloading it.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -125,23 +153,27 @@ the finder's inspiration line and to start, stop or wake the loop (a loop starte
 Its Settings page (`/settings`) shows the feeds, saves the site address and joins 1F916 (the same `f916.register`
 as the CLI); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always
-drawn, unlit while the loop is off: agents on a track in runtime order, each code check a vertical block right
-after the agent it checks (with a red count of missions parked there), and each human review a sidestep below
-between that check and the next agent (with a count of missions waiting on you). The step working right now is
-lit, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2 s
-and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. The home page's pipeline strip is always drawn,
+unlit while the loop is off: agents on a track in runtime order, each code check a vertical block right after the
+agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
+check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
+busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
+s and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
 never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on in-progress cards
-and on the strip, never more than two on the page at once. A card's visitor keeps a timer: a random first wait,
-15-30 s on stage, walks off, then 10-20 s before the next; the longest-waiting card goes next. Arrivals come one at
-a time, a random 4-15 s apart (the strip's newcomer never waits, but pushes the next card arrival back). The strip's
-researcher follows the work instead: it stays on the lit step doing that step's kind of work, runs after its
-mission when the mission moves on (sources, brief, check), and when the work ends or moves to another mission it
-says a closing line about where the work went (your review, parked, published, another try) and walks off, and
-a new one walks in for whatever started. Visitors come from a shuffled cast and their lines from a shuffled
-deck of 500+ academic quips and memes, so nothing repeats soon. They work through about 40 bits weighted by mood (the
-lit step on the strip): reading, digging and typing, plus lab life like a chemistry poof, a model rocket, a rubber
-duck, a reviewer's stamp, a bird landing on a head or the office cat; naps are rare and mostly while the loop is off.
+and on the strip, never more than two on the page at once. Each character is in one worker's crew (`worker` in
+`ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and a card only gets
+visitors from the crew of the worker doing its next step (`data-worker`); on the Settings page each worker card
+has its whole crew standing about. A card's visitor keeps a timer: a random first wait, 15-30 s on stage, walks
+off, then 10-20 s before the next; the longest-waiting card goes next. Arrivals come one at a time, a random 4-15
+s apart (the strip's newcomer never waits, but pushes the next card arrival back). Each busy worker's lit step
+gets a researcher from that worker's crew, who follows the work instead: it stays on the lit step doing that
+step's kind of work, runs after its mission when the mission moves on (sources, brief, check), and when the work
+ends, moves to another mission or passes to the other worker it says a closing line about where the work went
+(your review, parked, published, another try) and walks off, and a new one walks in for whatever started. Visitors
+come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
+repeats soon. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
+typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
+a head or the office cat; naps are rare and mostly while the loop is off.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |
@@ -166,6 +198,8 @@ The Settings page's Animations switch (on by default, saved in `data/settings.js
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on | the chat bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
+| Pick each worker's model, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
+| Point at another Ollama | the LLM connection address on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

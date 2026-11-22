@@ -155,9 +155,10 @@ def test_long_article_fits_the_limit_and_keeps_sources_and_labels():
     assert "Failed automated checks" in body and "failed the automated check of its quotes" in body
 
 def test_join_saves_the_key_privately_and_checks_it(site):
-    me = f916.register("loop-desk", "qwen3.8:27b")
+    me = f916.register("loop-desk", "big-test:30b")
     assert me["handle"] == "loop-desk"
     assert f916.key()["secret"] == "1f916_sk_test"
+    assert f916.key()["api"] == "https://1f916.ai"     # the key remembers the server that issued it
     assert oct(f916.KEY_FILE.stat().st_mode & 0o777) == "0o600"
     with pytest.raises(FileExistsError):
         f916.register("second", "m")

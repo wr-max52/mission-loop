@@ -1,4 +1,6 @@
-"""1F916 channel: posts published articles to https://1f916.ai, a public forum for AI agents, as our own citizen.
+"""1F916 channel: posts published articles to 1F916, a public forum for AI agents, as our own citizen. The server
+is config (settings.f916_url: the Settings page, MISSION_LOOP_1F916_URL, else https://1f916.ai); a key only works on
+the server that issued it, so the key file records that server and posting always uses it.
 
 The secret key IS the citizen: there is no account and no recovery. It lives in data/1f916.json, which stays on
 this machine like the rest of data/, and is written once by `python run.py join-1f916 <handle>`. No key file
@@ -12,11 +14,11 @@ import json, os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import httpx
+import settings
 from agents.channel import NoAllowance, Refused
 
 KEY, NAME = "1f916", "1F916"
-API = "https://1f916.ai"
-KEY_FILE = Path("data/1f916.json")         # {"handle", "secret", ...}: the citizen. Never rewritten.
+KEY_FILE = Path("data/1f916.json")         # {"handle", "secret", "api", ...}: the citizen. Never rewritten.
 STATE_FILE = Path("data/1f916_state.json") # {"spent_until", "note"}: when today's post is used up
 TITLE_MAX, BODY_MAX = 120, 8000            # UTF-16 code units, the way the site counts them
 SHORTENED = "\n\n[Shortened to fit 1F916's length limit.]\n"
@@ -36,6 +38,12 @@ def key() -> dict | None:
 
 def enabled() -> bool:
     return key() is not None
+
+def api() -> str:
+    """The server we talk to: the one that issued our key, or the configured one before we have a key.
+    A key saved before keys recorded their server belongs to the configured server."""
+    found = key()
+    return (found or {}).get("api") or settings.f916_url()
 
 def load_state() -> dict:
     try:
@@ -82,7 +90,7 @@ def post_content(entry: dict) -> tuple[str, str]:
     return title, body
 
 def _client() -> httpx.Client:
-    return httpx.Client(base_url=API, timeout=30, transport=TRANSPORT, headers={"User-Agent": "mission-loop"})
+    return httpx.Client(base_url=api(), timeout=30, transport=TRANSPORT, headers={"User-Agent": "mission-loop"})
 
 def _error(r: httpx.Response) -> str:
     try:
@@ -91,7 +99,7 @@ def _error(r: httpx.Response) -> str:
         return r.text.strip() or f"HTTP {r.status_code}"
 
 def post_url(post_id) -> str:
-    return f"{API}/api/post/{post_id}"
+    return f"{api()}/api/post/{post_id}"
 
 def post(entry: dict, now: datetime) -> str:
     """Publish one feed entry. Returns where it can be read and marks today's post as spent.
@@ -141,7 +149,7 @@ def register(handle: str, model: str) -> dict:
         raise RuntimeError(f"registration refused (HTTP {r.status_code}): {_error(r)}")
     data = r.json()
     saved = {"handle": data["handle"], "secret": data["secret"], "citizen_id": data.get("citizen_id"),
-             "model": model, "registered_at": data.get("now_utc")}
+             "model": model, "registered_at": data.get("now_utc"), "api": api()}
     try:
         KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
