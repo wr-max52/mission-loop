@@ -4,8 +4,9 @@ Small on purpose: a one-paragraph prompt, a few read-only tools, a handful of to
 and only the last couple of turns the page sends back. It keeps no memory and saves nothing.
 
 Every tool comes from MCP servers in mcp.json ("loop" = status_tools.py, plus "search" when a Brave key is set),
-so nothing here can change a mission. It runs on the loop's small model with the loop's options, so Ollama
-uses the copy already loaded instead of reloading the model under a running agent. The human may pick another
+so nothing here can change a mission. By default it runs on the Research Assistant's model with the loop's
+options (settings.chat_model; config, never a name in code), so Ollama uses the copy already loaded instead of
+reloading the model under a running agent. The human may pick another
 installed model; that one is loaded beside it.
 
 It never needs the loop: the tools read the files the loop leaves behind, so it answers whether the loop is
@@ -14,10 +15,16 @@ running, stopped or was never started. It needs only Ollama.
 import asyncio, os
 from pathlib import Path
 import ollama
+import settings
 from agents import llm
 from agents.toolbox import Toolbox
 
-MODEL = os.environ.get("MISSION_LOOP_CHAT_MODEL", llm.SEARCH_MODEL)
+def default_model() -> str:
+    return settings.chat_model()
+
+def _ollama() -> ollama.Client:
+    return ollama.Client(host=settings.ollama_host(), timeout=10)
+
 CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"
 MAX_TOOL_CALLS = 5
 TIME_LIMIT = 120                           # seconds for the whole answer
@@ -35,24 +42,25 @@ OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like 
 
 def _can_use_tools(name: str) -> bool:
     try:
-        return "tools" in (ollama.show(name).capabilities or [])
+        return "tools" in (_ollama().show(name).capabilities or [])
     except Exception:
         return False
 
 def models() -> list[str]:
     """Installed Ollama models that can call tools (the assistant can't work without them), default first.
     Raises if Ollama is unreachable."""
-    names = sorted(m.model for m in ollama.list().models)
-    return sorted([n for n in names if n == MODEL or _can_use_tools(n)], key=lambda n: n != MODEL)
+    default, names = default_model(), sorted(m.model for m in _ollama().list().models)
+    return sorted([n for n in names if n == default or _can_use_tools(n)], key=lambda n: n != default)
 
 def pick(model: str | None) -> str:
     """The human's choice if it is an installed chat model, else the default."""
-    if not model or model == MODEL:
-        return MODEL
+    default = default_model()
+    if not model or model == default:
+        return default
     try:
-        return model if model in models() else MODEL
+        return model if model in models() else default
     except Exception:
-        return MODEL
+        return default
 
 def servers() -> list[str]:
     return ["loop", "search"] if os.environ.get("BRAVE_API_KEY") else ["loop"]
@@ -67,7 +75,7 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
     if not question:
         return "Ask me what the loop is doing, or where a mission is."
     messages = [{"role": "system", "content": SYSTEM}, *_history(history), {"role": "user", "content": question}]
-    model = model or MODEL
+    model = model or default_model()
     factory = toolbox_factory or (lambda names: Toolbox(names, config_path=CONFIG))
     try:
         async with asyncio.timeout(TIME_LIMIT), factory(servers()) as tb:

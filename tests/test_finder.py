@@ -54,7 +54,7 @@ async def test_small_model_searches_and_main_model_picks(monkeypatch):
     seen = script(monkeypatch, [search_call(), DONE, as_json(idea())])
     assert [i.topic for i in await find()] == [idea().topic]
     assert FakeToolbox.enabled == ["search"]      # searching only; research does the reading
-    assert [c["model"] for c in seen] == [llm.SEARCH_MODEL, llm.SEARCH_MODEL, None]
+    assert [c["model"] for c in seen] == [llm.model_for("assistant"), llm.model_for("assistant"), None]
     assert seen[-1]["format"] is not None
 
 async def test_prompt_carries_inspiration_two_angles_and_existing_missions(monkeypatch):
@@ -92,7 +92,7 @@ async def test_failed_searches_stop_before_the_main_model(monkeypatch):
     seen = script(monkeypatch, [search_call(), DONE])
     with pytest.raises(finder.FinderFailed):
         await find()
-    assert all(c["model"] == llm.SEARCH_MODEL for c in seen)
+    assert all(c["model"] == llm.model_for("assistant") for c in seen)
 
 async def test_bad_json_gets_one_repair(monkeypatch):
     script(monkeypatch, [search_call(), DONE, Message(role="assistant", content="{nope"), as_json(idea())])
@@ -200,5 +200,5 @@ def test_ui_refuses_cross_site_post(client):
     assert r.status_code == 403 and store.get_inspiration() == ""
 
 def test_agent_strip_shows_the_finder_without_a_mission():
-    html = ui.agent_strip({"slug": "", "agent": "finder", "since": 0})
+    html = ui.agent_strip([{"worker": "assistant", "slug": "", "agent": "finder", "since": 0}])
     assert "<strong>Mission finder</strong> is looking for new missions" in html and "/m/" not in html
