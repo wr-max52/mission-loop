@@ -265,6 +265,27 @@ def test_dashboard_shows_both_workers_at_once(client, monkeypatch):
     assert '<a class="card active" href="/m/w" data-lab="busy" data-worker="pi">' in html
     assert "Now: <strong>Source finder</strong>" in client.get("/settings").text
 
+def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
+    """assets/flow.js relights every busy worker's card from /api/flow, so a page whose own refresh is held
+    back (typing, chat open) still shows both cards working, and each can get its researchers."""
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    researching(); writing()
+    html = client.get("/").text
+    assert '<div class="cards" data-lab-ok><a class="card" href="/m/r">' in html   # researchers may visit In progress
+    assert '<span class="doing" data-idle="Researching."> · Researching.</span>' in html
+    activity.work_as("assistant"); activity.begin("r", "sources")
+    activity.work_as("pi"); activity.begin("w", "writer")
+    activity.work_as(activity.DESK)
+    working = client.get("/api/flow").json()["working"]
+    assert {(e["slug"], e["worker"], e["name"]) for e in working} == {("r", "assistant", "Source finder"),
+                                                                       ("w", "pi", "Article writer")}
+    html = client.get("/").text            # the idle line stays on the card, for when the work ends
+    assert '<span class="doing" data-idle="Researching."> · Source finder is working on this now.</span>' in html
+    js = client.get("/assets/flow.js").text
+    assert "relightCards(d.working)" in js and "is working on this now." in js
+    js = client.get("/assets/researchers.js").text
+    assert "const MAX_ON_STAGE = 4;" in js and "const ENTRY_MIN = 12" in js   # two lit steps and two cards, staggered
+
 def test_each_workers_trail_stays_with_its_own_mission():
     """The chat assistant reads what each agent did; two workers at once must not mix up their steps."""
     import trail

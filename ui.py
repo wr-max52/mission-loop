@@ -312,7 +312,7 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 @media (prefers-reduced-motion: reduce) {
   .flow .step.on, .flow .check.on, .flow .check.on::after, .flow .human.arrived, .status .dot.on { animation:none; }
 }
-.card[data-lab] { position:relative; padding-bottom:4rem;
+.card[data-lab], .card.lab-host { position:relative; padding-bottom:4rem;
                   background-image:linear-gradient(var(--rule), var(--rule));
                   background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
                   background-repeat:no-repeat; }
@@ -525,8 +525,8 @@ def flow_state() -> dict:
     writing = sum(orchestrator.parked_while_writing(m) for m in parked)
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
-        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"])}
-                    for e in now],
+        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"]),
+                     "name": activity.AGENTS[e["agent"]]} for e in now],
         "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
@@ -981,10 +981,10 @@ def epic_list(missions: list[Mission]) -> str:
 def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
-    working = working_on(m, now)
-    sub = working or next_step(m)
+    working, idle = working_on(m, now), next_step(m)
     if m.state == State.DONE and m.published_at:
-        sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+        working, idle = "", f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
+    sub = working or idle
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
     stage = ""
@@ -992,7 +992,8 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
         stage = ' data-lab="busy"' + (f' data-worker="{live["worker"]}"' if live["worker"] in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
+            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
+            f'{" · " + escape(sub) if sub else ""}</span></div></a>')
 
 # ---------- pages ----------
 
@@ -1016,7 +1017,9 @@ async def home(request: Request) -> HTMLResponse:
             if title == "Published":
                 body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
-            body.append("".join(card(m, now, epics, lab) for m in ms))
+            cards = "".join(card(m, now, epics, lab) for m in ms)
+            # assets/flow.js relights cards in place; researchers may only visit the ones in a data-lab-ok group
+            body.append(f'<div class="cards"{" data-lab-ok" if lab else ""}>{cards}</div>')
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
