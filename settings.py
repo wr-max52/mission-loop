@@ -124,6 +124,45 @@ def animations() -> bool:
 def set_animations(on: bool) -> None:
     save(animations="" if on else "off")   # nothing stored while on, so a fresh install has them
 
+THEMES = ("system", "light", "dark")
+
+def theme() -> str:
+    """The UI's colours: "system" follows the computer's light or dark appearance, else always light or dark."""
+    return saved().get("theme") if saved().get("theme") in THEMES else "system"
+
+def set_theme(value: str) -> None:
+    if value not in THEMES:
+        raise ValueError("not a theme")
+    save(theme="" if value == "system" else value)   # nothing stored for the default
+
+# The chat bubble and your messages in the chat panel. Empty means the app's own red ink.
+CHAT_COLORS = {                                  # name -> pastel; a human may also pick any colour
+    "Sage": "#b9cdb2", "Duck egg": "#b8d8d6", "Powder blue": "#bcd0ea", "Wisteria": "#cbc0e3",
+    "Blush": "#eec5c5", "Apricot": "#f3d0b2", "Vellum": "#efe2b2",
+}
+HEX = re.compile(r"#[0-9a-f]{6}")
+
+def chat_color() -> str:
+    c = str(saved().get("chat_color") or "").lower()
+    return c if HEX.fullmatch(c) else ""
+
+def set_chat_color(value: str) -> str:
+    """"" goes back to the default. Raises ValueError unless it is a #rrggbb colour."""
+    value = value.strip().lower()
+    if value and not HEX.fullmatch(value):
+        raise ValueError("not a colour")
+    save(chat_color=value)
+    return value
+
+def ink_on(color: str) -> str:
+    """Dark or white text, whichever reads better on the colour (WCAG relative luminance)."""
+    def channel(h: str) -> float:
+        v = int(h, 16) / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(color[i:i + 2]) for i in (1, 3, 5))
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "#1d1d1f" if (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) else "#ffffff"
+
 # ---------- the two workers: which local model does which steps ----------
 # The Research Assistant runs the small model's legwork (searching and reading pages); the Principal
 # Investigator runs the big model's writing. Each can be turned off, and then the other one does its steps

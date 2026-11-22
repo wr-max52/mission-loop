@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse, quote
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import (HTMLResponse, RedirectResponse, FileResponse, PlainTextResponse, Response,
+from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextResponse, Response,
                                  JSONResponse)
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
@@ -20,7 +20,7 @@ import activity, agents, clock, orchestrator, settings, stopping, store
 from agents import llm
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
-from render import CSS, brief_html, epic_pill, THEME_INIT, THEME_TOGGLE
+from render import CSS, brief_html, epic_pill
 from icons import icon, CSS as ICON_CSS
 import flowchart
 from flowchart import flow_steps
@@ -57,6 +57,8 @@ MESSAGES = {
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
     "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
     "animations_off": "Animations off. The Missions page stays still.",
+    "theme_saved": "Appearance saved.",
+    "chat_color_saved": "Chat colour saved.",
     "ollama_saved": "LLM connection saved. Workers use the Ollama at that address from their next task.",
     "worker_saved": "Worker saved. It takes its next task with that model.",
     "worker_on": "Worker on. With both on, they work at the same time whenever each has a task.",
@@ -74,6 +76,8 @@ MESSAGES = {
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
+    "theme": "Pick System, Light or Dark.",
+    "chat_color": "That colour wasn't a #rrggbb colour.",
     "slug": "Short name: lowercase letters, numbers and dashes only.",
     "exists": "A mission with that short name already exists.",
     "notes": "Say what needs fixing so the agent can act on it.",
@@ -346,8 +350,8 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .switch input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 @media (prefers-reduced-motion: reduce) { .switch input, .switch input::after { transition:none; } }
 .chat-bubble { position:fixed; right:1.25rem; bottom:1.25rem; z-index:50; width:3.5rem; height:3.5rem; padding:0;
-               border-radius:50%; border:none; background:var(--accent); color:var(--bg); display:grid; place-items:center;
-               box-shadow:0 4px 14px rgba(0,0,0,.25); }
+               border-radius:50%; border:none; background:var(--chat, var(--accent)); color:var(--chat-ink, var(--bg));
+               display:grid; place-items:center; box-shadow:0 4px 14px rgba(0,0,0,.25), inset 0 0 0 1px rgba(0,0,0,.08); }
 .chat-bubble:hover { border:none; transform:scale(1.05); }
 .chat-bubble svg { width:1.6rem; height:1.6rem; fill:none; stroke:currentColor; stroke-width:2;
                    stroke-linecap:round; stroke-linejoin:round; }
@@ -366,7 +370,10 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .chat-guide + header { padding-top:0; }
 .chat-log { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:.6rem; padding:.2rem 0; }
 .chat-log .msg { max-width:88%; padding:.6rem .9rem; border-radius:12px; white-space:pre-wrap; line-height:1.5; }
-.chat-log .user { align-self:flex-end; background:var(--accent); color:var(--bg); }
+.chat-log .user { align-self:flex-end; background:var(--chat, var(--accent)); color:var(--chat-ink, var(--bg)); }
+.chat-log .user .md a { color:inherit; }
+.chat-form button.primary { background:var(--chat, var(--accent)); border-color:var(--chat, var(--accent));
+                            color:var(--chat-ink, var(--bg)); }
 .chat-log .assistant { align-self:flex-start; background:var(--quote); }
 .chat-log .assistant.wait { color:var(--muted); font-style:italic; }
 .chat-log .md { white-space:normal; }
@@ -430,6 +437,37 @@ label.tick .hint { margin-left:-.15rem; }
 .pubbox.add > summary { color:var(--fg); font-size:1rem; }
 .pubbox details.formats { margin:.8rem 0; }
 h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
+/* Display: the theme as a segmented choice, the chat colour as ink swatches */
+:root:not([data-theme]) { color-scheme: light dark; }
+.display h3 { display:flex; align-items:center; gap:.45rem; margin:0 0 .2rem; font-family:Georgia, serif; font-size:1.1rem; }
+.display h3 .ico { color:var(--muted); }
+.display .hint { margin:0 0 .7rem; }
+.display + .display { margin-top:-.5rem; }
+.choice { display:inline-flex; border:1px solid var(--rule); border-radius:999px; padding:3px; background:var(--quote);
+          margin:0; gap:2px; flex-wrap:wrap; }
+.choice label { position:relative; display:inline-flex; align-items:center; gap:.4rem; margin:0; padding:.4rem .95rem; border-radius:999px;
+                font-size:.9rem; font-weight:600; color:var(--muted); cursor:pointer; }
+.choice label:hover { color:var(--fg); }
+.choice input { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none; }
+.choice label:has(input:checked) { background:var(--bg); color:var(--fg); box-shadow:0 1px 2px rgba(0,0,0,.15), 0 0 0 1px var(--rule); }
+.choice label:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:1px; }
+.swatches { display:flex; flex-wrap:wrap; gap:.9rem 1.1rem; margin:0; padding:0; border:0; }
+.swatch { position:relative; display:flex; flex-direction:column; align-items:center; gap:.35rem; width:4.6rem; margin:0; cursor:pointer;
+          font-size:.78rem; font-weight:600; color:var(--muted); text-align:center; line-height:1.2; }
+.swatch input { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none; }
+.swatch .dab { position:relative; width:2.4rem; height:2.4rem; border-radius:50%; background:var(--c);
+               box-shadow:inset 0 0 0 1px rgba(0,0,0,.12); transition:transform .12s; }
+.swatch:hover .dab { transform:scale(1.07); }
+.swatch:has(input:checked) { color:var(--fg); }
+.swatch:has(input:checked) .dab { box-shadow:inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 2px var(--bg), 0 0 0 4px var(--fg); }
+.swatch:has(input:checked) .dab::after { content:""; position:absolute; left:50%; top:46%; width:.5rem; height:.9rem;
+               border:solid var(--ink, #1d1d1f); border-width:0 2px 2px 0; transform:translate(-50%, -50%) rotate(45deg); }
+.swatch:has(input:focus-visible) .dab { outline:2px solid var(--accent); outline-offset:5px; }
+.swatch.own .dab { background:conic-gradient(#eec5c5, #f3d0b2, #efe2b2, #b9cdb2, #b8d8d6, #bcd0ea, #cbc0e3, #eec5c5); }
+.swatch.own.set .dab { background:var(--c); }
+.swatch.own input[type=color] { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer;
+                                pointer-events:auto; padding:0; border:0; }
+@media (prefers-reduced-motion: reduce) { .swatch .dab { transition:none; } }
 """
 
 ELAPSED_JS = """<script>
@@ -472,6 +510,15 @@ def nav_status() -> str:
         text, dot = "Running", "on"
     return f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span>'
 
+def html_attrs() -> str:
+    """The theme and chat colour from the Settings page, on <html> so they apply before first paint. "system"
+    sets no data-theme, so the stylesheet's prefers-color-scheme rules follow the computer, live."""
+    theme = settings.theme()
+    out = f' data-theme="{theme}"' if theme != "system" else ""
+    if color := settings.chat_color():
+        out += f' style="--chat:{color};--chat-ink:{settings.ink_on(color)}"'
+    return out
+
 def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     # Refresh itself when the loop changes something, unless the human is typing.
     script = f"""<script>
@@ -507,13 +554,13 @@ async function refresh() {{
   return true;
 }}
 </script>{ELAPSED_JS}""" if poll else ""
-    html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    html = (f'<!doctype html><html lang="en"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title><style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
-            f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
+            f'<a href="/settings">{ICON_SETTINGS}Settings</a></span></nav>'
             f"{body}</main>{chat_widget()}{script}</body></html>")
     return HTMLResponse(html)
 
@@ -1118,6 +1165,62 @@ remembers what it has posted. Publish any article again from the <a href="/publi
 <h3 class="sub">Add a channel</h3>
 {add_channel_forms()}"""
 
+THEME_CHOICES = [("system", "monitor", "System"), ("light", "sun", "Light"), ("dark", "moon", "Dark")]
+OWN_DEFAULT = "#c9b8a3"     # the colour picker's starting point before a human picks: a warm parchment
+
+# Live preview while picking your own colour; letting go saves it. The page reloads on save, so this only
+# has to paint the bubble and the swatch in between.
+CHAT_COLOR_JS = """<script>
+(function () {
+  const own = document.getElementById("own-color");
+  if (!own) return;
+  const pick = own.closest(".swatch"), radio = pick.querySelector("input[type=radio]");
+  own.addEventListener("input", () => {
+    radio.checked = true;
+    pick.classList.add("set");
+    pick.style.setProperty("--c", own.value);
+    document.documentElement.style.setProperty("--chat", own.value);
+  });
+  own.addEventListener("change", () => own.form.requestSubmit());
+})();
+</script>"""
+
+def display_forms() -> str:
+    """Appearance (system, light or dark) and the chat colour, each saved the moment it is picked."""
+    theme = settings.theme()
+    themes = "".join(
+        f'<label><input type="radio" name="theme" value="{v}"{" checked" if v == theme else ""} '
+        f'onchange="this.form.submit()">{icon(ico)}{label}</label>' for v, ico, label in THEME_CHOICES)
+    current = settings.chat_color()
+    known = set(settings.CHAT_COLORS.values())
+    def swatch(value: str, name: str, color: str) -> str:
+        on = " checked" if value == current else ""
+        ink = settings.ink_on(color) if color.startswith("#") else "#ffffff"
+        return (f'<label class="swatch" style="--c:{color};--ink:{ink}"><input type="radio" name="choice" value="{value}"'
+                f'{on} onchange="this.form.submit()"><span class="dab"></span>{escape(name)}</label>')
+    swatches = swatch("", "Library red", "var(--accent)")
+    swatches += "".join(swatch(c, n, c) for n, c in settings.CHAT_COLORS.items())
+    mine = current if current and current not in known else ""
+    own_on = " checked" if mine else ""
+    own_style = f' style="--c:{mine};--ink:{settings.ink_on(mine)}"' if mine else ""
+    swatches += (f'<label class="swatch own{" set" if mine else ""}"{own_style}>'
+                 f'<input type="radio" name="choice" value="own"{own_on} onchange="this.form.submit()">'
+                 f'<span class="dab"><input type="color" id="own-color" name="own" value="{mine or OWN_DEFAULT}" '
+                 f'aria-label="Choose your own colour"></span>Your own</label>')
+    return f"""<form method="post" action="/settings/theme" class="actions display">
+  <h3>{icon("sun")}Appearance</h3>
+  <p class="hint">System follows your computer's light or dark setting, and changes with it. The article previews here
+  follow it too; the published site keeps its own switch for readers.</p>
+  <div class="choice" role="radiogroup" aria-label="Appearance">{themes}</div>
+  <noscript><p><button>Save</button></p></noscript>
+</form>
+<form method="post" action="/settings/chat-color" class="actions display">
+  <h3>{icon("palette")}Chat colour</h3>
+  <p class="hint">The ink for the chat bubble and your questions in the chat panel.</p>
+  <div class="swatches" role="radiogroup" aria-label="Chat colour">{swatches}</div>
+  <noscript><p><button>Save</button></p></noscript>
+</form>{CHAT_COLOR_JS}"""
+
 def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
@@ -1127,6 +1230,7 @@ def settings_body(request: Request, error: str = "") -> str:
 {workers_section(conn)}
 {connection_section(conn)}
 {heading("monitor", "Display")}
+{display_forms()}
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
@@ -1148,6 +1252,26 @@ async def save_site_url(request: Request) -> Response:
         return go("/settings", error="site_url")
     orchestrator.refresh_feed()            # the feeds pick up the new address right away
     return go("/settings", done="site_url_saved" if url else "site_url_cleared")
+
+async def save_theme(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    try:
+        settings.set_theme(str((await request.form()).get("theme") or ""))
+    except ValueError:
+        return go("/settings", error="theme")
+    return go("/settings", done="theme_saved")
+
+async def save_chat_color(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    choice = str(form.get("choice") or "")
+    try:
+        settings.set_chat_color(str(form.get("own") or "") if choice == "own" else choice)
+    except ValueError:
+        return go("/settings", error="chat_color")
+    return go("/settings", done="chat_color_saved")
 
 async def save_animations(request: Request) -> Response:
     if not same_origin(request):
@@ -1649,7 +1773,17 @@ async def preview(request: Request) -> Response:
     path = Path("missions") / slug / "preview.html"
     if not SLUG.match(slug) or not store.get_mission(slug) or not path.exists():
         return PlainTextResponse("No preview yet.", status_code=404)
-    return FileResponse(path, media_type="text/html")
+    return HTMLResponse(themed_preview(path.read_text()))
+
+def themed_preview(html: str) -> str:
+    """The preview page is the published page, which picks its own theme in the reader's browser. Here it is
+    shown inside the UI, so it takes the UI's appearance instead (set after the page's own script, before
+    first paint) and drops its own switch, so the article never sits dark in a light page or the other way."""
+    theme = settings.theme()
+    set_theme = (f'document.documentElement.dataset.theme = "{theme}";' if theme != "system"
+                 else 'document.documentElement.removeAttribute("data-theme");')
+    override = f"<script>{set_theme}</script><style>.theme-toggle {{ display:none; }}</style>"
+    return html.replace("</head>", override + "</head>", 1) if "</head>" in html else override + html
 
 # ---------- Researcher Chat: ask what the loop is doing, or look something up on the web ----------
 # A bubble on every page opens a panel over the left third. The conversation is kept in this browser tab
@@ -2020,6 +2154,8 @@ app = Starlette(routes=[
     Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
+    Route("/settings/theme", save_theme, methods=["POST"]),
+    Route("/settings/chat-color", save_chat_color, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
