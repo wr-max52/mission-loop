@@ -102,7 +102,8 @@ async def test_bad_json_gets_one_repair(monkeypatch):
 
 def calls_to_finder(monkeypatch, result=None):
     calls = []
-    def fake(inspiration, topics, now):
+    def fake(inspiration, topics, now, epics=None):
+        calls_to_finder.epics = epics
         calls.append((inspiration, topics))
         return result if result is not None else []
     monkeypatch.setattr(agents, "find_missions", fake)

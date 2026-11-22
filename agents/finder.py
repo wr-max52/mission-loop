@@ -1,9 +1,9 @@
 """Mission finder: a few lateral searches around the human's inspiration line, then 1 to 3 new missions.
 The small model searches and the main model picks. Code then keeps only ideas that rest on a page the
 searches really returned and that the desk isn't already working on."""
-import asyncio, random, re
+import asyncio, random
 from pydantic import BaseModel, ValidationError
-from contracts import MissionIdea
+from contracts import MissionIdea, words
 from agents import llm
 from agents.researcher import tool_loop
 from agents.toolbox import Toolbox
@@ -65,6 +65,16 @@ matching the schema. Each one becomes a mission for the research desk.
 - objective: two or three sentences saying what is being claimed, who is claiming it, and what evidence
   would support or sink it. Treat the claim as a lead to test, not as true.
 - source_url: copied exactly from a search result above, a page showing that this claim is really being made.
+- epic: the title of the desk's existing epic (listed below) this lead fits best, copied exactly. Pick the
+  closest one even when the fit is loose. Leave it empty only if the desk has no epics yet.
+- new_epic: almost always empty. Fill it only when two or more of your leads share a theme that none of
+  the existing epics covers; then give each of them the same new title. A title is at most 3 words,
+  specific yet thematic: a line of inquiry that can grow, not a goal (e.g. "Fed Policy Capture").
+  A new epic on a single lead is thrown away.
+
+The desk's existing epics, each with some of its missions:
+{epics}
+
 Prefer what cuts against the usual story over what merely repeats it. Make the leads different from each
 other and from the desk's existing missions. Do not propose a mission whose premise accuses a private
 person of wrongdoing or blames people for their race, religion or ethnicity."""
@@ -75,14 +85,11 @@ class FinderFailed(Exception):
 class MissionIdeas(BaseModel):
     missions: list[MissionIdea]
 
-def _words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3}
-
 def too_similar(topic: str, others: list[str]) -> bool:
-    words = _words(topic)
+    mine = words(topic)
     for other in others:
-        theirs = _words(other)
-        if words and theirs and len(words & theirs) / len(words | theirs) >= TOO_SIMILAR:
+        theirs = words(other)
+        if mine and theirs and len(mine & theirs) / len(mine | theirs) >= TOO_SIMILAR:
             return True
     return False
 
@@ -100,7 +107,13 @@ def _keep(ideas: list[MissionIdea], results: str, topics: list[str]) -> list[Mis
             kept.append(idea)
     return kept[:MAX_IDEAS]
 
-async def run_finder(inspiration: str, topics: list[str], now=None, toolbox_factory=Toolbox) -> list[MissionIdea]:
+def epic_listing(epics: dict[str, list[str]] | None) -> str:
+    if not epics:
+        return "- none yet"
+    return "\n".join(f"- {title}" + "".join(f"\n    · {t}" for t in topics) for title, topics in epics.items())
+
+async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[str, list[str]] | None = None,
+                     toolbox_factory=Toolbox) -> list[MissionIdea]:
     angle_1, angle_2 = random.sample(ANGLES, 2)
     listed = "\n".join(f"- {t}" for t in topics[-MAX_LISTED:]) or "- none yet"
     today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
@@ -112,7 +125,7 @@ async def run_finder(inspiration: str, topics: list[str], now=None, toolbox_fact
     if not results:
         raise FinderFailed("the searches returned nothing")
 
-    messages.append({"role": "user", "content": PROPOSE})
+    messages.append({"role": "user", "content": PROPOSE.format(epics=epic_listing(epics))})
     error = None
     for _ in range(2):                     # one repair attempt for malformed JSON
         msg = await llm.chat(messages, format=MissionIdeas.model_json_schema())
@@ -124,6 +137,7 @@ async def run_finder(inspiration: str, topics: list[str], now=None, toolbox_fact
             messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})
     raise FinderFailed(f"model could not produce valid missions: {error}")
 
-def find_missions(inspiration: str, topics: list[str], now=None) -> list[MissionIdea]:
-    """Sync entry point the orchestrator calls."""
-    return asyncio.run(run_finder(inspiration, topics, now))
+def find_missions(inspiration: str, topics: list[str], now=None,
+                  epics: dict[str, list[str]] | None = None) -> list[MissionIdea]:
+    """Sync entry point the orchestrator calls. epics: active epic title -> a few of its mission topics."""
+    return asyncio.run(run_finder(inspiration, topics, now, epics))

@@ -1,6 +1,6 @@
 from contracts import Mission, MissionIdea, ResearchBrief, Source, POC, Claim, OutreachRecord, Article, Section
 
-def find_missions(inspiration: str, topics: list[str], now=None) -> list[MissionIdea]:
+def find_missions(inspiration: str, topics: list[str], now=None, epics=None) -> list[MissionIdea]:
     return [MissionIdea(topic=f"Stub lead {len(topics) + 1} from {inspiration}",
                         objective="Stub objective", source_url="https://a.example.com/lead")]
 

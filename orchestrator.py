@@ -3,9 +3,9 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
-from agents import f916
+from agents import f916, publisher
 from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       ChannelPost, slugify)
+                       ChannelPost, epic_title, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -29,7 +29,8 @@ def _write_article_review(m: Mission, brief: ResearchBrief, article: Article) ->
     (folder / "article.md").write_text(article_markdown(m.slug, brief, article))
     (folder / "preview.html").write_text(article_html(brief, article, published_at=None,
                                                       brief_checked=not m.unchecked_brief,
-                                                      article_checked=not m.unchecked_article))
+                                                      article_checked=not m.unchecked_article,
+                                                      epic=publisher.epic_label(m)))
     return folder / "preview.html"
 
 def step(m: Mission, now) -> str | None:
@@ -207,6 +208,26 @@ def _new_slug(topic: str, taken: set[str]) -> str:
         slug, n = f"{base}-{n}", n + 1
     return slug
 
+MIN_NEW_EPIC_MISSIONS = 2                  # the finder may only propose an epic that already has 2+ missions
+EPIC_TOPICS_SHOWN = 5                      # recent topics the finder sees per epic, so it knows what each holds
+
+def _finder_epics(missions: list[Mission]) -> dict[str, list[str]]:
+    return {e.title: [m.topic for m in missions if m.epic == e.slug][-EPIC_TOPICS_SHOWN:]
+            for e in store.all_epics("active")}
+
+def _settle_epic(idea, proposals: set[str]) -> tuple[str, str, str]:
+    """(epic, fallback, note) for a found mission. It always gets the best existing epic the finder named;
+    a new epic is proposed only when enough ideas from this pass share it, and waits for the human."""
+    fit = store.find_epic(idea.epic)
+    fit = fit.slug if fit and fit.status == "active" else ""
+    new = epic_title(idea.new_epic)
+    if not new or new.lower() not in proposals:
+        return fit, "", ""
+    epic = store.create_epic(new, status="proposed")
+    if epic.status == "active":            # it named an existing epic after all
+        return epic.slug, "", ""
+    return epic.slug, fit, f"; proposed new epic: {epic.title}"
+
 def find_new_missions(now) -> int:
     """The mission finder's turn. It needs an inspiration line, and its failures never hold up a pass."""
     inspiration = store.get_inspiration()
@@ -215,19 +236,22 @@ def find_new_missions(now) -> int:
     missions = store.all_missions()
     try:
         activity.begin("", "finder")
-        ideas = agents.find_missions(inspiration, [m.topic for m in missions], now)
+        ideas = agents.find_missions(inspiration, [m.topic for m in missions], now, _finder_epics(missions))
     except Exception as e:
         print(f"mission finder failed: {type(e).__name__}: {e}", flush=True)
         return 0
     finally:
         activity.clear()
     taken = {m.slug for m in missions}
+    named = [epic_title(i.new_epic).lower() for i in ideas if epic_title(i.new_epic)]
+    proposals = {n for n in named if named.count(n) >= MIN_NEW_EPIC_MISSIONS}
     for idea in ideas:
         slug = _new_slug(idea.topic, taken)
         taken.add(slug)
-        store.save_mission(Mission(slug=slug, topic=idea.topic.strip(),
+        epic, fallback, note = _settle_epic(idea, proposals)
+        store.save_mission(Mission(slug=slug, topic=idea.topic.strip(), epic=epic, epic_fallback=fallback,
                                    objective=f"{idea.objective.strip()}\n\nStarting lead: {idea.source_url.strip()}"))
-        store.log_event(slug, now, "", State.QUEUED.value, f"found by the mission finder from: {inspiration}")
+        store.log_event(slug, now, "", State.QUEUED.value, f"found by the mission finder from: {inspiration}{note}")
     print(f"mission finder added {len(ideas)} mission(s)", flush=True)
     return len(ideas)
 
@@ -284,6 +308,97 @@ def post_to_1f916(now, max_tries: int = 3) -> int:
         f916.save_state({"spent_until": f916.next_utc_day(now).isoformat(), "note": f"posted {m.slug}"})
         return 1
     return 0
+
+# ---------- epics (human decisions) ----------
+
+def _in_epic(slug: str) -> list[Mission]:
+    return [m for m in store.all_missions() if m.epic == slug]
+
+def _refresh_pages(missions: list[Mission]) -> None:
+    """Epic labels are baked into article pages, so redraw the ones whose label may have changed."""
+    published = False
+    for m in missions:
+        if m.state == State.DONE and m.published_at and store.load_artifact(m.slug, "article"):
+            publisher.write_page(m, _brief(m), _article(m), m.published_at)
+            published = True
+        elif m.state == State.ARTICLE_READY and store.load_artifact(m.slug, "article"):
+            _write_article_review(m, _brief(m), _article(m))
+    if published:
+        publisher.rebuild_index()
+
+def _drop_empty_proposals() -> None:
+    used = {m.epic for m in store.all_missions()}
+    for e in store.all_epics("proposed"):
+        if e.slug not in used:
+            store.delete_epic(e.slug)
+
+def _move(missions: list[Mission], epic: str, now, note: str) -> None:
+    for m in missions:
+        m.epic, m.epic_fallback = epic, ""
+        store.save_mission(m)
+        store.log_event(m.slug, now, m.state.value, m.state.value, note)
+
+def assign_epic(m: Mission, name: str, now) -> None:
+    """Human puts a mission in an epic by title or slug, making it if it's new. Blank takes it out of any epic.
+    An epic the human names is active right away."""
+    epic = store.create_epic(name) if name.strip() else None
+    _move([m], epic.slug if epic else "", now, f"epic set to {epic.title}" if epic else "epic cleared")
+    _drop_empty_proposals()
+    _refresh_pages([m])
+
+def approve_epic(slug: str, title: str, now) -> None:
+    """Human accepts a proposed epic, optionally renamed. A name that matches another epic merges into it."""
+    epic = store.get_epic(slug)
+    if not epic or epic.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed epic")
+    clean = epic_title(title or epic.title)
+    if not clean:
+        raise ValueError("an epic title needs 1 to 4 words")
+    other = store.find_epic(clean)
+    if other and other.slug != slug:
+        return merge_epic(slug, other.slug, now)
+    epic.title, epic.status = clean, "active"
+    store.save_epic(epic)
+    missions = _in_epic(slug)
+    _move(missions, slug, now, f"new epic approved: {clean}")
+    _refresh_pages(missions)
+
+def merge_epic(slug: str, into: str, now) -> None:
+    """Every mission in one epic moves to another, and the first epic is gone."""
+    target = store.get_epic(into)
+    if not store.get_epic(slug) or not target or slug == into:
+        raise ValueError("pick a different epic to move them to")
+    if target.status != "active":
+        raise ValueError(f"{target.title} is still only proposed")
+    missions = _in_epic(slug)
+    _move(missions, into, now, f"moved to epic {target.title}")
+    store.delete_epic(slug)
+    _refresh_pages(missions)
+
+def reject_epic(slug: str, now) -> None:
+    """Human turns down a proposed epic: each mission goes back to the existing epic the finder picked for it."""
+    epic = store.get_epic(slug)
+    if not epic or epic.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed epic")
+    for m in _in_epic(slug):
+        back = store.get_epic(m.epic_fallback)
+        back = back.slug if back and back.status == "active" else ""
+        _move([m], back, now, f"proposed epic {epic.title} rejected"
+              + (f"; back to {store.get_epic(back).title}" if back else ""))
+    store.delete_epic(slug)
+
+def rename_epic(slug: str, title: str, now) -> None:
+    epic, clean = store.get_epic(slug), epic_title(title)
+    if not epic:
+        raise ValueError(f"no epic {slug}")
+    if not clean:
+        raise ValueError("an epic title needs 1 to 4 words")
+    other = store.find_epic(clean)
+    if other and other.slug != slug:
+        raise ValueError(f"there is already an epic called {other.title}")
+    epic.title = clean
+    store.save_epic(epic)
+    _refresh_pages(_in_epic(slug))
 
 def _run_missions(now_fn, max_ticks: int) -> int:
     total = 0

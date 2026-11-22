@@ -1,7 +1,7 @@
 """Research agent: a small model finds sources (and contacts), then the main model writes a ResearchBrief."""
 import asyncio
 from pydantic import BaseModel, ValidationError
-import activity, settings
+import activity, related, settings
 from contracts import Mission, ResearchBrief, POC
 from agents import llm
 from checks import validator
@@ -15,7 +15,7 @@ SYSTEM = """You are a skeptical, nonpartisan political investigator. Your job is
 is known and say plainly what may lie just past it.
 Topic: {topic}
 Mission: {objective}
-{today}
+{today}{past}
 Assume every source is spinning. News outlets, officials, campaigns, think tanks, experts and contrarian
 sites all mix some truth with framing, omission and motive, and none is accurate because of who it is.
 Read each one by separating what it shows (a document, number, date, vote, direct quote) from what it
@@ -191,6 +191,7 @@ async def find_contacts(m: Mission, tb) -> list[POC]:
 async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:
     today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
+                           past=related.reference_block(m),
                            pocs=POCS_LATER if settings.OUTREACH else NO_POC_RULE)
     pocs = None
     async with toolbox_factory(_tool_servers(m)) as tb:

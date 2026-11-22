@@ -89,6 +89,10 @@ ul.index { list-style: none; padding: 0; }
 ul.index li { border-bottom: 1px solid var(--rule); padding: 1.1rem 0; }
 ul.index a.title { font-size: 1.25rem; font-weight: 600; text-decoration: none; color: var(--fg); }
 ul.index p { margin: .3rem 0 0; color: var(--muted); }
+.epic { display:inline-block; font: 600 0.72rem/1.3 -apple-system, system-ui, sans-serif; white-space:nowrap;
+        padding: .12rem .5rem; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted);
+        vertical-align: middle; }
+.epic.proposed { border-style: dashed; }
 .theme-toggle { display:inline-flex; align-items:center; gap:.35rem; padding:.3rem .55rem;
                border:1px solid var(--rule); border-radius:999px; background:var(--bg); color:var(--fg);
                font:600 0.8rem/1 -apple-system, system-ui, sans-serif; cursor:pointer; }
@@ -153,8 +157,14 @@ def _page(title: str, body: str, home: str) -> str:
             f"<body><main><header class=\"site\"><a href=\"{home}\">Mission Loop</a>{THEME_TOGGLE}</header>\n"
             f"{body}\n</main></body></html>\n")
 
+def epic_pill(title: str, proposed: bool = False) -> str:
+    if not title:
+        return ""
+    return f'<span class="epic proposed" title="Proposed epic">{escape(title)}?</span>' if proposed \
+        else f'<span class="epic">{escape(title)}</span>'
+
 def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, home: str = "../",
-                 brief_checked: bool = True, article_checked: bool = True) -> str:
+                 brief_checked: bool = True, article_checked: bool = True, epic: str = "") -> str:
     """brief_checked / article_checked are False when a human pushed that work past a failed check;
     the page must then not claim the check passed."""
     nums = _source_numbers(b, a)
@@ -172,7 +182,7 @@ def article_html(b: ResearchBrief, a: Article, published_at: datetime | None, ho
     when = f"Published {published_at:%B %-d, %Y}" if published_at else "Preview: not published"
     failed = "" if brief_checked and article_checked else " · Failed automated checks"
     body = [f"<article><h1>{escape(a.title)}</h1>", f'<p class="dek">{escape(a.dek)}</p>',
-            f'<p class="meta">{when} · {len(b.sources)} sources{failed}</p>']
+            f'<p class="meta">{epic_pill(epic) + " " if epic else ""}{when} · {len(b.sources)} sources{failed}</p>']
     for sec in a.sections:
         body.append(f"<h2>{escape(sec.heading)}</h2>")
         body += [f"<p>{para(p)}</p>" for p in sec.paragraphs]
@@ -228,9 +238,10 @@ def article_text(b: ResearchBrief, a: Article, brief_checked: bool = True, artic
     return "\n".join(lines)
 
 def index_html(entries: list[dict]) -> str:
-    """entries: dicts with slug, title, dek, published_at (ISO string), newest first."""
+    """entries: dicts with slug, title, dek, published_at (ISO string) and maybe epic, newest first."""
     items = [f'<li><a class="title" href="{escape(e["slug"])}/">{escape(e["title"])}</a>'
              f'<p>{escape(e["dek"])}</p><p class="meta" style="border:0;padding:0;margin:.3rem 0 0">'
+             f'{epic_pill(e.get("epic", "")) + " " if e.get("epic") else ""}'
              f'{datetime.fromisoformat(e["published_at"]):%B %-d, %Y}</p></li>' for e in entries]
     body = "<h1>Published</h1>" + (f'<ul class="index">{"".join(items)}</ul>' if items
                                    else "<p>Nothing published yet.</p>")
