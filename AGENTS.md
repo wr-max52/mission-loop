@@ -18,7 +18,7 @@ commit, print or move any of them. The Pages repo is the one place `site/` is me
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 388 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 391 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
   cleared so a real `.env` never switches a channel on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
@@ -134,6 +134,16 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     what makes a mission DONE. Feed links are relative unless a site address is set (the UI's Settings page
     saves it in `data/settings.json`, which wins over `MISSION_LOOP_SITE_URL` in `.env`); entry ids are the
     slugs either way. Each time the loop starts working it gives older `meta.json` files their text and rebuilds.
+    The site is meant to be browsed on its own (GitHub Pages): every page has Articles and About links, the index
+    filters by tag (an approved epic is called a tag on the site; `?tag=` in the address, so an article's tag pill
+    links to its list), and an article page has a link back and its newer and older article, read from
+    `feed.json` so pages written once stay current. `site/about/` shows the pipeline strip (`flowchart.py`, the
+    same strip the UI draws) playing a made-up run, a few seconds per stage with both workers busy
+    (`assets/about.js` drives it through `assets/flow.js`; `data-demo` means nothing is polled), says what each
+    agent does (`render.AGENT_NOTES`), and has a floor where a researcher or two drops by for a short visit and
+    says something (`window.RESEARCHERS_PACE`). Rebuilding the index rewrites it and copies those three scripts to
+    `site/assets/`. `about` and `assets` are the site's own folders, so no mission gets them as its slug
+    (`contracts.SITE_FOLDERS`).
   - Every other channel posts from the feed (`agents/channel.py` says what a channel module provides; add it to
     `CHANNELS` in `agents/__init__.py`; `agents.channels()` is those plus the custom ones). When the loop starts,
     whenever it publishes and whenever a human asks to publish an article again, `orchestrator.post_to_channels`
@@ -251,7 +261,7 @@ order they go out, requested ones marked), and each article with where it went a
 Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
 unlit while the loop is off: agents on a track in runtime order (publishing is one step, whatever the channels), each code check a vertical block right after the
 agent it checks (with a red count of missions parked there), and each human review a sidestep below between that
 check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per

@@ -126,6 +126,8 @@ CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
 # The required wording of a possibility. Shared by the checkers and the renderer.
 POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
 
+SITE_FOLDERS = {"about", "assets"}       # the published site's own folders: no mission may use them as its slug
+
 def slugify(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())
     return "-".join(words[:5])[:60].strip("-")

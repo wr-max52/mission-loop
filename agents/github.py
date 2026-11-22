@@ -335,7 +335,7 @@ def _push(full: str, branch: str, local: dict[str, bytes], shas: dict[str, str])
         tree = _check(c.post(f"/repos/{full}/git/trees", json={"tree": [
             {"path": p, "mode": "100644", "type": "blob", "sha": s} for p, s in sorted(wanted.items())]}),
             "building the files")["sha"]
-        added = sorted({p.split("/")[0] for p in shas if "/" in p and p not in remote})
+        added = sorted({p.split("/")[0] for p in shas if p.endswith("/meta.json") and p not in remote})   # new articles
         message = ("Publish " + ", ".join(added)) if added else "Update the site"
         commit = _check(c.post(f"/repos/{full}/git/commits", json={
             "message": message[:200], "tree": tree, "parents": [head]}), "making the commit")["sha"]
