@@ -207,6 +207,7 @@ window.RESEARCHER_LINES = {
 "source_check": ["Chaque citation, vérifiée.", "Montrez-moi la source.", "Ctrl+F, c'est l'heure."],
 "writer": ["On rédige !", "Il était une fois un fait…", "Les mots, rassemblement !"],
 "article_check": ["Vérification du brouillon.", "Fait ou possibilité ?", "Stylo rouge de sortie."],
+"article_rating": ["Sur dix...", "Je lirais la suite ?", "L'heure des notes."],
 "publisher": ["Arrêtez les rotatives !", "Bon à tirer !"],
 "1f916": ["Publication sur 1F916.", "Un post par jour !"],
 "github": ["On pousse le site.", "Un git push, en gros."],

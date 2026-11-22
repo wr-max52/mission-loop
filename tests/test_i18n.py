@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 import activity, flowchart, i18n, settings, ui
+from contracts import RATING_FACTORS
 
 ROOT = Path(__file__).parent.parent
 CODES = [c for c in settings.LANGUAGES if c != "en"]
@@ -36,7 +37,8 @@ def keys() -> set[str]:
     out |= set(ui.PAST.values()) | set(ui.OUTCOME.values()) | set(ui.LOG_COLUMNS) | {"done"}
     out |= {title for _a, _i, title in ui.SETTINGS_SECTIONS}
     out |= {flowchart.RETRY, ui.STUB_RUN, "Local site", "Why it stopped", "Your feedback", "Check notes",
-            "Brief ready", "Article ready", "Parked"}
+            "Brief ready", "Article ready", "Parked", "Why it went back"}
+    out |= set(RATING_FACTORS.values()) | set(ui.RATING_SHORT.values())
     return out
 
 PLACEHOLDER = re.compile(r"\{[a-z_]*\}")

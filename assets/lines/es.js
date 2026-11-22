@@ -202,6 +202,7 @@ window.RESEARCHER_LINES = {
 "source_check": ["Cada cita, comprobada.", "Enséñame la fuente.", "Hora del Ctrl+F."],
 "writer": ["¡Redactando!", "Érase una vez un hecho…", "¡Palabras, a formar!"],
 "article_check": ["Revisando el borrador.", "¿Hecho o posibilidad?", "Boli rojo en mano."],
+"article_rating": ["Sobre diez...", "¿Seguiría leyendo?", "Hora de calificar."],
 "publisher": ["¡Paren las rotativas!", "¡A imprenta!"],
 "1f916": ["Publicando en 1F916.", "¡Uno al día!"],
 "github": ["Subiendo el sitio.", "Un git push, básicamente."],

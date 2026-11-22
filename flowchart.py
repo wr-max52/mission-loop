@@ -29,6 +29,8 @@ FLOW = [
     ("brief_review", "human", "Review brief"),
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
+    ("article_rating", "agent", "Rating"), # the Research Assistant rates the checked article (agents/rater.py)
+    ("rating_check", "check", "check"),    # code: a total of 20 or less goes back to the writer
     ("article_review", "human", "Review article"),
     ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
 ]
@@ -36,6 +38,7 @@ TILES = {   # key -> (icon, the line under its name on the strip)
     "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
     "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
+    "article_rating": ("scale", "rates the article"),
     "publisher": ("broadcast", "site and channels"),
 }
 REVIEW_SUB = {"epic_review": "you approve", "brief_review": "you approve", "article_review": "you publish"}
@@ -57,8 +60,10 @@ CHECKS = {   # every code check on the strip: what it holds the step before it t
     "source_check": "Source check (code): every claim cited, quotes on the page, 3 sites, 1+ fact, a counterpoint.",
     "article_check": "Article check (code): every paragraph cited to the brief's sources, exact quotes, no outside "
                      "links, opposing view cited.",
+    "rating_check": "Rating check (code): the Research Assistant scores the claim and logic, intrigue and sources "
+                    "1-10 each; 20 or less goes back to the writer with the reasons.",
 }
-PARKS = {"contact_check", "source_check", "article_check"}   # the checks that retry and then park; the rest drop
+PARKS = {"contact_check", "source_check", "article_check", "rating_check"}   # the checks that retry and then park; the rest drop
 
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
     """The strip's steps for this setup: contacts and their check only while outreach is on, and with auto (the

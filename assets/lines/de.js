@@ -200,6 +200,7 @@ window.RESEARCHER_LINES = {
 "source_check": ["Jedes Zitat geprüft.", "Zeig mir die Quelle.", "Strg+F-Zeit."],
 "writer": ["Entwurf!", "Es war einmal ein Fakt…", "Wörter, angetreten!"],
 "article_check": ["Entwurf prüfen.", "Fakt oder Möglichkeit?", "Rotstift raus."],
+"article_rating": ["Von zehn...", "Würde ich weiterlesen?", "Zeit für Noten."],
 "publisher": ["Stoppt die Druckerpresse!", "Ab in den Druck!"],
 "1f916": ["Poste auf 1F916.", "Ein Post pro Tag!"],
 "github": ["Site wird gepusht.", "Im Grunde ein git push."],

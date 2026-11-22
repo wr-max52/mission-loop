@@ -118,8 +118,8 @@ def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypa
     assert steps(client.get("/").text) == [
         ("theorist", "agent"), ("theorist_check", "check"), ("finder", "agent"), ("finder_check", "check"),
         ("epic_review", "human"), ("sources", "agent"), ("brief", "agent"), ("source_check", "check"),
-        ("brief_review", "human"), ("writer", "agent"), ("article_check", "check"), ("article_review", "human"),
-        ("publisher", "agent")]
+        ("brief_review", "human"), ("writer", "agent"), ("article_check", "check"),
+        ("article_rating", "agent"), ("rating_check", "check"), ("article_review", "human"), ("publisher", "agent")]
     html = track(client.get("/").text)
     assert '<a class="human propose waiting" href="/#needs-you" data-step="epic_review"' in html
     assert "Failures are dropped." in html               # the desk's checks park nothing

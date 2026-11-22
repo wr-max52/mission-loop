@@ -253,7 +253,7 @@ def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeyp
     track = html.split('class="flow-track"')[1].split("</section>")[0]
     order = re.findall(r'data-step="([a-z0-9_]+)"', track)
     assert order == ["theorist", "theorist_check", "finder", "finder_check", "epic_review", "sources", "brief",
-                     "source_check", "brief_review", "writer", "article_check", "article_review",
+                     "source_check", "brief_review", "writer", "article_check", "article_rating", "rating_check", "article_review",
                      "publisher"]                                  # outreach and channels off
     assert '<span class="check" data-step="source_check"' in track
     assert '<a class="human review" href="/#needs-you" data-step="brief_review"' in track
@@ -273,7 +273,7 @@ def test_flow_strip_counts_what_waits_on_you_and_what_each_check_parked(client, 
     d = client.get("/api/flow").json()
     assert d["running"] is False and d["working"] == []
     assert d["waiting"] == {"epic_review": 0, "brief_review": 2, "article_review": 1}
-    assert d["parked"] == {"source_check": 1, "article_check": 0}
+    assert d["parked"] == {"source_check": 1, "article_check": 0, "rating_check": 0}
     assert d["states"]["r"] == "BRIEF_READY" and d["states"]["p"] == "PARKED"
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     activity.work_as("pi"); activity.begin("ok", "writer"); activity.work_as(activity.DESK)
