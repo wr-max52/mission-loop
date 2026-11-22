@@ -1,6 +1,9 @@
-import pytest
+import httpx, pytest
 import agents, orchestrator, store
-from agents import stubs
+from agents import f916, stubs
+
+def _no_network(request):
+    raise AssertionError(f"a test tried to reach 1F916: {request.method} {request.url}")
 
 @pytest.fixture(autouse=True)
 def fresh(tmp_path, monkeypatch):
@@ -8,6 +11,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(store, "DB", tmp_path / "data" / "loop.db")
     monkeypatch.setattr(orchestrator, "STOP_FLAG", tmp_path / "data" / "STOP")
+    monkeypatch.setattr(f916, "TRANSPORT", httpx.MockTransport(_no_network))
     store.init()
 
 @pytest.fixture

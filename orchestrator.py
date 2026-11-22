@@ -3,8 +3,9 @@ from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
 import store
+from agents import f916
 from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       slugify)
+                       ChannelPost, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -117,8 +118,9 @@ def step(m: Mission, now) -> str | None:
         activity.begin(m.slug, "publisher")
         location = agents.publish(m, _brief(m), _article(m), now)
         m.published_at = now
+        m.channels["site"] = ChannelPost(at=now, where=str(location))
         m.state = State.DONE
-        return f"published to {location}"
+        return f"published to {location}"   # other channels pick it up at the end of this pass
 
     return None
 
@@ -229,6 +231,60 @@ def find_new_missions(now) -> int:
     print(f"mission finder added {len(ideas)} mission(s)", flush=True)
     return len(ideas)
 
+# ---------- publishing channels beyond the local site ----------
+
+CHANNEL_NAMES = {"site": "Local site", "1f916": "1F916"}
+
+def channels(m: Mission) -> dict[str, ChannelPost]:
+    """Everywhere this mission was published. Missions published before channels were recorded
+    went to the local site only."""
+    found = dict(m.channels)
+    if m.state == State.DONE and m.published_at and "site" not in found:
+        found["site"] = ChannelPost(at=m.published_at, where=f"site/{m.slug}/index.html")
+    return found
+
+def f916_queue() -> list[Mission]:
+    """Published articles not yet on 1F916: newest first, and any the site refused after the rest."""
+    waiting = [m for m in store.all_missions() if m.state == State.DONE and "1f916" not in m.channels]
+    return sorted(waiting, key=lambda m: ("1f916" in m.channel_errors,
+                                          -(m.published_at.timestamp() if m.published_at else 0)))
+
+def post_to_1f916(now, max_tries: int = 3) -> int:
+    """1F916 allows one post a day. Post the newest waiting article if today's post is still free.
+    A refused article costs nothing, so the next one is tried. Returns 1 if something was posted."""
+    if not agents.f916_enabled() or STOP_FLAG.exists():
+        return 0
+    until = f916.spent_until()
+    if until and now < until:
+        return 0
+    for m in f916_queue()[:max_tries]:
+        try:
+            activity.begin(m.slug, "1f916")
+            where = agents.post_1f916(m, _brief(m), _article(m), now)
+        except f916.NoAllowance as e:
+            if e.daily:
+                f916.save_state({"spent_until": f916.next_utc_day(now).isoformat(), "note": str(e)})
+            print(f"1F916: no post allowance now ({e})", flush=True)
+            return 0
+        except f916.Refused as e:
+            m.channel_errors["1f916"] = str(e)
+            store.save_mission(m)
+            store.log_event(m.slug, now, m.state.value, m.state.value, f"1F916 refused the post: {e}")
+            continue
+        except Exception as e:             # bad key, network, site down: nothing is lost, try next pass
+            f916.save_state({"note": f"{type(e).__name__}: {e}"})
+            print(f"1F916 posting failed: {type(e).__name__}: {e}", flush=True)
+            return 0
+        finally:
+            activity.clear()
+        m.channels["1f916"] = ChannelPost(at=now, where=where)
+        m.channel_errors.pop("1f916", None)
+        store.save_mission(m)
+        store.log_event(m.slug, now, m.state.value, m.state.value, f"posted to 1F916: {where}")
+        f916.save_state({"spent_until": f916.next_utc_day(now).isoformat(), "note": f"posted {m.slug}"})
+        return 1
+    return 0
+
 def _run_missions(now_fn, max_ticks: int) -> int:
     total = 0
     for _ in range(max_ticks):
@@ -242,9 +298,10 @@ def _run_missions(now_fn, max_ticks: int) -> int:
 
 def run_until_idle(now_fn, max_ticks: int = 100) -> int:
     """One pass. Existing missions go first so the finder never delays work a human just approved;
-    whatever it finds is then researched in the same pass."""
+    whatever it finds is then researched in the same pass. Last, anything published (now or earlier)
+    goes out to 1F916 if today's post there is still free."""
     total = _run_missions(now_fn, max_ticks)
     found = find_new_missions(now_fn())
     if found:
         total += found + _run_missions(now_fn, max_ticks)
-    return total
+    return total + post_to_1f916(now_fn())

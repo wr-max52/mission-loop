@@ -14,6 +14,11 @@ class State(str, Enum):
     DONE = "DONE"
     PARKED = "PARKED"
 
+class ChannelPost(BaseModel):
+    """One place an article was published: when, and where to find it (a path or a URL)."""
+    at: datetime
+    where: str
+
 class Mission(BaseModel):
     slug: str
     topic: str
@@ -33,6 +38,8 @@ class Mission(BaseModel):
     unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
     unchecked_article: str = ""            # same for a failed article
     published_at: datetime | None = None
+    channels: dict[str, ChannelPost] = {}  # channel key ("site", "1f916") -> where it was published
+    channel_errors: dict[str, str] = {}    # channel key -> why its last try refused this article
 
 class MissionIdea(BaseModel):
     topic: str
