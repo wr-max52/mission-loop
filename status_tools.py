@@ -58,7 +58,7 @@ def _label(m) -> str:
     if m.state == State.BRIEF_READY and m.approved:
         return "brief approved, article next"
     if m.state == State.ARTICLE_READY and m.reviewed:
-        return "approved, publishing next pass"
+        return "approved, publishing next"
     return LABELS[m.state]
 
 def _needs_human(m) -> bool:
@@ -89,7 +89,7 @@ def loop_status() -> str:
         else:
             lines.append(f"Working now: {who}, looking for new missions, for {_ago(time.time() - e['since'])}")
     if not now and running:
-        lines.append("Working now: nothing; the loop is waiting for its next pass or for a human")
+        lines.append("Working now: nothing; the loop is waiting for a human or for its next check")
     counts: dict[str, int] = {}
     missions = store.all_missions()
     for m in missions:

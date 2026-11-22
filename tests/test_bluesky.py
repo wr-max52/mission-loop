@@ -95,13 +95,15 @@ def test_without_a_site_url_the_link_is_the_fresh_1f916_post(sky, monkeypatch):
     published("a", T0)
     assert sky.posts[0]["embed"]["external"]["uri"] == "https://1f916.ai/api/post/101"
 
-def test_about_one_post_a_pass_newest_first(sky):
+def test_one_post_per_gap_newest_first(sky):
     backlog("oldest", "middle", "newest")
     run_at(T0)
     assert [on_bluesky(s) is not None for s in ("newest", "middle", "oldest")] == [True, False, False]
     run_at(T0 + timedelta(minutes=5))                  # inside the gap: nothing, and no request made
     assert len(sky.posts) == 1
-    published("fresh", T0 + timedelta(minutes=15))     # a new article jumps the backlog
+    published("fresh", T0 + timedelta(minutes=8))      # a new article jumps the backlog
+    assert len(sky.posts) == 1                         # still inside the gap
+    run_at(T0 + timedelta(minutes=15))
     run_at(T0 + timedelta(minutes=30))
     run_at(T0 + timedelta(minutes=45))
     order = sorted(["newest", "middle", "oldest", "fresh"], key=lambda s: on_bluesky(s) or "~")

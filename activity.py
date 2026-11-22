@@ -22,7 +22,7 @@ AGENTS = {                                 # in pipeline order
     "article_check": "Article checker",
     "publisher": "Publisher",
     "1f916": "1F916 poster",               # posts published articles, one a day, newest first
-    "bluesky": "Bluesky poster",           # announces published articles, about one a pass, newest first
+    "bluesky": "Bluesky poster",           # announces published articles, at most one every 10 minutes, newest first
 }
 
 DESK = "desk"
