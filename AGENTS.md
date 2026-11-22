@@ -16,7 +16,7 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 311 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+- Tests: `pytest -q` (expects 312 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
   Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
   Bluesky servers and the site address are looked up in `data/settings.json` (the Settings page writes it), then
@@ -174,10 +174,11 @@ agent it checks (with a red count of missions parked there), and each human revi
 check and the next agent (with a count of missions waiting on you). The steps working right now are lit, one per
 busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
 s and relights the strip in place; the rest of the page refreshes by swapping in fresh HTML around the live strip,
-never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on in-progress cards
-and on the strip, never more than two on the page at once. Each character is in one worker's crew (`worker` in
-`ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and a card only gets
-visitors from the crew of the worker doing its next step (`data-worker`); on the Settings page each worker card
+never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on the cards of
+missions a model is working on right now (none while no model runs) and on the strip, never more than two on the
+page at once. Each character is in one worker's crew (`worker` in
+`ROSTER`: young ones the Research Assistant's, tenured ones the Principal Investigator's), and 80% of a card's
+visitors (`FAVOR`) come from the crew of the worker running it (`data-worker`), the rest from the other crew; on the Settings page each worker card
 has its whole crew standing about. A card's visitor keeps a timer: a random first wait, 15-30 s on stage, walks
 off, then 10-20 s before the next; the longest-waiting card goes next. Arrivals come one at a time, a random 4-15
 s apart (the strip's newcomer never waits, but pushes the next card arrival back). Each busy worker's lit step
@@ -188,7 +189,7 @@ ends, moves to another mission or passes to the other worker it says a closing l
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
 repeats soon. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
-a head or the office cat; naps are rare and mostly while the loop is off.
+a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
 
 | You want to | Command |

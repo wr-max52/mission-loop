@@ -92,7 +92,7 @@ def test_settings_forms_refuse_cross_site_posts(client):
 def test_animations_toggle_is_on_by_default_and_hides_the_researchers_when_off(client, monkeypatch):
     store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
     assert settings.animations() and 'name="animations" value="on" checked' in client.get("/settings").text
-    assert "researchers.js" in client.get("/").text and 'data-lab="idle"' in client.get("/").text
+    assert "researchers.js" in client.get("/").text
     r = client.post("/settings/animations", data={}, follow_redirects=False)   # unticked: the box sends nothing
     assert r.status_code == 303 and "animations_off" in r.headers["location"]
     assert not settings.animations() and json.loads(settings.SETTINGS_FILE.read_text()) == {"animations": "off"}

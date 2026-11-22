@@ -1,11 +1,12 @@
 /* Pixel researchers: a cast of small outlined researchers who drop in on the dashboard while missions
- * are in progress. Each in-progress card gets its own random schedule: the first visitor turns up after a
+ * are in progress. The card of each mission a model is working on right now gets its own random schedule: the first visitor turns up after a
  * random wait, walks in from a side, stays 15-30 seconds doing comic researcher things, walks off, and
  * after a random 10-20 second gap the next one comes. Never more than two are on the page at once, and
  * arrivals come one at a time, a random 4-15 seconds apart; stages that have waited longest go first.
  * Visitors are drawn from a shuffled roster, so every character gets a turn before anyone repeats. Every
  * character belongs to one of the two workers (the young ones to the Research Assistant, the tenured ones
- * to the Principal Investigator), and a stage tagged with data-worker only gets visitors from that crew.
+ * to the Principal Investigator), and a card tagged with data-worker mostly gets visitors from that crew
+ * (80% of them, FAVOR; now and then someone from the other crew drops by).
  * On the Settings page each worker's card has its whole crew standing about (a "crew" stage).
  *
  * The pipeline strip is a stage of its own that follows the work instead of a timer (FlowStage). Each
@@ -25,6 +26,7 @@ const GAP_MIN = 10, GAP_MAX = 20;            // seconds between visitors on one 
 const FIRST_MIN = 2, FIRST_MAX = 15;         // the first visitor's random wait, so stages never start in step
 const ENTRY_MIN = 4, ENTRY_MAX = 15;         // seconds between any two arrivals on the page, so they stagger
 const MAX_ON_STAGE = 2;                      // researchers on the whole page at once
+const FAVOR = 0.8;                           // share of a working stage's visitors from its own worker's crew
 const EDGE = 40;                             // how far off-stage they start and finish their walk
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const now = () => performance.timeOrigin / 1000 + performance.now() / 1000;
@@ -1674,13 +1676,6 @@ const MOODS = {
   // the mission an agent is working on right now
   busy: Object.assign({ read: 2, search: 3, notes: 2.2, notebook: 1.5, dig: 2, typing: 2, eureka: 1.2, confused: 1,
                         citation: 1.5, telescope: 1, papers: 1, stack: 1.2, coffee: 1.6, scroll: 1.2, idle: 0.6 }, LAB, LIFE),
-  // in progress, waiting for its turn in a running loop: more of the little things
-  waiting: Object.assign({ idle: 1.5, read: 1.5, coffee: 2.2, notes: 1.5, notebook: 1.5, telescope: 0.8, confused: 0.8,
-                           citation: 0.8, sleep: 0.35, stack: 0.8, typing: 1, search: 1, scroll: 0.8, dig: 0.5 },
-                         LAB, Object.fromEntries(Object.entries(LIFE).map(([k, v]) => [k, v * 2]))),
-  // the loop is off: a slow day at the lab, with the odd nap
-  idle: Object.assign({ idle: 2, sleep: 1, coffee: 2.5, read: 1.2, notebook: 1.2, notes: 1, confused: 0.4, telescope: 0.4,
-                        beaker: 0.4, chalkboard: 0.4, duck: 0.4 }, Object.fromEntries(Object.entries(LIFE).map(([k, v]) => [k, v * 2]))),
   // standing by their worker's card on the Settings page: mostly still, now and then a little bit of business
   crew: { idle: 6, read: 1.2, notes: 1, notebook: 0.8, coffee: 1.2, typing: 0.8, citation: 0.6, scroll: 0.6, confused: 0.4,
           eureka: 0.4, telescope: 0.4, sleep: 0.3, globe: 0.3, pizza: 0.3, bird: 0.25 },
@@ -1742,7 +1737,11 @@ function closer(c) {
 // ---------- who visits next: a shuffled roster, so everyone gets a turn ----------
 
 const BAG = "researcher:bag";
-function nextCharacter(busy, worker) {           // worker: only that crew; none: anyone
+function nextCharacter(busy, worker, favor = 1) {   // worker: that crew (share `favor`, else the other); none: anyone
+  if (worker && Math.random() >= favor) {        // now and then, a visitor from the other crew
+    const others = [...new Set(CAST.map(k => ROSTER[k].worker))].filter(w => w !== worker);
+    if (others.length) worker = pick(Math.random, others);
+  }
   const key = BAG + (worker ? ":" + worker : ""), crew = crewOf(worker);
   let bag = (memory.get(key) || []).filter(k => crew.includes(k));
   if (!bag.length) bag = shuffle(crew);
@@ -1792,7 +1791,7 @@ class Researcher {
     const after = this.act.name;
     if (after !== "walk" && after !== "stack" && this.rand() < (this.mood === "crew" ? 0.18 : 0.55)) return this.begin("walk");
     const table = Object.assign({}, MOODS[this.mood] || MOODS.busy);
-    for (const k in this.a.fav) if (k in table || !["idle", "crew"].includes(this.mood)) table[k] = (table[k] || 0.5) * this.a.fav[k];
+    for (const k in this.a.fav) if (k in table || this.mood !== "crew") table[k] = (table[k] || 0.5) * this.a.fav[k];
     delete table[after];
     this.begin(weighted(this.rand, table));
   }
@@ -1872,7 +1871,7 @@ class Stage {
     this.host.removeEventListener("mouseenter", this.poke);
     this.host = host; host.appendChild(this.canvas);
     host.addEventListener("mouseenter", this.poke);
-    if (this.kind === "card") {                  // the fresh copy may say a new mood, or a new worker's next step
+    if (this.kind === "card") {                  // the fresh copy may name a new worker running it
       this.mood = host.dataset.lab || "busy"; this.worker = host.dataset.worker || null;
       if (this.resident) this.resident.mood = this.mood;
     }
@@ -1916,7 +1915,7 @@ class Stage {
     const t = now();
     let rec = memory.get(this.key);
     if (rec && (!(rec.life <= LIFE_MAX) || !ROSTER[rec.kind])) rec = null;
-    if (rec && rec.kind && this.worker && ROSTER[rec.kind].worker !== this.worker) rec = null;   // the step changed hands
+    if (rec && rec.kind && this.worker && rec.worker !== this.worker) rec = null;   // the step changed hands
     const out = stages.filter(s => s !== this && s.resident).length;
     if (rec && t < rec.born + rec.life - 1 && out < MAX_ON_STAGE) this.spawn(rec, true);
     else if (rec && rec.next && t < rec.next) this.nextAt = rec.next;
@@ -1925,7 +1924,7 @@ class Stage {
   spawn(rec, resume) {
     if (!rec) {
       const busy = new Set(stages.filter(s => s !== this && s.resident).map(s => s.resident.a.kind));
-      rec = { kind: nextCharacter(busy, this.worker), seed: Math.floor(Math.random() * 2 ** 31), born: now(),
+      rec = { kind: nextCharacter(busy, this.worker, FAVOR), seed: Math.floor(Math.random() * 2 ** 31), born: now(), worker: this.worker,
               life: between(Math.random, LIFE_MIN, LIFE_MAX) };
       memory.set(this.key, rec);
     }

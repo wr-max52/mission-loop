@@ -67,6 +67,25 @@ def test_a_worker_that_is_off_hands_its_steps_to_the_other(monkeypatch):
     assert set(workers) == {"pi"} and max(at_once) == 1          # one task at a time
     assert store.get_mission("r").state == State.BRIEF_READY and store.get_mission("w").state == State.ARTICLE_READY
 
+def test_with_the_investigator_off_the_assistant_writes_with_the_small_model(monkeypatch):
+    settings.set_worker("pi", "big-test:30b", on=False)
+    assert settings.worker_for("pi") == "assistant" and settings.model_for("pi") == "small-test:1b"
+    researching(); writing()
+    steps = []                             # (step, worker, the model its LLM calls would use)
+    def gather(m, now=None):
+        steps.append(("gather", activity._worker(), llm.model_for("assistant"))); return stubs.gather(m, now)
+    def write_brief(m, evidence, now=None):
+        steps.append(("brief", activity._worker(), llm.model_for("pi"))); return stubs.write_brief(m, evidence, now)
+    def write(m, brief, records):
+        steps.append(("article", activity._worker(), llm.model_for("pi"))); return stubs.write(m, brief, records)
+    monkeypatch.setattr(agents, "gather", gather)
+    monkeypatch.setattr(agents, "write_brief", write_brief)
+    monkeypatch.setattr(agents, "write", write)
+    orchestrator.run_until_idle(lambda: T0)
+    assert sorted(s for s, _, _ in steps) == ["article", "brief", "gather"]
+    assert {(w, model) for _, w, model in steps} == {("assistant", "small-test:1b")}
+    assert store.get_mission("r").state == State.BRIEF_READY and store.get_mission("w").state == State.ARTICLE_READY
+
 def test_sources_survive_a_stop_and_the_brief_is_written_from_them(monkeypatch):
     researching()
     def gather(m, now=None):

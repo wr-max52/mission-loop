@@ -51,7 +51,7 @@ MESSAGES = {
     "site_url_cleared": "Site address cleared. The feeds use links relative to the feed file.",
     "bluesky_on": "Bluesky login checked and saved. Published articles are announced there from now on.",
     "bluesky_off": "Bluesky disconnected. Its saved login was deleted from this machine.",
-    "animations_on": "Animations on. Researchers will drop by in-progress missions.",
+    "animations_on": "Animations on. Researchers will drop by the missions a model is working on.",
     "animations_off": "Animations off. The Missions page stays still.",
     "ollama_saved": "LLM connection saved. Workers use the Ollama at that address from their next task.",
     "worker_saved": "Worker saved. It takes its next task with that model.",
@@ -839,7 +839,7 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
 <h2 class="group">Display</h2>
 <form method="post" action="/settings/animations" class="actions">
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.submit()">
-  Animations <span class="hint">little pixel researchers who drop by in-progress missions on the Missions page, and stand by their worker here</span></label>
+  Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
 <h2 class="group">Feed</h2>
@@ -976,14 +976,7 @@ def epic_list(missions: list[Mission]) -> str:
         for e in active)
     return f'<details><summary>Epics ({len(active)})</summary>{rows}</details>'
 
-def lab_mood(m: Mission, now: list[dict]) -> str:
-    """How the pixel researcher on an in-progress card behaves: busy while an agent works on this
-    mission, waiting while the loop runs other work, idle (mostly napping) while the loop is off."""
-    if working_on(m, now):
-        return "busy"
-    return "waiting" if loop_running() else "idle"
-
-def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: str = "") -> str:
+def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
     working = working_on(m, now)
@@ -991,10 +984,10 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     if m.state == State.DONE and m.published_at:
         sub = f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
-    stage = f' data-lab="{lab}"' if lab else ""
-    role = orchestrator.upcoming_role(m) if lab else None
-    if role:                               # visitors come from the crew of the worker that does its next step
-        stage += f' data-worker="{settings.worker_for(role)}"'
+    live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
+    stage = ""
+    if live:                               # researchers only visit while a model works on it, mostly its worker's crew
+        stage = ' data-lab="busy"' + (f' data-worker="{live["worker"]}"' if live["worker"] in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}{" · " + escape(sub) if sub else ""}</div></a>')
@@ -1021,7 +1014,7 @@ async def home(request: Request) -> HTMLResponse:
             if title == "Published":
                 body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
-            body.append("".join(card(m, now, epics, lab_mood(m, now) if lab else "") for m in ms))
+            body.append("".join(card(m, now, epics, lab) for m in ms))
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
