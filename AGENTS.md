@@ -15,6 +15,9 @@ announces it on Bluesky only once a login is saved (`data/bluesky.json`, from th
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
+- CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status join-1f916 check-bluesky epics epic rename-epic`
+- Tests: `pytest -q` (expects 252 passed; no Ollama or network needed; any request to 1F916, Bluesky or the
+  Wayback Machine fails the test, and `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
 - CLI: `python run.py <command>` — `ui init add inspire run loop stop approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
 - Tests: `pytest -q` (expects 240 passed; no Ollama or network needed; any request to 1F916 or Bluesky fails the test, and
   `BLUESKY_*` variables are cleared so a real `.env` never switches Bluesky on)
@@ -48,8 +51,15 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   A small model (`MISSION_LOOP_SEARCH_MODEL`, default `bonsai-2:4b`) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`), then the main model (`MISSION_LOOP_MODEL`) writes the
   brief from whatever was found. `page_tools.py` adds `find_in_page` (exact sentences from the text
-  the validator checks) and `page_links` (a page's links to other sites), and requests only public
-  addresses. `related.py` (code, no model) adds up to 3 published articles most like the mission by
+  the validator checks), `page_links` (a page's links to other sites) and `wayback_versions` (the Wayback
+  Machine's copies of a page: the ones that changed, spread over time, and the one nearest a date), and
+  requests only public addresses. `wayback.py` (code, no model) makes an archived copy work like a live page:
+  a snapshot address counts as its original site for domain counts and the block list, and is read as the
+  raw copy, without the archive's toolbar. When `find_in_page` or `page_links` can't read a live page, they
+  read its latest Wayback copy and say which address to cite; when a cited page can't be fetched, the
+  validator's note names its archived copy. The prompt sends the agent to the archive for sites that are
+  gone and to check whether a page changed what it says. Published pages label archived sources with
+  their date. `related.py` (code, no model) adds up to 3 published articles most like the mission by
   word overlap, any epic (its own epic ranks a little higher), with the possibilities they left open
   and the pages they cited. They are background only: the site never leaves this machine, so they
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run

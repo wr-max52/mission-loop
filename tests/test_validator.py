@@ -1,6 +1,7 @@
 import httpx
 import pytest
 from agents.researcher import _failed_source_ids
+import wayback
 from checks import validator
 from contracts import Mission, ResearchBrief, Source, POC, Claim
 
@@ -38,6 +39,7 @@ def brief(**changes) -> ResearchBrief:
 @pytest.fixture(autouse=True)
 def fake_web(monkeypatch):
     monkeypatch.setattr(validator, "fetch", lambda url: PAGES.get(url))
+    monkeypatch.setattr(wayback, "snapshot", lambda page, when="": None)
 
 def test_good_brief_passes():
     ok, notes = validator.validate(M, brief())
