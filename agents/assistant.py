@@ -25,7 +25,23 @@ from agents import llm, providers
 from agents.toolbox import Toolbox, server_status
 
 def default_model() -> str:
-    return settings.chat_model()
+    """The configured chat model; on a fresh clone with no model chosen anywhere yet, the first installed model that
+    can call tools (else a connected cloud provider's first), so the chat can help with setup before the workers
+    have models."""
+    return settings.chat_model() or _first_usable()
+
+def _first_usable() -> str:
+    try:
+        for m in sorted(_ollama().list().models, key=lambda m: m.model):
+            if _can_use_tools(m.model):
+                return m.model
+    except Exception:
+        pass
+    for pid in settings.cloud_providers():
+        names = providers.models(pid)[0]
+        if names:
+            return settings.model_ref(pid, names[0])
+    return ""
 
 def _ollama() -> ollama.Client:
     return ollama.Client(host=settings.ollama_host(), timeout=10)
@@ -59,6 +75,8 @@ epic. Approve, send back, publish, start and stop are buttons in the UI, not you
 Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know."""
 
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
+NO_MODEL = ("I need a model to answer. Open Ollama with a model installed (ollama.com/download), or add a cloud "
+            "provider's API key on the Settings page, then ask again.")
 
 def _can_use_tools(name: str) -> bool:
     if settings.split_model(name)[0] != settings.LOCAL:
@@ -141,6 +159,8 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
         return "Ask me what the loop is doing, or where a mission is."
     messages = [{"role": "system", "content": SYSTEM}, *_history(history), {"role": "user", "content": question}]
     model = model or default_model()
+    if not model:
+        return NO_MODEL
     factory = toolbox_factory or (lambda names: Toolbox(names, config_path=CONFIG))
     try:
         async with asyncio.timeout(TIME_LIMIT), factory(servers()) as tb:

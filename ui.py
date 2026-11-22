@@ -2632,7 +2632,7 @@ CHAT_JS = """<script>
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " Web search needs a Brave key (BRAVE_API_KEY in .env); it can still read pages you link.";
+    else if (data.web === false) hint.textContent += " Web search needs a Brave key (Settings → Web search); it can still read pages you link.";
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens

@@ -4,7 +4,10 @@ from pathlib import Path
 import httpx, pytest
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
+import ollama
+from types import SimpleNamespace as NS
 import agents, doctor, orchestrator, run as cli, settings, status_tools, store, ui
+from agents import assistant
 from agents import finder, llm, publisher, toolbox
 from contracts import Mission
 
@@ -235,3 +238,17 @@ def test_personalizing_the_publication(client):
     assert settings.publication_name() == "Mission Loop Agent Group"
     client.post("/settings/publication", data={"name": "", "tagline": "", "about": ""})
     assert settings.publication_name() == settings.PUBLICATION_DEFAULT and settings.saved().get("publication_name") is None
+
+# ---------- Researcher Chat on a fresh clone ----------
+
+def test_the_chat_answers_before_any_worker_has_a_model(no_models, monkeypatch):
+    class Fake:                                                     # stands in for ollama.Client
+        def __init__(self, host=None, timeout=None): pass
+        def list(self): return NS(models=[NS(model=n) for n in ("embed:latest", "chatty:4b")])
+        def show(self, n): return NS(capabilities=["tools"] if n == "chatty:4b" else ["embedding"])
+    monkeypatch.setattr(ollama, "Client", Fake)
+    assert assistant.default_model() == "chatty:4b"                 # was "": every question failed validation
+    class Down(Fake):
+        def list(self): raise ConnectionError("no ollama")
+    monkeypatch.setattr(ollama, "Client", Down)
+    assert assistant.default_model() == "" and assistant.chat("How do I set up?") == assistant.NO_MODEL
