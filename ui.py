@@ -225,7 +225,9 @@ main { max-width: 56rem; }
 body { font-family: -apple-system, system-ui, sans-serif; font-size: 16px; }
 nav.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
           border-bottom:1px solid var(--rule); padding-bottom:1rem; margin-bottom:1.5rem; }
-nav.top a.brand { font-weight:700; font-size:1.1rem; color:var(--fg); text-decoration:none; }
+nav.top a.brand { font:400 1.25rem "American Typewriter", "Courier Prime", "Courier New", Courier, monospace;
+                  letter-spacing:.04em; color:var(--fg); text-decoration:none;
+                  text-shadow:.5px .5px 0 currentColor, -.3px 0 .4px rgba(0,0,0,.25); }   /* old typewriter ink */
 nav.top .links { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
 nav.top .links a { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .8rem; border-radius:8px;
                    border:1px solid var(--muted); background:var(--quote); color:var(--fg);
@@ -508,7 +510,7 @@ async function refresh() {{
     html = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
-            f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
+            f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
