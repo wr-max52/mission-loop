@@ -1,16 +1,19 @@
 """Local MCP server that lets the chat assistant see what the loop is doing, without touching it.
 
-Every tool only reads: the database, data/activity.json, the agents' trails (trail.py) and the loop log.
-None of them changes a mission, takes the loop's lock or talks to a model, so asking never slows or
-redirects the work. Answers are short on purpose: the assistant has a small context.
+Every tool but one only reads: the database, data/activity.json, the agents' trails (trail.py), the channels'
+state files and the loop log. The exception is add_mission, which queues a new mission exactly like the UI's
+Add mission box (it still waits for human brief review) and never changes an existing one. No tool takes the
+loop's lock or talks to a model, so asking never slows or redirects the work. Answers are short on purpose:
+the assistant has a small context.
 The chat assistant starts this through the "loop" entry in mcp.json; any other MCP client can too.
 """
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, orchestrator, settings, store, trail
-from contracts import State, words
+import activity, agents, orchestrator, settings, store, trail
+from agents import bluesky, f916
+from contracts import Mission, State, epic_title, words
 
 LOG = Path("data/loop.log")
 MAX_LIST = 25
@@ -187,6 +190,60 @@ def search_missions(query: str) -> str:
         return f"No mission matches '{query}'."
     scored.sort(key=lambda x: -x[0])
     return "\n".join(f"- {m.slug} | {_label(m)} | {m.topic[:90]}" for _, m in scored[:8])
+
+@server.tool()
+def publication_status() -> str:
+    """What has been published and where: each channel (local site, 1F916, Bluesky) with whether it is on,
+    how many articles wait for it and when it may post next; articles approved to publish next pass; and the
+    latest published articles with the channels each reached and any refusal."""
+    missions = store.all_missions()
+    done = sorted((m for m in missions if m.state == State.DONE), key=lambda m: str(m.published_at or ""), reverse=True)
+    lines = [f"Published: {len(done)} article(s) on the local site (site/index.html, feeds site/feed.xml and site/feed.json)"]
+    url = settings.site_url()
+    lines.append(f"Site address: {url}" if url else "Site address: not set (Settings page), so links stay relative")
+    for c in (f916, bluesky):
+        if not c.enabled():
+            lines.append(f"{c.NAME}: off (not set up on the Settings page)")
+            continue
+        on = c in agents.CHANNELS
+        waiting = len(orchestrator.queue(c))
+        until = c.wait_until()
+        nxt = f", next post allowed in {_ago((until - datetime.now(timezone.utc)).total_seconds())}" if until and until > datetime.now(timezone.utc) else ""
+        lines.append(f"{c.NAME}: {'on' if on else 'set up but off in stub mode'}, {waiting} waiting{nxt}")
+    soon = [m for m in missions if m.state == State.ARTICLE_READY and m.reviewed]
+    if soon:
+        lines.append("Approved, publishing next pass: " + "; ".join(f"{m.topic[:60]} [{m.slug}]" for m in soon[:MAX_LIST]))
+    for m in done[:10]:
+        reached = ", ".join(orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)) or "nowhere"
+        refused = "".join(f"; {orchestrator.CHANNEL_NAMES.get(k, k)} refused: {v[:100]}" for k, v in m.channel_errors.items())
+        when = _since(m.published_at.isoformat()) if m.published_at else "?"
+        lines.append(f"- {m.topic[:80]} [{m.slug}], published {when}, on: {reached}{refused}")
+    return "\n".join(lines)
+
+@server.tool()
+def add_mission(topic: str, objective: str = "", epic: str = "") -> str:
+    """Queue a new research mission, like the UI's Add mission box. topic is the question or claim to look
+    into (one sentence); objective says what a good answer finds out; epic is an optional 1 to 4 word title
+    (an existing epic's title, or a new one). The mission waits in the queue and its brief still needs the
+    human's approval. Only call this when the human asks for a new mission."""
+    topic, objective = " ".join(topic.split())[:300], " ".join(objective.split())[:600]
+    if len(topic) < 10:
+        return "Give the mission a topic of at least a few words."
+    if epic.strip() and not epic_title(epic):
+        return "An epic title is 1 to 4 words."
+    missions = store.all_missions()
+    same = next((m for m in missions if m.topic.lower() == topic.lower()), None)
+    if same:
+        return f"That mission already exists: {same.slug} ({_label(same)})."
+    slug = orchestrator._new_slug(topic, {m.slug for m in missions})
+    store.save_mission(Mission(slug=slug, topic=topic, objective=objective,
+                               epic=store.create_epic(epic).slug if epic.strip() else ""))
+    store.log_event(slug, datetime.now(timezone.utc), "", State.QUEUED.value, "added by the chat assistant")
+    if orchestrator.loop_running():
+        orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        orchestrator.WAKE_FLAG.touch()
+    return f"Queued {slug}: {topic}. " + ("The loop will pick it up now." if orchestrator.loop_running()
+                                          else "The loop is off; it starts when the loop runs.")
 
 if __name__ == "__main__":
     server.run()

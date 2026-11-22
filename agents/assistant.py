@@ -1,10 +1,10 @@
 """Chat assistant: answers a human's questions about what the loop is doing. It is not one of the workers.
 
-Small on purpose: a one-paragraph prompt, a few read-only tools, a handful of tool calls, short tool results
+Small on purpose: a short prompt, a few tools (all read-only but add_mission), a handful of tool calls, short tool results
 and only the last couple of turns the page sends back. It keeps no memory and saves nothing.
 
 Every tool comes from MCP servers in mcp.json ("loop" = status_tools.py, plus "search" when a Brave key is set),
-so nothing here can change a mission. By default it runs on the Research Assistant's model with the loop's
+so nothing here can change an existing mission; add_mission only queues a new one. By default it runs on the Research Assistant's model with the loop's
 options (settings.chat_model; config, never a name in code), so Ollama uses the copy already loaded instead of
 reloading the model under a running agent. The human may pick another
 installed model; that one is loaded beside it.
@@ -32,11 +32,21 @@ MAX_TOOL_CHARS = 2500                      # the context stays small even if a t
 MAX_TURNS = 4                              # earlier messages the page may send back for follow-ups
 MAX_MESSAGE_CHARS = 600
 
-SYSTEM = """You are the research desk's assistant. The real agents (mission finder, researchers, writers,
-checkers, publisher) do the work; you only answer the human's questions about it. Use your tools to look
-before you answer: what is running, where a mission is, what its agent did last and why it may be slow.
-Your tools only read, so you cannot change, start or stop anything; say so if asked. Answer in a few
-plain sentences, use mission topics rather than slugs, and say when you don't know."""
+SYSTEM = """You are the research desk's assistant, in the Mission Loop app. You answer the human's questions
+about the loop and can queue new missions for it. How it works: a mission is a question or claim to research.
+It goes queued -> researching (the Research Assistant, a small model, searches and reads sources; the Principal
+Investigator, a big model, writes a brief; a validator checks it, 3 attempts) -> brief ready (the human approves
+or sends it back) -> writing (the PI writes the article; a check runs, 3 attempts) -> article ready (the human
+approves) -> published on the local site and its feeds, then posted to 1F916 (one a day) and Bluesky when they
+are set up. A mission that fails all attempts is parked; the human can requeue it or push its draft through.
+The mission finder adds up to 3 missions a pass from the human's inspiration line. Missions sit in epics,
+short themes. Claims are facts (what the record shows) or possibilities (labelled, not verified). The human
+works in the UI: approve, send back, publish, requeue and settings are buttons there, not your tools.
+Use your tools before you answer: loop_status, list_missions (open ones by default), mission_status,
+agent_steps, search_missions, publication_status. Call add_mission only when the human asks for a new
+mission; search first so you don't add a duplicate, then say its brief still needs their approval. You
+cannot approve, publish, change, start or stop anything; say so if asked. Answer in a few plain sentences,
+use mission topics rather than slugs, and say when you don't know."""
 
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
 
