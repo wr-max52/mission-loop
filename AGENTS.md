@@ -18,7 +18,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 437 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 444 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -140,7 +140,10 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   and the pages they cited. They are background only: the site never leaves this machine, so they
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
-- Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
+- Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`. Articles cite
+  sources by short id (`[s1]`). A source whose id isn't one (a model sometimes uses the URL) gets the next free
+  `s<n>` whenever a brief is read (`ResearchBrief._short_ids`, so saved briefs are fixed too), and the writer turns
+  a bracketed citation of a brief source's URL into its id (`contracts.cite_by_id`); any other URL still fails.
 - Every model call goes through `agents/llm.py`, which keeps it bounded (cloud models go on from there to
   `agents/providers.py`; the numbers below are Ollama's, see Model providers for theirs). Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final

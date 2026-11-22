@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class State(str, Enum):
     QUEUED = "QUEUED"
@@ -73,8 +73,10 @@ class Claim(BaseModel):
     source_ids: list[str]
     kind: Literal["fact", "possibility"] = "fact"   # possibilities are labeled, never presented as verified
 
+SOURCE_ID = re.compile(r"[A-Za-z0-9_.-]+")  # what an article can cite as [id]; a URL is not one
+
 class Source(BaseModel):
-    id: str
+    id: str                                # short label, e.g. "s1"; ResearchBrief replaces any other
     url: str
     title: str
     quote: str                             # exact sentence copied from the page
@@ -94,6 +96,27 @@ class ResearchBrief(BaseModel):
     sources: list[Source]
     pocs: list[POC] = []                   # validator requires 3+ only when outreach is on
     question_for_pocs: str = ""
+
+    @model_validator(mode="after")
+    def _short_ids(self):
+        """A model sometimes uses a source's URL as its id. An article can't cite that ([https://...] reads as
+        an outside link), so code gives such a source the next free "s<n>" and points its claims there; a
+        claim that cites a source by its URL is pointed at that source's id too. Runs on every load, so a
+        brief saved with URL ids is fixed when it is read back."""
+        taken = {s.id for s in self.sources}
+        renamed, n = {}, 0
+        for s in self.sources:
+            if SOURCE_ID.fullmatch(s.id):
+                continue
+            n += 1
+            while f"s{n}" in taken:
+                n += 1
+            renamed[s.id] = s.id = f"s{n}"
+            taken.add(s.id)
+        by_url = {_bare(s.url): s.id for s in self.sources}
+        for c in self.claims:
+            c.source_ids = [renamed.get(i) or (i if i in taken else by_url.get(_bare(i), i)) for i in c.source_ids]
+        return self
 
 class RejectedBrief(BaseModel):
     brief: ResearchBrief
@@ -122,6 +145,21 @@ Mission.model_rebuild()
 
 # Inline citation in article text: [s1] or [s1, s2]. Shared by the checker and the renderer.
 CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
+URL_CITATION = re.compile(r"\[\s*(https?://[^\s,\]]+(?:\s*,\s*(?:https?://)?[^\s,\]]+)*)\s*\](?!\()")
+
+def _bare(url: str) -> str:
+    return url.strip().rstrip("/")
+
+def cite_by_id(text: str, brief: "ResearchBrief") -> str:
+    """Rewrite [https://a, https://b] to [s1, s2] when every entry is a brief source's URL or id. Anything
+    else stays, so a link to a page outside the brief still fails the article check."""
+    ids = {s.id for s in brief.sources}
+    by_url = {_bare(s.url): s.id for s in brief.sources}
+    def swap(m: re.Match) -> str:
+        parts = [p.strip() for p in m.group(1).split(",")]
+        new = [p if p in ids else by_url.get(_bare(p)) for p in parts]
+        return f"[{', '.join(new)}]" if all(new) else m.group(0)
+    return URL_CITATION.sub(swap, text)
 
 # The required wording of a possibility. Shared by the checkers and the renderer.
 POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)

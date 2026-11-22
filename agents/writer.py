@@ -5,7 +5,7 @@ and checks/article_check.py enforces that in code.
 """
 import asyncio, json
 from pydantic import ValidationError
-from contracts import Mission, ResearchBrief, OutreachRecord, Article
+from contracts import Mission, ResearchBrief, OutreachRecord, Article, cite_by_id
 from agents import llm
 import stopping
 
@@ -66,6 +66,12 @@ def prompt(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> s
     data = brief.model_dump(exclude={"pocs", "question_for_pocs"})
     return SYSTEM.format(comments=_comments(records), notes=_notes(m), brief=json.dumps(data, indent=1))
 
+def _cite_by_id(article: Article, brief: ResearchBrief) -> Article:
+    """A citation that names a brief source by its URL points at a verified source: give it the source's id."""
+    for sec in article.sections:
+        sec.paragraphs = [cite_by_id(p, brief) for p in sec.paragraphs]
+    return article
+
 async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> Article:
     messages = [{"role": "system", "content": prompt(m, brief, records)},
                 {"role": "user", "content": "Write the article as JSON matching the schema."}]
@@ -81,9 +87,9 @@ async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRec
             if article is None:
                 raise WritingFailed(f"the writer got stuck: {e}")
             print(f"writer: {e}; the article check reads what it wrote before that", flush=True)
-            return article
+            return _cite_by_id(article, brief)
         try:
-            return Article.model_validate_json(msg.content)
+            return _cite_by_id(Article.model_validate_json(msg.content), brief)
         except ValidationError as e:
             if stopping.requested():       # no time for a repair round
                 raise stopping.Interrupted(stopping.salvage(msg.content, Article))
