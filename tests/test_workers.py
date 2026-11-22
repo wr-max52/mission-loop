@@ -67,6 +67,51 @@ def test_a_worker_that_is_off_hands_its_steps_to_the_other(monkeypatch):
     assert set(workers) == {"pi"} and max(at_once) == 1          # one task at a time
     assert store.get_mission("r").state == State.BRIEF_READY and store.get_mission("w").state == State.ARTICLE_READY
 
+def test_worker_counts_and_seats():
+    assert settings.worker_count("assistant") == 1 and settings.seats() == ["assistant", "pi"]
+    settings.set_worker_count("assistant", 3)
+    assert settings.saved() == {"assistant_count": 3}
+    assert settings.seats() == ["assistant", "assistant-2", "assistant-3", "pi"]
+    assert settings.seat_worker("assistant-3") == "assistant" and settings.seat_worker("desk") == "desk"
+    assert settings.seat_name("assistant-2") == "Research Assistant 2" and settings.seat_name("pi") == "Principal Investigator"
+    assert settings.seat_name("desk") == ""
+    settings.set_worker("assistant", "small-test:1b", on=False)
+    assert settings.seats() == ["pi"]                              # a worker that is off has no seats
+    settings.set_worker_count("assistant", 1)
+    assert "assistant_count" not in settings.saved()               # 1 is not stored
+    for bad in (0, settings.MAX_COUNT + 1):
+        with pytest.raises(ValueError):
+            settings.set_worker_count("pi", bad)
+    with pytest.raises(ValueError):
+        settings.set_worker_count("dean", 2)
+    settings.save(pi_count="lots")
+    assert settings.worker_count("pi") == 1                        # a hand-edited mess reads as 1
+
+def test_two_research_assistants_search_two_missions_at_once(monkeypatch):
+    """With the Research Assistant's count at 2, two searches wait for each other: only parallel seats pass."""
+    settings.set_worker_count("assistant", 2)
+    researching("r1"); researching("r2")
+    meet, seen = threading.Barrier(2, timeout=5), {}
+    def gather(m, now=None):
+        seen[m.slug] = activity._worker()
+        meet.wait()                        # raises BrokenBarrierError unless the other search runs meanwhile
+        return stubs.gather(m, now)
+    monkeypatch.setattr(agents, "gather", gather)
+    orchestrator.run_until_idle(lambda: T0)
+    assert sorted(seen.values()) == ["assistant", "assistant-2"]
+    assert store.get_mission("r1").state == store.get_mission("r2").state == State.BRIEF_READY
+
+def test_one_seat_per_worker_runs_one_task_at_a_time(monkeypatch):
+    settings.set_worker("pi", "big-test:30b", on=False)
+    researching("r1"); researching("r2")
+    at_once = []
+    def gather(m, now=None):
+        at_once.append(len(activity.working()))
+        return stubs.gather(m, now)
+    monkeypatch.setattr(agents, "gather", gather)
+    orchestrator.run_until_idle(lambda: T0)
+    assert at_once and max(at_once) == 1
+
 def test_with_the_investigator_off_the_assistant_writes_with_the_small_model(monkeypatch):
     settings.set_worker("pi", "big-test:30b", on=False)
     assert settings.worker_for("pi") == "assistant" and settings.model_for("pi") == "small-test:1b"
@@ -208,7 +253,8 @@ def test_settings_page_shows_both_workers_and_the_connection(client):
     assert "other-test:8b · 5.2 GB" in html and "big-test:30b · 18.0 GB · loaded" in html     # every pulled model
     assert "<strong>Source finder</strong>" in html and "<strong>Article writer</strong>" in html   # where each is used
     assert 'data-crew="assistant"' in html and 'data-crew="pi"' in html and "researchers.js" in html
-    assert "LLM connection" in html and ">21.0 GB<" in html
+    assert "Model providers" in html and ">21.0 GB<" in html
+    assert '<optgroup label="Ollama">' in html and "Add a provider" in html and 'value="anthropic"' in html
     assert 'name="ollama_host"' in html and 'name="f916_url"' in html and 'name="service"' in html
 
 def test_settings_page_asks_for_models_when_none_are_configured(client, monkeypatch):
@@ -241,11 +287,47 @@ def test_settings_page_saves_a_worker(client):
     assert client.post("/settings/worker", data={"worker": "pi", "model": "big-test:30b", "on": "on"},
                        headers=evil).status_code == 403
 
+def test_settings_page_sets_how_many_of_each_worker(client, monkeypatch):
+    html = client.get("/settings").text
+    assert html.count('class="stepper"') == 2 and 'id="assistant_count" name="count" value="1" min="1"' in html
+    assert 'aria-label="One fewer Research Assistant" disabled' in html          # can't go below 1
+    assert 'aria-label="One more Research Assistant">+' in html
+    r = client.post("/settings/worker", data={"worker": "assistant", "model": "small-test:1b", "on": "on", "count": "3"},
+                    follow_redirects=False)
+    assert "done=worker_count" in r.headers["location"] and settings.worker_count("assistant") == 3
+    html = client.get("/settings").text
+    assert 'id="assistant_count" name="count" value="3"' in html
+    assert "each on its own mission" in html
+    for bad in ("0", "99", "two"):
+        r = client.post("/settings/worker", data={"worker": "assistant", "model": "small-test:1b", "on": "on",
+                                                  "count": bad}, follow_redirects=False)
+        assert "error=worker_count" in r.headers["location"] and settings.worker_count("assistant") == 3
+    monkeypatch.delenv("MISSION_LOOP_MODEL")    # no model chosen yet: the count still saves
+    r = client.post("/settings/worker", data={"worker": "pi", "model": "", "on": "on", "count": "2"}, follow_redirects=False)
+    assert "done=worker_count" in r.headers["location"] and settings.worker_count("pi") == 2
+    top = settings.MAX_COUNT
+    client.post("/settings/worker", data={"worker": "pi", "model": "big-test:30b", "on": "on", "count": str(top)})
+    assert f'aria-label="One more Principal Investigator" disabled' in client.get("/settings").text
+
+def test_extra_seats_show_by_name(client, monkeypatch):
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    settings.set_worker_count("assistant", 2)
+    researching("r1"); researching("r2")
+    activity.work_as("assistant"); activity.begin("r1", "sources")
+    activity.work_as("assistant-2"); activity.begin("r2", "sources")
+    activity.work_as(activity.DESK)
+    html = client.get("/").text
+    assert '<span class="who">Research Assistant 2</span> <strong>Source finder</strong>' in html
+    assert '<a class="card active" href="/m/r2" data-lab="busy" data-worker="assistant">' in html   # its crew visits
+    assert 'data-step="sources" title="Source finder" aria-current="step" data-worker="assistant"' in html
+    html = client.get("/settings").text
+    assert "Now (Research Assistant 2): <strong>Source finder</strong>" in html
+
 def test_unchanged_model_saves_while_ollama_is_closed(client, monkeypatch):
     closed = {"host": "http://127.0.0.1:11434", "ok": False, "error": "ConnectError", "models": [], "loaded": {}}
     monkeypatch.setattr(llm, "connection", lambda timeout=2: closed)
     html = client.get("/settings").text
-    assert "small-test:1b (Ollama not reachable)" in html and "(ConnectError)" in html
+    assert "small-test:1b (Ollama not reachable)" in html and "(ConnectError)" in html and "Connect Ollama" in html
     r = client.post("/settings/worker", data={"worker": "assistant", "model": "small-test:1b"}, follow_redirects=False)
     assert "worker_off" in r.headers["location"]
     r = client.post("/settings/worker", data={"worker": "assistant", "model": "other-test:8b", "on": "on"}, follow_redirects=False)
@@ -304,3 +386,16 @@ def test_each_workers_trail_stays_with_its_own_mission():
     assert [s["text"] for s in trail.recent("r") if s["kind"] == "said"] == ["sources on r"]
     assert [s["text"] for s in trail.recent("w") if s["kind"] == "said"] == ["writer on w"]
     assert activity.working() == []
+
+def test_a_rushed_mission_is_searched_first():
+    """"Add and start loop" marks a mission rush: the Research Assistant takes it ahead of missions further along,
+    and the mark is dropped once it has had its turn."""
+    old = [Mission(slug=s, topic="t", state=State.RESEARCHING) for s in ("a", "b")]
+    new = Mission(slug="n", topic="t", state=State.RESEARCHING, rush=True)
+    turns: set = set()
+    assert orchestrator._pick("assistant", old + [new], turns) is new
+    assert orchestrator._pick("assistant", old, turns) is old[0]
+    researching("r"); store.save_mission(Mission(slug="n", topic="Rushed", rush=True))
+    orchestrator.work(lambda: T0, max_tasks=1)
+    first = store.get_mission("n")
+    assert first.gathered and not first.rush and not store.get_mission("r").gathered

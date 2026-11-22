@@ -10,35 +10,57 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 `site/` to a separate public GitHub Pages repo only once GitHub is connected and a repo linked (`data/github.json`,
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
-identity (no recovery), `data/github.json` holds a GitHub token and `data/bluesky.json` an app password: never
-commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
+`data/providers.json` the cloud model providers' API keys: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
-- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 425 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
-  custom webhook or the Wayback Machine fails the test, and `BLUESKY_*` and `MISSION_LOOP_GITHUB_*` variables are
-  cleared so a real `.env` never switches a channel on)
-- Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the 1F916 and
-  Bluesky servers, the GitHub server and OAuth app, and the site address are looked up in `data/settings.json` (the
+- CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+  combines approve-combine reject-combine link unlink`
+- Tests: `pytest -q` (expects 536 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+  custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
+  `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
+- Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
+  providers' keys, the 1F916 and Bluesky servers, the GitHub server and OAuth app, and the site address are looked
+  up in `data/settings.json` (the
   Settings page writes it), then `.env` (see `.env.example`), and only a service address falls back to that
   service's public default (Ollama's local `http://127.0.0.1:11434`, `https://1f916.ai`, `https://bsky.social`,
   `https://github.com`; the site address falls back to the linked GitHub Pages address). Models have no default: with none
   chosen the loop won't start and says so. All lookups live in `settings.py`; don't add a model name or server
-  address anywhere else. Tests set their own fake models in `tests/conftest.py`.
+  address anywhere else (`settings.PROVIDERS` holds each provider's public API address). Tests set their own fake
+  models in `tests/conftest.py`.
+- Model providers: a worker's model is a bare name for Ollama (`qwen3:30b`, as it always was) or
+  `<provider>/<model>` for a cloud provider (`anthropic/...`, `openai/...`, `xai/...`, `deepseek/...`, `gemini/...`,
+  `mistral/...`, `groq/...`, `openrouter/<lab>/<model>`, `together/...`, or `custom/...` for any OpenAI-compatible
+  server such as LM Studio or vLLM); `settings.split_model` tells them apart. A provider is on once it has a key:
+  pasted on the Settings page's Model providers section (checked by listing its models, then saved to
+  `data/providers.json`, mode 600, which wins over `.env`) or its variable in `.env` (`.env.example` lists them).
+  Each worker can use a different provider. `agents/providers.py` (only `llm.py` calls it) speaks the two wire
+  shapes that cover them all, Anthropic's Messages API and OpenAI's chat completions, over httpx (`TRANSPORT` for
+  tests), and turns the loop's Ollama-shaped messages into theirs and the reply back into an `ollama.Message`, so no
+  agent knows which provider answered: tool calls get ids, every call gets a result, thinking is never sent back,
+  structured replies use the provider's JSON schema mode (one retry in plain JSON mode with the schema in words if
+  it refuses the schema; DeepSeek always) and are streamed, so a stop keeps what was written. Cloud calls get
+  `llm.CLOUD_CONTEXT` (64k) of prompt room and `CLOUD_REPLY_TOKENS` (16k, since reasoning models think inside it)
+  instead of Ollama's 32k and 8k/2k; the time limit, Overrun and Cut work the same. `llm.ready` asks Ollama only
+  when a working model is on it, and checks a cloud provider by listing its models, so a cloud-only machine needs
+  no Ollama. "Connect Ollama" on the Settings page is the one-click start for a fresh clone: it checks Ollama
+  answers and gives each worker without a model one of the installed ones (biggest to the PI, smallest to the
+  Research Assistant; never overwrites a choice). Researcher Chat's picker lists cloud models too.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
 ## Pipeline (v1)
 
 ```
-(Theorist: evolves the inspiration line, may propose epics and 1 mission; then the mission finder)
+(Theorist: evolves the inspiration line, may propose epics, 1 mission and 1 combine, links missions; then the finder)
 QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
           (validator,     (human:        (skipped while       (article     (human:
            3 attempts)     approve)       outreach is off)     check, 3     review)
-                                                               attempts)
+                                                                                                                              attempts)
+QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mission; out of the flow)
 ```
 
 - Order of work (`orchestrator.work`): there are no fixed passes. The loop works until nothing is left it
@@ -48,7 +70,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
      and whenever a sweep publishes something, the channels post.
   2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round
      (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
-     mid-task is next in line. A failed attempt shows as before and the mission waits until the others with
+     mid-task is next in line. A mission added with "Add and start loop" (`Mission.rush`) goes ahead of all of
+     them for the Research Assistant, once; the flag is cleared when it is picked. A failed attempt shows as before and the mission waits until the others with
      work for that worker have had a turn; then a new round starts from the farthest along.
   When the Theorist is due, it is the Principal Investigator's first task of the run, and the finder waits for
   it. When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
@@ -57,21 +80,48 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   `run.py loop` sends its notifications after every model task.
 - Theorist: `agents/theorist.py`, the mastermind at the very start of the flow. One structured call on the
   Principal Investigator's model, no tools: it reads every epic with its latest missions, the missions in no epic,
-  the latest published articles with the possibilities they left open, and how the line got here
-  (`data/inspiration_log.jsonl`, every change with who made it and why). It looks for patterns inside an epic and
-  themes emerging across epics, and replies with those patterns, the line evolved, why, up to 2 new epics and at
-  most 1 new mission. Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
+  the latest published articles with the possibilities they left open, the links and combines so far (and the ones
+  a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
+  why). It looks for patterns inside an epic and themes emerging across epics, and replies with those patterns, the
+  line evolved, why, up to 2 new epics, at most 1 new mission, at most 1 combine and up to 3 links (see Connecting
+  dots below). Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
   ending in "?", at most 500 characters) and must keep at least half of the current line's meaningful words, so
   it evolves instead of being rewritten (one repair round, else the line stays); a new epic needs 2+ missions
-  (counting its new mission) and a name no epic has; the new mission must not repeat a topic. The orchestrator
+  (counting its new mission) and a name no epic has; the new mission must not repeat a topic; a combine and a link
+  follow the rules below (`theorist.settle_combine`, `settle_links`). The orchestrator
   applies it on the main thread between tasks (`orchestrator.apply_theory`), so no worker saves over it: a human
   edit to the line while it was thinking wins, its epics are *proposed* like the finder's (each mission moved
   keeps its old epic in `Mission.epic_fallback`; missions a worker is busy with stay put), and its mission is
-  queued like a found one (it still needs brief review). It runs when it has a line and missions, the desk changed
-  since its last turn (`desk_fingerprint`: missions, their epics, which are published, the epics) and 6 hours
+  queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
+  away. It runs when it has a line and missions, the desk changed
+  since its last turn (`desk_fingerprint`: missions, their epics, which are published or combined, the epics, links and combines) and 6 hours
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Run Theorist button
   or `python run.py theorize`). Its last turn is in `data/theory.json`, shown under the inspiration box and by
   the chat assistant's `theorist_notes`. A failure is noted there, waits out the gap, and never stops the loop.
+- Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
+  so a worker saving the mission it is busy with can't save over one.
+  - Links (`contracts.Link`, one row per pair, `a < b`): two missions kept separate but connected, with why: two open
+    missions, or an open mission and a published article (`contracts.is_open`: not DONE, not COMBINED). Never two
+    published ones, a mission and itself, a pair already linked, or one combined away. They are drawn right away
+    (`orchestrator.link`; they change no mission, only what research sees), at most 3 a turn. A human can link by
+    hand (a mission page's Connections, `run.py link`) or unlink (`orchestrator.unlink`, `run.py unlink`); an unlinked
+    pair stays as `removed`, so the Theorist never draws it again. Research gets each linked mission's topic and
+    brief so far, or a linked article's dek, open possibilities and cited pages, with why (`related.connections_block`,
+    before the similar published articles, which then leave out the linked ones). Once both are published, each
+    article's page lists the other under "Connected articles" (`publisher.connected`); publishing one redraws the
+    other, and unlinking redraws both.
+  - Combines (`contracts.Combine`): 2 to 4 missions not yet being written (`contracts.COMBINABLE`: queued,
+    researching, brief ready, parked) that are really one question, folded into one bigger mission with a topic,
+    an objective and an epic (one of its new epics, an active epic, else the one its members share). At most one a
+    turn, its topic new to the desk apart from its members, no member in another proposed combine, and never a set a
+    human has seen. It is *proposed*: it waits under Needs you on the home page (the strip counts it at the epic
+    review) or `run.py combines`, and auto mode approves it like an epic, waiting while a worker is busy with a member.
+    `orchestrator.approve_combine` queues the bigger mission (`Mission.combines`; its brief still needs review), sets
+    each member to `State.COMBINED` with `combined_into`, and passes the members' links on. Members that reached
+    writing meanwhile carry on; with fewer than 2 left the proposal is dropped. Rejecting keeps it as `rejected`, so it
+    is never proposed again. Research on the bigger mission gets each member's topic, objective and brief so far (or
+    its last failed brief). A COMBINED mission is out of the flow (no role, not in progress, left out of the
+    Theorist's desk) and its page links to the mission that took it over.
 - Mission finder: `agents/finder.py`, once each time the loop runs out of model work for existing missions. It works from the
   human's inspiration line (`data/inspiration.txt`; no line means it is off). The small model runs at most
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
@@ -93,13 +143,35 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   two threads (`orchestrator.work`): each takes the next task for its role (`orchestrator.role`), so one
   mission's search runs while another's article is written; steps with no model run between tasks on the
   main thread. A worker switched off hands its role to the other (`settings.worker_for`), which then works one
-  task at a time; one always stays on. Model choices come from the LLM connection (`llm.connection`: the Ollama at
-  `settings.ollama_host()`, which every Ollama call uses; set it on the Settings page or with `OLLAMA_HOST`). `data/activity.json` holds one entry per worker.
+  task at a time; one always stays on. Each worker also has a count (1 to `settings.MAX_COUNT`, 8; the − / + stepper
+  or a typed number on its card, saved as `<worker>_count` only above 1): that many copies, seats, run its role at
+  once, each on its own mission and all on its one model (`settings.seats()`: `assistant`, `assistant-2`, ...,
+  `pi`; `seat_worker` and `seat_name` map back). The loop reads the seats every sweep, so a new count applies at its
+  next look for work; every copy shares its worker's rounds in `_pick`, and the Theorist and finder still run once.
+  Ollama runs as many requests at once as its `OLLAMA_NUM_PARALLEL` allows and queues the rest. Model choices come from the model providers (`llm.catalog`: the Ollama at
+  `settings.ollama_host()`, which every Ollama call uses, set on the Settings page or with `OLLAMA_HOST`, then each
+  connected cloud provider's models). A cloud provider runs as many requests at once as your account's rate limit allows. `data/activity.json` holds one entry per seat; the UI
+  names an extra seat "Research Assistant 2" and gives it its worker's crew of researchers.
 - Research: `agents/researcher.py` (Ollama + MCP search/fetch), checked by `checks/validator.py`, in two
   steps that can be done at different times. `gather` (Research Assistant) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`) and saves the transcript as the mission's `evidence` artifact
   (`Mission.gathered`); a research attempt counts from here. `write_brief` (Principal Investigator) writes the
-  brief from it, then the evidence is dropped. A stop during the search keeps the evidence. `page_tools.py` adds `find_in_page` (exact sentences from the text
+  brief from it, then the evidence is dropped. A stop during the search pauses it (see Stopping and progress). The search loop's
+  `Guard` answers calls that can't help without running them, saying what to do instead: the call just made, a
+  search already run, a blocked site, a site that refused us earlier in the run; and a failed fetch says what it
+  means (a 401/403 site is unreadable for the rest of the run; try its Wayback copy or another site). After
+  `MAX_REFUSED` (3) refused calls in a row the search ends with what it found. In the last `LOW_BUDGET` (10)
+  calls or third of the time, each result says what is left (the brief writer doesn't see that note).
+  The brief is written in two steps, so no reply is long and the first is kept: step 1 picks the thesis and
+  sources (`SourcePick`), and code checks each quote against its page right away (`validator.source_problem`;
+  a page that won't load is checked against its Wayback copy, which is then cited). Failed sources go back with
+  what the check found (the closest real sentence, an archived copy) for up to 2 rounds of fixes (`SourceFix`);
+  the ones still failing are dropped, and fewer than 3 supporting websites left fails the attempt with its draft
+  and notes (`BriefFailed`). The passed sources are saved on the mission (`Mission.brief_sources`) until the
+  attempt ends (the raw pick, `Mission.brief_pick`, is saved before its checks). Step 2 writes the claims and counterpoint (`ClaimSet`) citing only
+  those sources; code fixes what it safely can (repeats dropped, a claim worded as a possibility labeled one),
+  feeds back the rest with the claim numbers (`validator.claim_problems`, each problem once) for up to 2 rounds,
+  then drops claims that still break a rule. `validate` is still the gate on the whole brief. `page_tools.py` adds `find_in_page` (exact sentences from the text
   the validator checks), `page_links` (a page's links to other sites) and `wayback_versions` (the Wayback
   Machine's copies of a page: the ones that changed, spread over time, and the one nearest a date), and
   requests only public addresses. `wayback.py` (code, no model) makes an archived copy work like a live page:
@@ -113,8 +185,23 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   and the pages they cited. They are background only: the site never leaves this machine, so they
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
-- Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`.
-- Every model call goes through `agents/llm.py`, which keeps it bounded. Before the call, tool results
+- Writing: `agents/writer.py`, checked by `checks/article_check.py`, in steps: a plan (`ArticlePlan`: title,
+  dek, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section on its own,
+  seeing the plan and the sections before it. Code checks each piece as soon as it is written
+  (`article_check.plan_problems`, `section_problems`: citations, unknown ids, links, quotes not in a source
+  quote, with the closest real one shown, possibilities it must carry, the counterpoint's citation) and sends back
+  only that piece's problems: one round for the plan (then code places unplaced possibilities and adds a missing
+  counterpoint section), up to 2 for a section (then the version with the fewest problems is kept). The plan and
+  every finished section are saved on the mission (`Mission.article_draft`): a stop or crash resumes after the
+  last saved section, and after a failed article check only the sections its notes name are rewritten (all of
+  them for a problem not tied to one section), each shown its last version and its problems. A passed article,
+  a human's send-back and a push-through clear the draft. Articles cite sources by short id (`[s1]`).
+  A source whose id isn't one (a model sometimes uses the URL) gets the next free `s<n>` whenever a brief
+  or source pick is read (`ResearchBrief._short_ids`, `SourcePick._short_ids`, so saved briefs are fixed
+  too), and each written section has a bracketed citation of a brief source's URL turned into its id
+  (`contracts.cite_by_id`) before it is checked; any other URL still fails.
+- Every model call goes through `agents/llm.py`, which keeps it bounded (cloud models go on from there to
+  `agents/providers.py`; the numbers below are Ollama's, see Model providers for theirs). Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
   request stay whole), because Ollama otherwise drops the start of the prompt or, on the MLX runner,
   lets the model run on forever. The search loop cuts deeper (`llm.compact`, to 70% of the room) and keeps
@@ -122,9 +209,10 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   ~25k tokens every turn; results the model hasn't read yet stay whole. The brief writer gets the transcript
   without the small model's thinking, failed tool calls cut to one line and repeated results dropped. Replies are capped at `REPLY_TOKENS` (8192; a brief is about 4k) or
   `TURN_TOKENS` (2048) for tool turns, and at `REPLY_TIME_LIMIT` (10 minutes; a brief takes about 2).
-  A reply that hits either limit raises `llm.Overrun`: a stuck search turn ends the search, and a stuck
-  brief, article or finder reply keeps whatever valid JSON it wrote before (checked as usual), else the
-  attempt fails. A writing retry after a failed article check sees its failed draft and revises it.
+  A reply that hits either limit raises `llm.Overrun`, and so does Ollama giving up on a model that keeps
+  repeating tokens ("token repeat limit reached"): a stuck search turn ends the search, and a stuck structured
+  reply keeps whatever valid JSON it wrote before (checked as usual), else the attempt fails. `llm.ask` is the
+  shared structured call: one repair round for malformed JSON, the Overrun salvage, and stop handling.
 - Publishing has two parts: the local site, the foundation every article is written to first, and channels,
   everywhere else it goes, each posting from the local site's feed. Where each article went is recorded per
   mission in `Mission.channels` (key -> when and where):
@@ -188,17 +276,13 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     Bluesky holds an entry until GitHub has it. The sign-in uses mission-loop's OAuth app
     (`settings.GITHUB_CLIENT_ID`; a client ID is public, there is no secret); a copy without one asks for one on
     the Settings page (`MISSION_LOOP_GITHUB_CLIENT_ID` in `.env` also works).
-  - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky as a thread of 3 posts (`THREAD`), each at
-    most 300 characters, taken word for word from what the loop already has (no model): the title, the approved
-    brief's first possibility (its "based on ..." left to the article) and its most concrete fact (most numbers and
-    quoted words); missing ones fall back to the thesis, then the dek. Cuts end on a sentence, else a clause. A
-    possibility keeps "It is possible that" and gets the "Possibility, not verified" label, and every post of a
-    pushed-through article starts with "[Failed automated checks]". Every post ends with "Full article: site · 1F916",
-    whose words link (facets) to the article on the site when a site address is set (Settings page or
-    `MISSION_LOOP_SITE_URL`, else the linked GitHub Pages address) and to its 1F916 post (1F916 comes
-    first in `CHANNELS`, so a fresh one counts), whichever exist. The first post also gets a link card (the site, else
-    1F916). Once the first post is up the article counts as posted: a failed reply is noted in the state file, never
-    retried, so a thread is never posted twice. With GitHub Pages on, an entry waits until it is on the site.
+  - `bluesky`: `agents/bluesky.py` announces the feed entry on Bluesky as one post (never a thread of replies), at
+    most 300 characters and with no model or labels (the article page carries "Possibility, not verified" and a
+    failed check): the title, cut on a sentence if ever too long, then "Full article: site · 1F916", whose words link
+    (facets) to the article on the site when a site address is set (Settings page or `MISSION_LOOP_SITE_URL`, else the
+    linked GitHub Pages address) and to its 1F916 post (1F916 comes first in `CHANNELS`, so a fresh one counts),
+    whichever exist. The post gets a link card with the title and dek (the site, else 1F916). With GitHub Pages on,
+    an entry waits until it is on the site.
     On only with a handle and app password (never the account password): the
     Settings page checks them with Bluesky and saves them to `data/bluesky.json` (mode 600, wins over `.env`'s
     `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
@@ -207,9 +291,9 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
     holds that wait and the last failure, which the UI and `status` show.
 - Auto mode: the switch at the top of every UI page (or `python run.py auto on|off`; `settings.auto_mode`, saved in
   `data/settings.json` only while on) approves everything except publishing. `orchestrator.auto_approve` approves
-  every brief waiting for review and every proposed epic (the Theorist's and the finder's), logged "by auto mode";
-  the loop runs it at the top of every sweep, so a new brief moves on within seconds, and an epic with a mission a
-  worker is busy with waits for a later sweep. Turning it on approves what already waits right away, and a brief
+  every brief waiting for review, every proposed epic (the Theorist's and the finder's) and every proposed combine,
+  logged "by auto mode"; the loop runs it at the top of every sweep, so a new brief moves on within seconds, and an
+  epic or combine with a mission a worker is busy with waits for a later sweep. Turning it on approves what already waits right away, and a brief
   pushed through while it is on is approved too. Articles are never touched: publishing always waits for
   `review`. No "brief ready" notification is sent while it is on. The flow chart draws the two reviews it takes over
   as green "Auto-approve epics" and "Auto-approve brief" steps; every code check and the article review stay as they are.
@@ -238,7 +322,11 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   web: the chat bubble at the bottom right of every UI page opens it in a panel over the left third, or
   `python run.py ask "..." [--model]`. It needs Ollama but not the loop, so it works with the loop stopped. The panel
   has a model picker (installed Ollama models that can call tools; the default is shared with the loop, any other is
-  loaded beside it), and keeps the conversation in that browser tab only, so the page's refreshes don't wipe it. With
+  loaded beside it), and keeps the conversation, the unsent draft and a question still being answered in that
+  browser tab only (sessionStorage), so refreshes, moving between pages and closing the panel lose nothing; Clear starts
+  over and Copy puts the conversation on the clipboard as text. A question carries an id, and the UI holds the last 20
+  answers in memory (`ui.CHAT_JOBS`, never on disk), so a page that navigates mid-answer hands it to the next page
+  (`/chat/answer`). With
   animations on, a pixel researcher for the picked model walks in at the top of the panel and says which model it
   is (`Guide` in `assets/researchers.js`, sent by the chat's `chatguide` event; the script loads the first time the
   panel opens): a worker's own model brings someone from that worker's crew, any other model the tenured crew from
@@ -247,8 +335,8 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   short prompt that explains the app, at most 8 tool calls in 3 minutes, tool results cut to 2,500 characters (web
   pages and searches 4,000), only the last 4 messages the page sends back, no memory and nothing saved. Its tools
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
-  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`,
-  `theorist_notes`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
+  `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`; `mission_status` names a mission's links and
+  combines, `theorist_notes` the Theorist's last combine and links), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
   panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
   `add_mission` and `set_mission_epic` only read the database, `data/activity.json`, the channels' state files, the
@@ -259,6 +347,25 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
   then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
   reloading it.
+- Stopping and progress (`stopping.py`, `checkpoint.py`): the database otherwise changes only when a task ends,
+  so long tasks save each finished piece the moment it is done through `checkpoint.save`, and the orchestrator
+  writes it (`orchestrator.save_progress`, set up per worker task in `_as_worker`). A checkpoint writes only the
+  progress fields (`PROGRESS`: `brief_pick`, `brief_sources`, `article_draft`) onto the stored mission, plus any
+  artifact given, so it never undoes a human's change made mid-task; everything else is saved when the task
+  ends, as before. A stop or a killed loop loses at most the piece in flight:
+  - Search: the transcript is saved after every answered turn (artifact `evidence`, `finished=False`, with its
+    `attempt` and `seconds`). A stop pauses the search (`Mission.search_paused`) instead of handing a half
+    search to the brief writer; the next start carries it on (`gather(m, now, resume)`), as the same attempt,
+    with the tool calls and time it has left. A transcript a killed loop left behind carries on the same way; a
+    finished one is used as it is; a crashed search's is deleted, so the retry starts afresh.
+  - Brief: the source pick is saved as soon as the model writes it, checks stop between source checks (each can
+    take seconds), and a resumed run checks the saved pick again instead of asking the model. Once step 1 is
+    checked and saved, a stop ends the task before step 2 starts.
+  - Article: the plan and each finished section are saved as they are done, and a stop never starts a new
+    section. After a failed check, a section already rewritten before a stop isn't rewritten again.
+  Pieces are short, so whatever is in flight when stop is pressed usually finishes inside the grace
+  (`TURN_GRACE` 30 s for a tool turn, `GRACE` 120 s for a reply). The UI's mission cards say how far saved work
+  got ("Carrying on the paused search.", "1 of 3 sections written.").
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -268,7 +375,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
 The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to wake the loop. The top bar of every page has the Auto switch and, beside
-it, the loop's play/pause button with its state (`ui.loop_button`): play starts the loop, which runs in the
+it, the loop's play/pause button with its state (`ui.loop_button`; green and pulsing while the loop is off): play starts the loop, which runs in the
 background, logs to `data/loop.log` and rests `settings.loop_every` minutes when idle (the Loop field on the
 Settings page, default 5); pause asks it to stop after the agent at work saves (disabled while it stops). "Check for
 work now" stays in the Missions page's loop panel while the loop runs.
@@ -278,11 +385,13 @@ there is one card (`ui.queue_card`): how many articles are queued and for which 
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the LLM connection, the loop's rest between
+order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) has the workers, the model providers, the loop's rest between
 looks for work, Display (animations) and Publishing: the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
-agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration, Epics and New mission; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
+agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") (grey) that opens a three-step wizard in a dialog (topic, objective, then epic and short name; green), which posts to
+`/missions` with Add mission, or Add and start loop (`go=start`): the mission is marked `rush`, so the Research Assistant
+takes it next, and the loop is started if it is off ("Add and research next" while it runs); the page's refresh holds off while it is open; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
 unlit while the loop is off, as a snake (`flowchart.track`, `flowchart.lanes`, which `ui.flow_strip` and the About page share): the steps in runtime order are cut into
 lanes at each human review. Lane 0 runs left to right from the top left (the Theorist) to the first review, a
 square end on the right; lane 1 comes back right to left one level lower to the next review on the left; and so on,
@@ -294,7 +403,8 @@ and each review shows how many missions wait on you. Researchers on the strip st
 titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
 the 2+ missions rule for an epic), which drop what fails and park nothing; the contact check, with Contacts, only
 while outreach is on; the source check and the article check. So is every human review: the epics both the Theorist
-and the finder propose (after the finder's check), the brief and the article. In auto mode exactly two of them,
+and the finder propose (after the finder's check; it also counts the Theorist's proposed combines), the brief and
+the article. In auto mode exactly two of them,
 the epic and brief reviews (`flowchart.AUTO_STEPS`), are drawn as automatic instead ("Auto-approve epics", "Auto-approve
 brief": green, a bolt, no count); every check and the article review stay as they are. The strip's `data-shape`
 marks the automatic ones, so an open page redraws the strip when the switch flips. The steps working right now are lit, one per
@@ -335,11 +445,13 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
 | Approve a proposed epic | the "New epic proposed" panel on the UI home page |
+| Approve or reject a proposed combine | its card under Needs you on the UI home page, or `python run.py combines`, then `approve-combine <slug>` / `reject-combine <slug>` |
+| Link two missions, or remove a link | Connections on a mission's page, or `python run.py link <a> <b> --why "..."` / `unlink <a> <b>` |
 | Set the mission finder's inspiration | the box on the UI home page, or `python run.py inspire "<line>"` (`""` turns it and the Theorist off) |
 | Have the Theorist look across the desk now | Run Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
-| Stop | `python run.py stop` (finishes the current task first) |
+| Stop | `python run.py stop` (the piece in flight finishes or is cut at the grace; everything finished is already saved) |
 | Read a brief / article | `python run.py show <slug>`; the article preview is `missions/<slug>/preview.html` |
 | Approve a brief | `python run.py approve <slug>` |
 | Approve every brief and new epic automatically (never publishing) | the Auto switch at the top of the UI, or `python run.py auto on` (`off` to stop) |
@@ -355,8 +467,10 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Put the site online (GitHub Pages) | Connect GitHub on the Settings page, then create or paste the site's repo |
 | Turn on 1F916 posting | Join on the Settings page, or `python run.py join-1f916 <handle>` once (saves `data/1f916.json`); `status` and the UI show the queue |
 | Ask what is going on, or look something up | Researcher Chat, the bubble at the bottom right of the UI, or `python run.py ask "where is the grid mission at?"` |
-| Pick each worker's model, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
-| Point at another Ollama | the LLM connection address on the Settings page, or `OLLAMA_HOST` in `.env` |
+| Pick each worker's model, how many of it run at once, or switch one off | the Workers cards on the Settings page (saved in `data/settings.json`) |
+| Point at another Ollama | the Ollama address under Model providers on the Settings page, or `OLLAMA_HOST` in `.env` |
+| Start on a fresh clone with Ollama | Settings → Model providers → Connect Ollama (fills in each worker's model), then play |
+| Use Claude, GPT, Grok, DeepSeek, Gemini, ... | Settings → Model providers → Add a provider → paste its API key, then pick its models under Workers (or `ANTHROPIC_API_KEY` etc. in `.env` and `MISSION_LOOP_MODEL=anthropic/<model>`) |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

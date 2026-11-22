@@ -25,6 +25,7 @@ def keys() -> set[str]:
     out |= {s for steps in ui.ROLE_STEPS.values() for s in steps} | set(ui.ASK_ACTION.values())
     out |= {title for _k, _i, title in ui.STAGES} | set(ui.SUGGESTIONS) | set(ui.JS_STRINGS)
     out |= set(settings.CUSTOM_FORMATS.values()) | set(settings.CUSTOM_KINDS.values())
+    out |= {p["blurb"] for p in settings.PROVIDERS.values()}
     out |= set(settings.CHAT_COLORS) | {"Library red"} | {label for _v, _i, label in ui.THEME_CHOICES}
     out |= {text for _k, _kind, text in flowchart.FLOW} | {sub for _i, sub in flowchart.TILES.values()}
     out |= set(flowchart.REVIEW_SUB.values()) | {t for t, _tone in flowchart.HUMAN_STEPS.values()}

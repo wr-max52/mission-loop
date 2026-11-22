@@ -24,6 +24,7 @@ LABELS = {
     State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_READY: "brief ready for human review",
     State.AWAITING_COMMENTS: "waiting for comments", State.WRITING: "writing",
     State.ARTICLE_READY: "article ready for human review", State.DONE: "published", State.PARKED: "parked (gave up)",
+    State.COMBINED: "combined into a bigger mission",
 }
 
 server = MCPServer("loop")
@@ -48,15 +49,16 @@ def _since(at: str) -> str:
     return _ago((datetime.now(timezone.utc) - when).total_seconds()) + " ago"
 
 def _working() -> list[dict]:
-    """The agents working this moment, at most one per worker. The record only counts while the loop holds its lock."""
+    """The agents working this moment, at most one per seat (a copy of a worker). The record only counts while the loop holds its lock."""
     return activity.working() if orchestrator.loop_running() else []
 
 def _on(slug: str, now: list[dict]) -> dict | None:
     return next((e for e in now if e["slug"] == slug), None)
 
 def _worker(e: dict) -> str:
-    name = settings.WORKERS.get(e.get("worker", ""))
-    return f" ({name}, {settings.worker_model(e['worker'])})" if name else ""
+    seat = e.get("worker", "")
+    name = settings.seat_name(seat)
+    return f" ({name}, {settings.worker_model(settings.seat_worker(seat))})" if name else ""
 
 def _label(m) -> str:
     if m.state == State.BRIEF_READY and m.approved:
@@ -121,7 +123,7 @@ def list_missions(stage: str = "active") -> str:
     stage = stage.strip().lower() or "active"
     missions = store.all_missions()
     if stage == "active":
-        missions = [m for m in missions if m.state not in (State.DONE, State.PARKED)]
+        missions = [m for m in missions if m.state not in (State.DONE, State.PARKED, State.COMBINED)]
     elif stage == "waiting":
         missions = [m for m in missions if _needs_human(m)]
     elif stage != "all":
@@ -151,6 +153,12 @@ def mission_status(slug: str) -> str:
     epic = store.get_epic(m.epic) if m.epic else None
     lines.append(f"Epic: {epic.title}" + (" (proposed, waiting for the human)" if epic.status == "proposed" else "")
                  if epic else "Epic: none")
+    if m.combined_into:
+        lines.append(f"Combined into: {m.combined_into}")
+    if m.combines:
+        lines.append(f"Combines: {', '.join(m.combines)}")
+    for k in store.links_of(m.slug):
+        lines.append(f"Linked to {k.other(m.slug)} by the {k.by}" + (f": {k.why}" if k.why else ""))
     if m.state in (State.RESEARCHING, State.QUEUED) or m.attempts:
         lines.append(f"Research attempts: {m.attempts} of {m.max_attempts}")
     if m.state == State.WRITING or m.write_attempts:
@@ -188,7 +196,8 @@ def agent_steps(slug: str, last: int = 8) -> str:
 @server.tool()
 def theorist_notes() -> str:
     """What the Theorist saw on its last turn (patterns inside and across epics), how it evolved the
-    inspiration line and why, the epics and mission it proposed, and the line's recent history."""
+    inspiration line and why, the epics, mission and combine it proposed, the missions it linked, and the line's
+    recent history."""
     last = store.last_theory()
     lines = [f"Inspiration line now: {store.get_inspiration() or '(none; the finder and the Theorist are off)'}"]
     if not last:
@@ -203,6 +212,10 @@ def theorist_notes() -> str:
         lines += [f"Proposed epic (waits for the human): {t}" for t in last.get("epics", [])]
         if last.get("mission"):
             lines.append(f"Proposed mission: {last['mission']}")
+        c = store.get_combine(last["combine"]) if last.get("combine") else None
+        if c:
+            lines.append(f"Proposed combining {', '.join(c.members)} into: {c.topic} ({c.status})")
+        lines += [f"Linked: {a} <-> {b}" for a, b in last.get("links", [])]
         lines += [f"Code dropped: {n}" for n in last.get("notes", [])]
     history = store.inspiration_history(5)
     if history:

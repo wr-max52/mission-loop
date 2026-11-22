@@ -20,7 +20,7 @@ FLOW = [
     ("theorist_check", "check", "check"),  # theorist.settle
     ("finder", "agent", "Finder"),
     ("finder_check", "check", "check"),    # finder._keep and the 2+ missions rule for a new epic
-    ("epic_review", "human", "Review epics"),   # the epics both the Theorist and the finder propose
+    ("epic_review", "human", "Review epics"),   # the epics both the Theorist and the finder propose, and its combines
     ("sources", "agent", "Sources"),
     ("contacts", "agent", "Contacts"),
     ("contact_check", "check", "check"),   # researcher.find_contacts' check, before the main model
@@ -33,23 +33,24 @@ FLOW = [
     ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
 ]
 TILES = {   # key -> (icon, the line under its name on the strip)
-    "theorist": ("bulb", "evolves the line"), "finder": ("compass", "finds missions"),
+    "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
     "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
     "publisher": ("broadcast", "site and channels"),
 }
 REVIEW_SUB = {"epic_review": "you approve", "brief_review": "you approve", "article_review": "you publish"}
-HUMAN_STEPS = {"epic_review": ("Epic review: approve, rename, move or reject proposed epics",
-                               "propose"),   # the purple of the New epic card
+HUMAN_STEPS = {"epic_review": ("Epic review: approve, rename, move or reject proposed epics; approve or reject "
+                               "combines", "propose"),   # the purple of the New epic card
                "brief_review": ("Brief review: approve or send back", "review"),
                "article_review": ("Article review: publish or send back", "publish")}
 # Auto mode takes over exactly these two reviews (key -> its label and title then); publishing is never automatic.
-AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: proposed epics are approved"),
+AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: proposed epics and combines are approved"),
               "brief_review": ("Auto-approve brief", "Auto mode: briefs that pass the check are approved")}
 RETRY = "Failures retry; parked after {n}."
 CHECKS = {   # every code check on the strip: what it holds the step before it to
     "theorist_check": "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and "
-                      "a new name; new mission must be new. Failures are dropped.",
+                      "a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link "
+                      "needs an open mission, a reason and a new pair. Failures are dropped.",
     "finder_check": "Finder check (code): up to 3 missions, each backed by a found page and unlike existing topics; "
                     "new epic needs 2+ missions. Failures are dropped.",
     "contact_check": "Contact check (code): names and emails must be on the pages read.",

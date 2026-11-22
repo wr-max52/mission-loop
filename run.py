@@ -95,6 +95,64 @@ def rename_epic(name: str, title: str):
         raise typer.Exit(1) from None
     print(f"{e.title} -> {title}")
 
+def _busy() -> set[str]:
+    return {e["slug"] for e in activity.working()} if orchestrator.loop_running() else set()
+
+@app.command()
+def combines():
+    """List the Theorist's combines: proposed ones wait for you (approve-combine / reject-combine)."""
+    store.init()
+    for c in store.all_combines():
+        print(f"{c.slug:32} {c.status:9} {' + '.join(c.members)} -> {c.topic}")
+
+@app.command("approve-combine")
+def approve_combine(slug: str):
+    """Combine the missions of a proposed combine into one bigger mission, which is queued (its brief still comes
+    to you); the missions it combines stop."""
+    store.init()
+    try:
+        made = orchestrator.approve_combine(slug, clock.now(), busy=_busy())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    orchestrator.WAKE_FLAG.touch()
+    print(f"combined {', '.join(made.combines)} into {made.slug}")
+
+@app.command("reject-combine")
+def reject_combine(slug: str):
+    """Keep the missions of a proposed combine separate. The Theorist won't propose it again."""
+    store.init()
+    try:
+        orchestrator.reject_combine(slug, clock.now())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"{slug} rejected")
+
+@app.command()
+def link(a: str, b: str, why: str = typer.Option("", help="The thread they share; research sees it")):
+    """Link two missions while keeping them separate (at least one not published yet), so each one's research
+    sees the other."""
+    store.init()
+    try:
+        orchestrator.link(a, b, why, clock.now())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"linked {a} <-> {b}")
+
+@app.command()
+def unlink(a: str, b: str):
+    """Remove a link. The Theorist won't draw it again."""
+    store.init()
+    try:
+        orchestrator.unlink(a, b, clock.now())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"unlinked {a} <-> {b}")
+
 @app.command()
 def inspire(line: str = typer.Argument(None, help='The new line; "" clears it and turns the finder off')):
     """Show or set the inspiration line the mission finder works from each time the loop has caught up on its
@@ -178,13 +236,13 @@ def stop():
 
 @app.command()
 def auto(switch: str = typer.Argument("", help="on or off; leave out to see whether it is on")):
-    """Auto mode approves every brief and proposed epic without you. Publishing still waits for `review`."""
+    """Auto mode approves every brief, proposed epic and combine without you. Publishing still waits for `review`."""
     import settings
     if switch not in ("", "on", "off"):
         raise typer.BadParameter("say on or off")
     if switch:
         settings.set_auto_mode(switch == "on")
-        approved = orchestrator.auto_approve(clock.now())
+        approved = orchestrator.auto_approve(clock.now(), _busy())
         orchestrator.WAKE_FLAG.parent.mkdir(parents=True, exist_ok=True)
         orchestrator.WAKE_FLAG.touch()
         if approved:
@@ -242,6 +300,12 @@ def show(slug: str):
         print("\nBrief pushed through despite these source check problems:\n" + m.unchecked_brief)
     if m.unchecked_article:
         print("\nArticle pushed through despite these check problems:\n" + m.unchecked_article)
+    if m.combined_into:
+        print(f"\nCombined into {m.combined_into}")
+    if m.combines:
+        print(f"\nCombines {', '.join(m.combines)}")
+    for k in store.links_of(slug):
+        print(f"Linked to {k.other(slug)} by the {k.by}" + (f": {k.why}" if k.why else ""))
 
 @app.command(name="join-1f916")
 def join_1f916(handle: str = typer.Argument(..., help="2-32 letters, digits, _ or -; permanent and public"),
@@ -297,7 +361,7 @@ def status():
               + (f" (last try failed: {note})" if note else ""))
 
 @app.command()
-def ask(question: str, model: str = typer.Option("", help="Installed Ollama model; default: the small search model")):
+def ask(question: str, model: str = typer.Option("", help="An Ollama model, or provider/model for a connected cloud provider; default: the small search model")):
     """Ask Researcher Chat what the loop is doing, or to look something up on the web. It only reads the loop, so it
     is safe while the loop runs, and works without it."""
     store.init()

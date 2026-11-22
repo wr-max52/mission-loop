@@ -97,3 +97,50 @@ def test_possibility_not_in_the_brief_fails():
 def test_brief_possibilities_must_reach_the_article():
     ok, notes = check_article(M, BRIEF_WITH_POSSIBILITY, article())
     assert not ok and "possibilities are missing" in notes
+
+# A model sometimes uses a source's URL as its id, and the writer then cites [https://...] (it did what the
+# brief said). Code gives such sources short ids and points citations of a brief source's URL at its id.
+from contracts import cite_by_id
+
+URL_ID_BRIEF = ResearchBrief(**{**BRIEF.model_dump(), "sources": [
+    {**s.model_dump(), "id": s.url} for s in BRIEF.sources],
+    "claims": [{"text": "It advanced", "source_ids": ["https://congress.gov/x"]}]})
+
+def test_url_ids_become_short_ids_and_claims_follow():
+    assert [s.id for s in URL_ID_BRIEF.sources] == ["s1", "s2", "s3"]
+    assert URL_ID_BRIEF.claims[0].source_ids == ["s1"]
+
+def test_short_ids_skip_ones_already_taken():
+    b = ResearchBrief(**{**BRIEF.model_dump(), "sources": [
+        {**BRIEF.sources[0].model_dump(), "id": "s1"}, {**BRIEF.sources[1].model_dump(), "id": "https://news.example/y"}],
+        "claims": [{"text": "c", "source_ids": ["s1", "https://news.example/y/"]}]})
+    assert [s.id for s in b.sources] == ["s1", "s2"] and b.claims[0].source_ids == ["s1", "s2"]
+
+def test_a_claim_citing_a_url_points_at_that_sources_id():
+    b = ResearchBrief(**{**BRIEF.model_dump(), "claims": [{"text": "c", "source_ids": ["https://op.example/z"]}]})
+    assert b.claims[0].source_ids == ["op"]
+
+def test_saved_brief_with_url_ids_is_fixed_when_read_back():
+    raw = BRIEF.model_dump()
+    for s in raw["sources"]:
+        s["id"] = s["url"]
+    assert ResearchBrief(**raw).sources[2].id == "s3"
+
+def test_citations_of_brief_urls_become_ids():
+    text = "It passed [https://congress.gov/x]. Critics object [https://op.example/z/, news]."
+    assert cite_by_id(text, BRIEF) == "It passed [gov]. Critics object [op, news]."
+
+def test_outside_urls_are_left_for_the_check():
+    text = "See [https://congress.gov/x, https://evil.example] and [link](https://congress.gov/x)."
+    assert cite_by_id(text, BRIEF) == text
+
+def test_article_citing_by_url_passes_once_rewritten():
+    a = article()
+    for sec in a.sections:
+        sec.paragraphs = [p.replace("[gov]", "[https://congress.gov/x]").replace("[op]", "[https://op.example/z]")
+                          for p in sec.paragraphs]
+    assert not check_article(M, BRIEF, a)[0]
+    for sec in a.sections:
+        sec.paragraphs = [cite_by_id(p, BRIEF) for p in sec.paragraphs]
+    ok, notes = check_article(M, BRIEF, a)
+    assert ok, notes

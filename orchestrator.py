@@ -2,13 +2,13 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity
+import activity, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
-                       ChannelPost, SITE_FOLDERS, epic_title, slugify)
+                       ChannelPost, Combine, COMBINABLE, Link, SITE_FOLDERS, epic_title, is_open, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -80,14 +80,29 @@ def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str
 
 def _gather(m: Mission, now) -> str:
     """The Research Assistant's half of a research attempt: find and read sources. What it found is saved,
-    so the Principal Investigator can write the brief from it now or after a restart."""
-    m.attempts += 1                    # an attempt starts with its search
+    so the Principal Investigator can write the brief from it now or after a restart. The search saves its
+    transcript as it goes; one a stop or a killed loop cut short carries on from it, as the same attempt."""
+    saved = store.load_artifact(m.slug, "evidence")
+    paused = Evidence(**saved) if saved and not m.gathered else None
+    if paused and paused.finished:     # the loop was killed after the search was saved but before it was marked
+        m.attempts, m.gathered, m.search_paused = max(m.attempts, paused.attempt, 1), True, False
+        return "sources found before the restart are kept; the brief is next"
+    if paused:
+        m.attempts = max(m.attempts, paused.attempt, 1)   # the same attempt, carried on (a killed loop never saved it)
+    else:
+        m.attempts += 1                # an attempt starts with its search
     try:
         activity.begin(m.slug, "sources")
-        evidence = agents.gather(m, now)
+        evidence = agents.gather(m, now, paused) if paused else agents.gather(m, now)
     except Exception as e:             # model, tool or network failure counts as a failed attempt
+        store.delete_artifact(m.slug, "evidence")   # the next attempt searches afresh
+        m.search_paused = False
         return _research_failed(m, None, f"research crashed: {type(e).__name__}: {e}")
     store.save_artifact(m.slug, "evidence", evidence)
+    m.search_paused = not evidence.finished
+    if not evidence.finished:          # the stop button cut the search short: it carries on next start
+        calls = sum(1 for x in evidence.messages if x.get("role") == "tool")
+        return f"stopped mid-search after {calls} tool result(s); the search carries on when the loop starts again"
     m.gathered = True
     if stopping.requested():
         return "stopped after finding sources; the brief is written from them when the loop starts again"
@@ -110,10 +125,14 @@ def _write_brief(m: Mission, now) -> str:
         m.interrupted_brief = e.draft
         if e.draft:                    # the draft replaces the sources; without one, the brief is rewritten from them
             _drop_evidence(m)
-        saved = "its draft is checked" if e.draft else "the brief is written again from the same sources"
+        saved = ("its draft is checked" if e.draft else
+                 "its checked sources are kept and the claims are written" if m.brief_sources else
+                 "its picked sources are kept and checked" if m.brief_pick else
+                 "the brief is written again from the same sources")
         return f"stopped mid-brief; {saved} when the loop starts again"
     except Exception as e:             # a crash is a failed attempt; the next one searches again
-        brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
+        ok = False                         # a brief that can't pass (too few sources held up) brings its draft
+        brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {type(e).__name__}: {e}"
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
@@ -126,7 +145,8 @@ def _write_brief(m: Mission, now) -> str:
     return _research_failed(m, brief, notes)
 
 def _drop_evidence(m: Mission) -> None:
-    m.gathered = False
+    """The attempt is over: its search transcript and the brief's saved first step go."""
+    m.gathered, m.search_paused, m.brief_pick, m.brief_sources = False, False, None, None
     store.delete_artifact(m.slug, "evidence")
 
 def step(m: Mission, now) -> str | None:
@@ -172,13 +192,15 @@ def step(m: Mission, now) -> str | None:
         except stopping.Interrupted as e:
             m.write_attempts -= 1
             m.interrupted_article = e.draft
-            saved = "its draft is checked" if e.draft else "nothing usable was written; writing restarts"
+            saved = ("its draft is checked" if e.draft else
+                     f"writing resumes after its {len(m.article_draft.sections)} saved section(s)" if m.article_draft
+                     else "nothing usable was written; writing restarts")
             return f"stopped mid-writing; {saved} when the loop starts again"
         except Exception as e:             # same rule as research: a crash is a failed attempt
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
             store.save_artifact(m.slug, "article", article)
-            m.unchecked_article = ""
+            m.unchecked_article, m.article_draft = "", None
             path = _write_article_review(m, brief, article)
             m.validator_notes = ""
             m.rejected_article = None
@@ -215,6 +237,7 @@ def reject(m: Mission, notes: str, now) -> None:
         m.state, m.attempts, m.approved = State.RESEARCHING, 0, False
     elif m.state == State.ARTICLE_READY:
         m.state, m.write_attempts, m.reviewed = State.WRITING, 0, False
+        m.article_draft = None             # written again from the feedback, not patched
     else:
         raise ValueError(f"{m.slug} is {m.state.value}; only BRIEF_READY or ARTICLE_READY can be rejected")
     m.validator_notes = f"Human reviewer feedback: {notes}"
@@ -222,9 +245,10 @@ def reject(m: Mission, notes: str, now) -> None:
     store.log_event(m.slug, now, before.value, m.state.value, "rejected by human")
 
 def auto_approve(now, busy: set[str] = frozenset()) -> int:
-    """Auto mode: approve every brief waiting for review and every proposed epic, as a human would. Articles are
-    left alone: publishing always waits for a human. An epic with a mission a worker is busy with waits for a later
-    sweep, so no worker saves over the move. Returns how many briefs were approved (epics move no mission on)."""
+    """Auto mode: approve every brief waiting for review, every proposed epic and every proposed combine, as a human
+    would. Articles are left alone: publishing always waits for a human. An epic or combine with a mission a worker
+    is busy with waits for a later sweep, so no worker saves over the move. Returns how many briefs were approved
+    and combined missions made (epics move no mission on)."""
     if not settings.auto_mode():
         return 0
     approved = 0
@@ -237,6 +261,13 @@ def auto_approve(now, busy: set[str] = frozenset()) -> int:
     for e in store.all_epics("proposed"):
         if not any(m.slug in busy for m in _in_epic(e.slug)):
             approve_epic(e.slug, "", now, by="auto mode")
+    for c in store.all_combines("proposed"):
+        if not set(c.members) & set(busy):
+            try:
+                approve_combine(c.slug, now, by="auto mode")
+                approved += 1
+            except ValueError as e:        # its missions moved on meanwhile: the proposal is dropped
+                print(f"combine {c.slug}: {e}", flush=True)
     return approved
 
 def parked_while_writing(m: Mission) -> bool:
@@ -278,6 +309,7 @@ def push_through(m: Mission, now) -> None:
     else:
         store.save_artifact(m.slug, "article", draft.article)
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
+        m.article_draft = None
         _write_article_review(m, _brief(m), draft.article)
         m.state = State.ARTICLE_READY
         note = "failed article pushed through by human"
@@ -312,7 +344,7 @@ def in_flow_order(missions: list[Mission]) -> list[Mission]:
 def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
     """Steps that need no model (start, outreach, the comment wait, publishing) run right away, in order."""
     changed = 0
-    while role(m) is None and m.state not in (State.DONE, State.PARKED) and not STOP_FLAG.exists():
+    while role(m) is None and m.state not in (State.DONE, State.PARKED, State.COMBINED) and not STOP_FLAG.exists():
         before = m.state
         try:
             note = step(m, now_fn())
@@ -326,22 +358,39 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
         changed += 1
     return changed
 
-def _as_worker(worker: str, fn, *args):
-    """Run one task on a worker's thread, so its activity shows under that worker."""
-    activity.work_as(worker)
+PROGRESS = ("brief_pick", "brief_sources", "article_draft")   # Mission fields an agent saves mid-task
+
+def save_progress(m: Mission, artifacts: dict) -> None:
+    """A checkpoint from inside a task (checkpoint.save): the artifacts given, and the mission's progress
+    fields written onto the stored mission. Only those fields: the rest of the mission is saved when the task
+    ends, as always, so a checkpoint never writes half a task's changes."""
+    for kind, obj in artifacts.items():
+        store.save_artifact(m.slug, kind, obj)
+    stored = store.get_mission(m.slug)
+    if stored is not None and any(getattr(stored, f) != getattr(m, f) for f in PROGRESS):
+        store.save_mission(stored.model_copy(update={f: getattr(m, f) for f in PROGRESS}))
+
+def _as_worker(seat: str, fn, *args):
+    """Run one task on a worker's thread, so its activity shows under that seat (a copy of a worker) and its
+    progress is saved."""
+    activity.work_as(seat)
+    checkpoint.use(save_progress)
     try:
         return fn(*args)
     finally:
+        checkpoint.use(None)
         activity.clear()
 
 def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:
     """The farthest-along mission for this worker that hasn't had its turn this round. Once every one has,
-    a new round starts, so a mission whose attempt failed waits while the others get a go."""
+    a new round starts, so a mission whose attempt failed waits while the others get a go. Every copy of a
+    worker shares its rounds. A mission a human rushed ("Add and start loop") goes ahead of the rest."""
     mine = [m for m in waiting if settings.worker_for(role(m)) == worker]
     fresh = [m for m in mine if (worker, m.slug) not in turns]
     if mine and not fresh:
         turns.difference_update((worker, m.slug) for m in mine)
         fresh = mine
+    fresh.sort(key=lambda m: not m.rush)   # stable: otherwise farthest along first
     return fresh[0] if fresh else None
 
 PASS_EVERY = 300                           # seconds: during long model work, a publishing pass this often, so a
@@ -349,7 +398,8 @@ PASS_EVERY = 300                           # seconds: during long model work, a 
 MAX_TASKS = 500                            # per run: a safety net against a mission that never settles
 
 def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
-    """Run every mission until each is blocked, with the two workers side by side. Missions are read fresh
+    """Run every mission until each is blocked, with the two workers side by side, each as many copies (seats) as
+    its count on the Settings page, read each sweep. Missions are read fresh
     every few seconds, and the order is the same each time:
     1. Every step that needs no model, farthest along first (publish a reviewed article, move an approved brief
        on, ...). Right after the first sweep, whenever one publishes something, whenever a human asks to
@@ -368,9 +418,10 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     seen: set = set()                      # publish requests the last publishing pass already tried
     last_pass = time.monotonic()
     turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
-    running: dict = {}                     # future -> (worker, mission, its state before) or (worker, None, desk task)
+    running: dict = {}                     # future -> (seat, mission, its state before) or (seat, None, desk task)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
-    with ThreadPoolExecutor(max_workers=len(settings.WORKERS), thread_name_prefix="worker") as pool:
+    seats = len(settings.WORKERS) * settings.MAX_COUNT       # threads start only as seats need them
+    with ThreadPoolExecutor(max_workers=seats, thread_name_prefix="worker") as pool:
         while True:
             if not STOP_FLAG.exists() and tasks < max_tasks:
                 busy = {m.slug for _, m, _ in running.values() if m}
@@ -388,24 +439,26 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                 taken = {w for w, _, _ in running.values()}
                 if not theorist_done and not theorist_due(now_fn()):
                     theorist_done = True       # checked once a run; a THINK flag set later waits for the next run
-                for worker in settings.WORKERS:
-                    if worker in taken or not settings.worker_on(worker):
+                for seat in settings.seats():
+                    if seat in taken:
                         continue
+                    worker = settings.seat_worker(seat)
                     if not theorist_done and settings.worker_for("pi") == worker:
                         theorist_done = True
-                        running[pool.submit(_as_worker, worker, think, now_fn())] = (worker, None, "theorist")
+                        running[pool.submit(_as_worker, seat, think, now_fn())] = (seat, None, "theorist")
                         continue
                     m = _pick(worker, waiting, turns)
                     if m:
                         waiting.remove(m)
                         turns.add((worker, m.slug))
-                        running[pool.submit(_as_worker, worker, step, m, now_fn())] = (worker, m, m.state)
+                        m.rush = False         # it has its turn; saved with the step's result
+                        running[pool.submit(_as_worker, seat, step, m, now_fn())] = (seat, m, m.state)
                         tasks += 1
                     elif not finder_done and theorist_done and settings.worker_for("assistant") == worker \
                             and not any(role(m) == "assistant" for m in waiting) \
                             and "theorist" not in (task for _, _, task in running.values()):
                         finder_done = True
-                        running[pool.submit(_as_worker, worker, find_new_missions, now_fn())] = (worker, None, "finder")
+                        running[pool.submit(_as_worker, seat, find_new_missions, now_fn())] = (seat, None, "finder")
             if not running:
                 return changed
             done, _ = wait(running, timeout=POLL, return_when=FIRST_COMPLETED)
@@ -490,9 +543,11 @@ THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless
 def desk_fingerprint() -> str:
     """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
     A mission merely moving through research doesn't count as news."""
-    missions = [(m.slug, m.epic, m.state == State.DONE) for m in store.all_missions()]
+    missions = [(m.slug, m.epic, m.state == State.DONE, m.state == State.COMBINED) for m in store.all_missions()]
     epics = [(e.slug, e.title, e.status) for e in store.all_epics()]
-    return hashlib.sha1(json.dumps([missions, epics]).encode()).hexdigest()
+    links = [(k.a, k.b, k.status) for k in store.all_links(None)]
+    combines = [(c.slug, c.status) for c in store.all_combines()]
+    return hashlib.sha1(json.dumps([missions, epics, links, combines]).encode()).hexdigest()
 
 def theorist_due(now) -> bool:
     """Its turn comes when it has a line to evolve and a desk to look at, the desk changed since its last
@@ -530,9 +585,10 @@ def think(now):
 
 def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
     """Make the Theorist's changes, on the main thread between tasks: the evolved line, its proposed epics (they
-    wait for the human like the finder's, and each mission moved keeps its old epic to go back to) and its one
-    new mission. A human edit to the line since the Theorist read it wins. Missions being worked on right now
-    stay where they are. Returns how many changes."""
+    wait for the human like the finder's, and each mission moved keeps its old epic to go back to), its one
+    new mission, its combine (proposed: it waits for the human too) and its links (made right away: they change
+    no mission, only what each one's research sees). A human edit to the line since the Theorist read it wins.
+    Missions being worked on right now stay where they are. Returns how many changes."""
     changed, notes = 0, list(theory.dropped)
     before = store.get_inspiration()
     if theory.inspiration != before:
@@ -575,11 +631,39 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
         store.log_event(slug, now, "", State.QUEUED.value, "proposed by the Theorist"
                         + (f": {theory.why}" if theory.why else ""))
         changed += 1
+
+    combine = ""
+    if theory.combine:
+        c, missions = theory.combine, store.all_missions()
+        state = {m.slug: m.state for m in missions}
+        late = [s for s in c.missions if state.get(s) not in COMBINABLE]
+        if late:
+            notes.append(f"combine dropped: {', '.join(late)} moved on while the Theorist was thinking")
+        else:
+            taken = {m.slug for m in missions} | {k.slug for k in store.all_combines()}
+            combine = _new_slug(c.topic, taken)
+            store.save_combine(Combine(slug=combine, topic=c.topic, objective=c.objective, members=c.missions,
+                                       epic=c.epic, why=c.why, at=now.isoformat()))
+            for s in c.missions:
+                store.log_event(s, now, state[s].value, state[s].value,
+                                f"the Theorist proposes combining it into: {c.topic}")
+            changed += 1
+
+    linked = []
+    for k in theory.links:
+        a, b = store.get_mission(k.mission), store.get_mission(k.to)
+        if not a or not b or State.COMBINED in (a.state, b.state) or not (is_open(a) or is_open(b)) \
+                or store.get_link(a.slug, b.slug):
+            notes.append(f"link dropped: {k.mission} <-> {k.to} changed while the Theorist was thinking")
+            continue
+        link(a.slug, b.slug, k.why, now, by="theorist")
+        linked.append([a.slug, b.slug])
+        changed += 1
     _drop_empty_proposals()
 
     store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
-                       "epics": epics, "mission": slug, "notes": notes})
+                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
 
@@ -842,6 +926,88 @@ def rename_epic(slug: str, title: str, now) -> None:
     epic.title = clean
     store.save_epic(epic)
     _refresh_pages(_in_epic(slug))
+
+# ---------- links and combines (the Theorist connects dots; a human can undo) ----------
+
+def link(a: str, b: str, why: str, now, by: str = "human") -> Link:
+    """Connect two missions while keeping them separate. At least one must be open; a published article only
+    shows the link once both are published (publisher.connected). A removed link made again is active again."""
+    ma, mb = store.get_mission(a), store.get_mission(b)
+    if not ma or not mb or a == b:
+        raise ValueError("pick two different missions")
+    if State.COMBINED in (ma.state, mb.state):
+        raise ValueError("a mission combined into another can't be linked; link the bigger one")
+    if not is_open(ma) and not is_open(mb):
+        raise ValueError("a link needs at least one mission that isn't published yet")
+    saved = store.save_link(Link(a=a, b=b, why=" ".join(why.split()), by=by, at=now.isoformat()))
+    who = "the Theorist" if by == "theorist" else by
+    for m, other in ((ma, mb), (mb, ma)):
+        store.log_event(m.slug, now, m.state.value, m.state.value,
+                        f"linked to {other.slug} by {who}" + (f": {saved.why}" if saved.why else ""))
+    return saved
+
+def unlink(a: str, b: str, now) -> None:
+    """A human removes a link. It is kept as removed, so the Theorist doesn't draw it again."""
+    found = store.get_link(a, b)
+    if not found or found.status != "active":
+        raise ValueError(f"{a} and {b} aren't linked")
+    found.status = "removed"
+    store.save_link(found)
+    missions = [m for m in (store.get_mission(a), store.get_mission(b)) if m]
+    for m in missions:
+        store.log_event(m.slug, now, m.state.value, m.state.value, f"link to {found.other(m.slug)} removed by human")
+    _refresh_pages(missions)               # two published articles stop pointing at each other
+
+def approve_combine(slug: str, now, by: str = "", busy: set[str] = frozenset()) -> Mission:
+    """Accept a proposed combine: the bigger mission is queued (its brief still needs review), each member stops
+    (State.COMBINED, pointing at it) and its links pass to the bigger mission. Members that moved on to writing
+    meanwhile stay as they are; with fewer than 2 left the proposal is dropped."""
+    c = store.get_combine(slug)
+    if not c or c.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed combine")
+    if set(c.members) & set(busy):
+        raise ValueError("a worker is busy with one of its missions; try again once that task ends")
+    members = [m for m in (store.get_mission(s) for s in c.members) if m and m.state in COMBINABLE]
+    if len(members) < 2:
+        store.delete_combine(slug)
+        raise ValueError("its missions have moved on, so there is nothing left to combine; the proposal is dropped")
+    taken = {m.slug for m in store.all_missions()}
+    new = c.slug if c.slug not in taken and c.slug not in SITE_FOLDERS else _new_slug(c.topic, taken)
+    epic = store.find_epic(c.epic) if c.epic else None
+    listed = "\n".join(f"- {m.slug}: {m.topic}" for m in members)
+    combined = Mission(slug=new, topic=c.topic, epic=epic.slug if epic else "", combines=[m.slug for m in members],
+                       objective=f"{c.objective}\n\nCombines these missions, proposed by the Theorist:\n{listed}")
+    store.save_mission(combined)
+    store.log_event(new, now, "", State.QUEUED.value, f"combined from {', '.join(combined.combines)}"
+                    + (f", approved by {by}" if by else "") + (f": {c.why}" if c.why else ""))
+    for m in members:
+        before = m.state
+        m.state, m.combined_into = State.COMBINED, new
+        store.save_mission(m)
+        store.log_event(m.slug, now, before.value, m.state.value, f"combined into {new}"
+                        + (f", approved by {by}" if by else ""))
+        for k in store.links_of(m.slug):
+            other = k.other(m.slug)
+            target = store.get_mission(other)
+            if other in combined.combines or not target or target.state == State.COMBINED \
+                    or store.get_link(new, other):
+                continue
+            store.save_link(Link(a=new, b=other, why=k.why, by=k.by, at=now.isoformat()))
+    c.slug, c.status = new, "approved"
+    store.delete_combine(slug)
+    store.save_combine(c)
+    return combined
+
+def reject_combine(slug: str, now) -> None:
+    """A human turns a combine down. It is kept as rejected, so the Theorist doesn't propose it again."""
+    c = store.get_combine(slug)
+    if not c or c.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed combine")
+    c.status = "rejected"
+    store.save_combine(c)
+    for m in (store.get_mission(s) for s in c.members):
+        if m:
+            store.log_event(m.slug, now, m.state.value, m.state.value, f"combine into {c.topic!r} rejected by human")
 
 def run_until_idle(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     """Work until nothing is left that the loop can do on its own: quick code steps first, then the

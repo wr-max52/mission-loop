@@ -74,6 +74,126 @@ def set_ollama_host(url: str) -> str:
     save(ollama_host=url)
     return ollama_host()
 
+# ---------- model providers: Ollama, and cloud APIs plugged in with a key ----------
+# A worker's model is a bare name for Ollama ("qwen3:30b", exactly as before), or "<provider>/<model>" for any
+# other provider ("anthropic/claude-sonnet-5-5", "openrouter/meta-llama/llama-4"). A provider is on once it has a
+# key: pasted on the Settings page (saved to data/providers.json, mode 600, never committed) or in .env. Each one
+# here is only its public API address and where its keys come from; no model names.
+#   api: "ollama", "anthropic" (Messages API) or "openai" (the OpenAI chat completions shape, which most speak)
+#   schema: False where the provider can't hold a reply to a JSON schema (it gets JSON mode and the schema in words)
+#   tokens: the request field for the reply cap; temperature: False where reasoning models refuse to be set
+PROVIDERS = {
+    "ollama": {"name": "Ollama", "api": "ollama", "url": OLLAMA_DEFAULT, "key_env": "",
+               "keys": "https://ollama.com/download", "blurb": "Free, on this machine. Pull models with ollama pull."},
+    "anthropic": {"name": "Anthropic", "api": "anthropic", "url": "https://api.anthropic.com",
+                  "key_env": "ANTHROPIC_API_KEY", "keys": "https://console.anthropic.com/settings/keys",
+                  "blurb": "Claude models."},
+    "openai": {"name": "OpenAI", "api": "openai", "url": "https://api.openai.com/v1", "key_env": "OPENAI_API_KEY",
+               "keys": "https://platform.openai.com/api-keys", "blurb": "GPT models.",
+               "tokens": "max_completion_tokens", "temperature": False},
+    "xai": {"name": "xAI", "api": "openai", "url": "https://api.x.ai/v1", "key_env": "XAI_API_KEY",
+            "keys": "https://console.x.ai", "blurb": "Grok models."},
+    "deepseek": {"name": "DeepSeek", "api": "openai", "url": "https://api.deepseek.com", "key_env": "DEEPSEEK_API_KEY",
+                 "keys": "https://platform.deepseek.com/api_keys", "blurb": "DeepSeek chat and reasoner.",
+                 "schema": False},
+    "gemini": {"name": "Google Gemini", "api": "openai", "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+               "key_env": "GEMINI_API_KEY", "keys": "https://aistudio.google.com/apikey", "blurb": "Gemini models."},
+    "mistral": {"name": "Mistral", "api": "openai", "url": "https://api.mistral.ai/v1", "key_env": "MISTRAL_API_KEY",
+                "keys": "https://console.mistral.ai/api-keys", "blurb": "Mistral models."},
+    "groq": {"name": "Groq", "api": "openai", "url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY",
+             "keys": "https://console.groq.com/keys", "blurb": "Open models, served very fast."},
+    "openrouter": {"name": "OpenRouter", "api": "openai", "url": "https://openrouter.ai/api/v1",
+                   "key_env": "OPENROUTER_API_KEY", "keys": "https://openrouter.ai/keys",
+                   "blurb": "Hundreds of models from every lab behind one key."},
+    "together": {"name": "Together AI", "api": "openai", "url": "https://api.together.xyz/v1",
+                 "key_env": "TOGETHER_API_KEY", "keys": "https://api.together.ai/settings/api-keys",
+                 "blurb": "Open models in the cloud."},
+    "custom": {"name": "OpenAI-compatible server", "api": "openai", "url": "", "key_env": "MISSION_LOOP_COMPAT_KEY",
+               "url_env": "MISSION_LOOP_COMPAT_URL", "keys": "", "optional_key": True,
+               "blurb": "Any OpenAI-compatible server: LM Studio, vLLM, llama.cpp, LiteLLM."},
+}
+LOCAL = "ollama"
+PROVIDERS_FILE = Path("data/providers.json")
+
+def split_model(ref: str) -> tuple[str, str]:
+    """"anthropic/claude-x" -> ("anthropic", "claude-x"); a bare name, or one whose first part is no provider
+    (Ollama's own "user/model" or "hf.co/..."), is an Ollama model."""
+    head, sep, rest = (ref or "").partition("/")
+    if sep and rest and head in PROVIDERS:
+        return head, rest
+    return LOCAL, ref or ""
+
+def model_ref(provider: str, name: str) -> str:
+    return name if provider == LOCAL else f"{provider}/{name}"
+
+def _provider_file() -> dict:
+    try:
+        data = json.loads(PROVIDERS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def provider_key(pid: str) -> str:
+    """The provider's API key: the one saved on the Settings page, then its variable in .env; "" for none."""
+    saved_key = str((_provider_file().get(pid) or {}).get("key") or "")
+    env = PROVIDERS.get(pid, {}).get("key_env") or ""
+    return saved_key or (_env(env) if env else "")
+
+def provider_url(pid: str) -> str:
+    """Where the provider's API is: saved on the Settings page, then .env (a custom server), then its public address."""
+    if pid == LOCAL:
+        return ollama_host()
+    spec = PROVIDERS.get(pid, {})
+    found = str((_provider_file().get(pid) or {}).get("url") or "")
+    return (found or (_env(spec["url_env"]) if spec.get("url_env") else "") or spec.get("url", "")).rstrip("/")
+
+def provider_saved(pid: str) -> bool:
+    """Set up on the Settings page (so it can be disconnected there), not only in .env."""
+    return pid in _provider_file()
+
+def provider_on(pid: str) -> bool:
+    """Can its models be used? Ollama always can be tried; a cloud provider needs a key (a custom server an address)."""
+    if pid == LOCAL:
+        return True
+    if pid not in PROVIDERS:
+        return False
+    if PROVIDERS[pid].get("optional_key"):
+        return bool(provider_url(pid))
+    return bool(provider_key(pid) and provider_url(pid))
+
+def cloud_providers() -> list[str]:
+    """Every provider other than Ollama that is on, in the order above."""
+    return [p for p in PROVIDERS if p != LOCAL and provider_on(p)]
+
+def save_provider(pid: str, key: str = "", url: str = "") -> None:
+    """Keep a provider's key (and a custom server's address) in data/providers.json, readable by this user only.
+    Raises ValueError for an unknown provider, a key with spaces in it, a missing key or a bad address."""
+    if pid not in PROVIDERS or pid == LOCAL:
+        raise ValueError(f"no provider {pid!r}")
+    key, url = key.strip(), url.strip()
+    if len(key) > 500 or any(c.isspace() for c in key):
+        raise ValueError("that doesn't look like an API key")
+    if not key and not PROVIDERS[pid].get("optional_key"):
+        raise ValueError("paste the API key")
+    url = _http_address(url) if url else ""
+    if not PROVIDERS[pid]["url"] and not url:   # a custom server has no public address to fall back on
+        raise ValueError("say where the server is")
+    data = _provider_file() | {pid: {k: v for k, v in (("key", key), ("url", url)) if v}}
+    _write_private(PROVIDERS_FILE, data)
+
+def forget_provider(pid: str) -> None:
+    data = _provider_file()
+    if data.pop(pid, None) is not None:
+        _write_private(PROVIDERS_FILE, data)
+
+def _write_private(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.touch(mode=0o600)
+    tmp.chmod(0o600)
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    tmp.replace(path)
+
 def f916_url() -> str:
     """The 1F916 server to join: settings.json, then MISSION_LOOP_1F916_URL, then the public site. Once joined,
     the citizen's key file records its server and posts always go there (see agents/f916.api)."""
@@ -200,6 +320,8 @@ def set_auto_mode(on: bool) -> None:
 # The Research Assistant runs the small model's legwork (searching and reading pages); the Principal
 # Investigator runs the big model's writing. Each can be turned off, and then the other one does its steps
 # with its own model. With both on, the loop runs them at the same time whenever each has a task.
+# Each worker can also be several of the same kind (its count, 1 to MAX_COUNT): that many tasks for its role
+# run at once, all on its one model. Each copy is a seat: "assistant", "assistant-2", ... (seats()).
 # Which model each uses is this machine's choice, never the code's: settings.json, then .env, else none.
 
 WORKERS = {
@@ -229,6 +351,37 @@ def chat_model() -> str:
     """The chat assistant's default model: settings.json, then MISSION_LOOP_CHAT_MODEL, then the Research
     Assistant's model, so Ollama reuses the copy the loop already loaded."""
     return saved().get("chat_model") or _env("MISSION_LOOP_CHAT_MODEL") or model_for("assistant")
+
+MAX_COUNT = 8                              # copies of one worker at most; Ollama queues what it can't run at once
+
+def worker_count(worker: str) -> int:
+    """How many of this worker run at once (1 unless set), whether or not it is on."""
+    try:
+        n = int(saved().get(f"{worker}_count") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(MAX_COUNT, n))
+
+def set_worker_count(worker: str, n: int) -> None:
+    """Raises ValueError for an unknown worker or a count outside 1 to MAX_COUNT."""
+    if worker not in WORKERS:
+        raise ValueError(f"no worker {worker!r}")
+    if not 1 <= n <= MAX_COUNT:
+        raise ValueError(f"a worker count is 1 to {MAX_COUNT}")
+    save(**{f"{worker}_count": n if n > 1 else ""})     # 1 is not stored
+
+def seats() -> list[str]:
+    """Every copy of every worker that is on, the loop's threads: "assistant", "assistant-2", ..., "pi", ..."""
+    return [w if i == 1 else f"{w}-{i}" for w in WORKERS if worker_on(w) for i in range(1, worker_count(w) + 1)]
+
+def seat_worker(seat: str) -> str:
+    """The worker a seat is a copy of ("assistant-2" -> "assistant"); anything else (the desk) comes back as is."""
+    return seat.split("-", 1)[0]
+
+def seat_name(seat: str) -> str:
+    """"Research Assistant", "Research Assistant 2", ...; "" for a seat that is no worker's."""
+    worker, _, n = seat.partition("-")
+    return f"{WORKERS[worker]} {n}".strip() if worker in WORKERS else ""
 
 def missing_models() -> list[str]:
     """Workers that are on but have no model chosen yet."""

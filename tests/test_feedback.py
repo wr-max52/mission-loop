@@ -128,3 +128,39 @@ def test_a_brief_that_later_passes_is_no_longer_marked_unchecked(monkeypatch):
     m = store.get_mission("p")
     assert m.state == State.BRIEF_READY and m.unchecked_brief == ""
     assert FACTS_HEADING in Path("missions/p/brief.md").read_text()
+
+def test_a_brief_whose_sources_dont_hold_up_keeps_its_draft_and_notes(monkeypatch):
+    import agents
+    from agents.researcher import BriefFailed
+    from agents.stubs import research
+    def short(m, evidence, now):
+        m.brief_sources = None
+        raise BriefFailed(research(m).model_copy(update={"claims": []}), "s1: could not fetch\nOnly 2 verified supporting domain(s); need 3")
+    monkeypatch.setattr(agents, "write_brief", short)
+    store.save_mission(Mission(slug="sh", topic="x", max_attempts=1))
+    orchestrator.run_until_idle(lambda: T0)
+    m = store.get_mission("sh")
+    assert m.state == State.PARKED and m.validator_notes.startswith("s1: could not fetch")
+    assert m.rejected_brief.brief.thesis.startswith("Stub thesis") and "research crashed" not in m.validator_notes
+    assert m.brief_sources is None and not m.gathered
+
+def test_a_failed_article_keeps_its_saved_sections_and_a_passing_one_clears_them(monkeypatch):
+    import agents
+    from contracts import ArticleDraft, ArticlePlan, PlannedSection
+    from agents import stubs
+    plan = ArticlePlan(title="t", dek="d", sections=[PlannedSection(heading="a", point="p"),
+                                                     PlannedSection(heading="b", point="p", counterpoint=True)])
+    def write(m, brief, records):
+        m.article_draft = ArticleDraft(plan=plan)
+        return stubs.write(m, brief, records)
+    verdicts = iter([(False, "'Finding' paragraph 1 has no citation"), (True, "")])
+    monkeypatch.setattr(agents, "write", write)
+    monkeypatch.setattr(agents, "check_article", lambda *a: next(verdicts))
+    store.save_mission(Mission(slug="ar", topic="x", approved=True, state=State.WRITING))
+    store.save_artifact("ar", "brief", stubs.research(Mission(slug="ar", topic="x")))
+    orchestrator.run_until_idle(lambda: T0, max_tasks=1)
+    m = store.get_mission("ar")
+    assert m.state == State.WRITING and m.article_draft.plan == plan        # kept for the retry to build on
+    orchestrator.run_until_idle(lambda: T0)
+    m = store.get_mission("ar")
+    assert m.state == State.ARTICLE_READY and m.article_draft is None

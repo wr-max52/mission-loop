@@ -28,7 +28,7 @@ def research(m: Mission, now=None) -> ResearchBrief:
         question_for_pocs="What is your take on this thesis?",
     )
 
-def gather(m: Mission, now=None) -> Evidence:
+def gather(m: Mission, now=None, resume=None) -> Evidence:
     return Evidence(messages=[{"role": "system", "content": f"stub sources for {m.topic}"}])
 
 def write_brief(m: Mission, evidence: Evidence, now=None) -> ResearchBrief:

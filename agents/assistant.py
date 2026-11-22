@@ -14,13 +14,14 @@ the copy already loaded instead of reloading the model under a running agent. Th
 installed model; that one is loaded beside it.
 
 It never needs the loop: the loop tools read the files the loop leaves behind, so it answers whether the loop
-is running, stopped or was never started. It needs only Ollama (and the network for the web tools).
+is running, stopped or was never started. It needs only a model: Ollama's, or a connected cloud provider's (and the
+network for the web tools).
 """
 import asyncio, os, re
 from pathlib import Path
 import ollama
 import settings
-from agents import llm
+from agents import llm, providers
 from agents.toolbox import Toolbox
 
 def default_model() -> str:
@@ -60,6 +61,8 @@ Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know
 OUT_OF_TIME = "I ran out of time looking that up. Try a narrower question, like one mission by name."
 
 def _can_use_tools(name: str) -> bool:
+    if settings.split_model(name)[0] != settings.LOCAL:
+        return True                        # every connected cloud provider's chat models call tools
     try:
         return "tools" in (_ollama().show(name).capabilities or [])
     except Exception:
@@ -80,16 +83,25 @@ def crew(name: str, size: str | None = None) -> str:
     return "pi" if billions and billions >= BIG_MODEL else "assistant"
 
 def catalog() -> list[dict]:
-    """Installed Ollama models that can call tools (the assistant can't work without them), default first, each
-    with its family and crew so the chat panel can send in the right researcher. Raises if Ollama is unreachable."""
+    """Models that can call tools (the assistant can't work without them), default first, each with its family and
+    crew so the chat panel can send in the right researcher: Ollama's installed ones, then each connected cloud
+    provider's. Raises if Ollama is unreachable and no cloud provider is connected."""
     default = default_model()
     found = []
-    for m in sorted(_ollama().list().models, key=lambda m: m.model):
-        if m.model != default and not _can_use_tools(m.model):
-            continue
-        details = getattr(m, "details", None)
-        size, family = getattr(details, "parameter_size", None), getattr(details, "family", None)
-        found.append({"name": m.model, "family": family or m.model.split(":")[0], "crew": crew(m.model, size)})
+    try:
+        for m in sorted(_ollama().list().models, key=lambda m: m.model):
+            if m.model != default and not _can_use_tools(m.model):
+                continue
+            details = getattr(m, "details", None)
+            size, family = getattr(details, "parameter_size", None), getattr(details, "family", None)
+            found.append({"name": m.model, "family": family or m.model.split(":")[0], "crew": crew(m.model, size)})
+    except Exception:
+        if not settings.cloud_providers():
+            raise
+    for pid in settings.cloud_providers():
+        for name in providers.models(pid)[0]:
+            ref = settings.model_ref(pid, name)
+            found.append({"name": ref, "family": providers.family(name), "crew": crew(ref)})
     return sorted(found, key=lambda c: c["name"] != default)
 
 def models() -> list[str]:

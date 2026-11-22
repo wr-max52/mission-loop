@@ -5,7 +5,7 @@ shows briefs and articles, and records human decisions (approve, reject, publish
 runs agents itself. Work happens in the loop, which the UI can start, stop and wake. Bound to
 127.0.0.1 only; nothing here is reachable from another machine.
 """
-import hashlib, json, os, re, subprocess, sys, threading, time
+import asyncio, concurrent.futures, hashlib, json, os, re, subprocess, sys, threading, time
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -17,9 +17,9 @@ from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
 import activity, agents, clock, orchestrator, settings, stopping, store
-from agents import llm
+from agents import llm, providers
 from agents import bluesky, f916, github, publisher
-from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, slugify, SITE_FOLDERS
+from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
 from render import CSS, brief_html, epic_pill
 from icons import icon, CSS as ICON_CSS
 import flowchart, i18n
@@ -33,6 +33,7 @@ LABELS = {
     State.QUEUED: "Queued", State.RESEARCHING: "Researching", State.BRIEF_READY: "Brief ready",
     State.AWAITING_COMMENTS: "Waiting for comments", State.WRITING: "Writing",
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
+    State.COMBINED: "Combined",
 }
 MESSAGES = {
     "approved": "Brief approved.",
@@ -41,6 +42,8 @@ MESSAGES = {
     "requeued": "Requeued.",
     "pushed": "Pushed through to review.",
     "added": "Mission added.",
+    "added_next": "Mission added. Research Assistant takes it next.",
+    "added_started": "Mission added. Loop started.",
     "inspired": "Inspiration saved.",
     "uninspired": "Inspiration cleared. Mission finder and Theorist off.",
     "thinking": "Theorist runs next.",
@@ -52,6 +55,10 @@ MESSAGES = {
     "epic_moved": "Missions moved.",
     "epic_rejected": "Epic rejected. Missions moved back.",
     "epic_renamed": "Epic renamed.",
+    "combined": "Combine approved. Combined mission queued.",
+    "combine_rejected": "Combine rejected.",
+    "linked": "Missions linked.",
+    "unlinked": "Link removed.",
     "site_url_saved": "Site address saved.",
     "site_url_cleared": "Site address cleared.",
     "bluesky_on": "Bluesky connected.",
@@ -65,9 +72,14 @@ MESSAGES = {
     "language_saved": "Language saved.",
     "chat_color_saved": "Chat colour saved.",
     "ollama_saved": "Ollama address saved.",
+    "ollama_connected": "Ollama connected. Models assigned.",
+    "ollama_ready": "Ollama connected. Press play to start.",
+    "provider_on": "Provider connected.",
+    "provider_off": "Provider disconnected. Key deleted.",
     "worker_saved": "Model saved.",
     "worker_on": "Worker on.",
     "worker_off": "Worker off.",
+    "worker_count": "Worker count saved.",
     "joined": "Joined 1F916.",
     "github_connected": "GitHub connected. Choose a repo.",
     "github_linked": "Repo linked and site pushed. Pages can take a few minutes.",
@@ -80,6 +92,8 @@ MESSAGES = {
     "republish_off": "Publishing now.",
 }
 ERRORS = {
+    "combine": "Can't combine now: a mission is in use or has moved on.",
+    "link": "Can't link those two: at least one must be unpublished.",
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
     "language": "Pick a language from the list.",
@@ -96,9 +110,12 @@ ERRORS = {
     "site_url": "Enter a full http(s):// address, or leave it empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
     "worker_model": "Pick a model from the list.",
+    "provider": "Unknown provider.",
+    "ollama_empty": "Ollama has no models. Pull one first (ollama pull <model>).",
     "ollama_host": "Enter a full http(s):// address, or leave it empty.",
     "server": "Enter a full http(s):// address, or leave it empty.",
     "worker_last": "At least one worker must stay on.",
+    "worker_count": "Enter a whole number from 1 to {max}.",
     "ollama": "Can't reach Ollama. Start it and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
     "github_app": "That isn't a valid OAuth client ID.",
@@ -111,7 +128,8 @@ def loop_running() -> bool:
     return orchestrator.loop_running()
 
 def running_now() -> list[dict]:
-    """Every agent working this moment, at most one per worker. The record only counts while the loop is alive."""
+    """Every agent working this moment, at most one per seat (a copy of a worker). The record only counts while the
+    loop is alive."""
     return activity.working() if loop_running() else []
 
 def start_loop(every: float) -> None:
@@ -183,25 +201,37 @@ def next_step(m: Mission) -> str:
                    else _("Stopped after {n} research attempts"))
         return stopped.format(n=m.max_attempts)
     if m.state == State.RESEARCHING:
-        doing = _("Writing brief") if m.gathered or m.interrupted_brief else _("Finding sources")
-        try_ = m.attempts if m.gathered or m.interrupted_brief else m.attempts + 1
+        if m.brief_sources:
+            doing = _("Writing claims")
+        elif m.brief_pick:
+            doing = _("Checking sources")
+        elif m.gathered or m.interrupted_brief:
+            doing = _("Writing brief")
+        else:
+            doing = _("Resuming search") if m.search_paused else _("Finding sources")
+        same = m.gathered or m.interrupted_brief or m.search_paused   # the attempt already counted carries on
+        try_ = m.attempts if same else m.attempts + 1
         attempt = _("attempt {n} of {total}").format(n=try_, total=m.max_attempts)
         return f"{doing} · {attempt}" if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
         attempt = _("attempt {n} of {total}").format(n=m.write_attempts + 1, total=m.max_attempts)
-        return f'{_("Writing")} · {attempt}'
+        done = (" · " + _("{n} of {total} sections").format(n=len(m.article_draft.sections),
+                                                           total=len(m.article_draft.plan.sections))
+                if m.article_draft else "")
+        return f'{_("Writing")} · {attempt}{done}'
     if m.state == State.DONE and m.publish_requests:
         return _("To {places}").format(places=", ".join(_(orchestrator.channel_name(k)) for k in m.publish_requests))
     return ""
 
 def in_progress(m: Mission) -> bool:
-    """On the Missions page: everything not published yet, and published articles a human asked to publish again."""
-    return not needs_you(m) and (m.state != State.DONE or bool(m.publish_requests))
+    """On the Missions page: everything not published yet, and published articles a human asked to publish again.
+    A mission combined into another is not: the bigger one carries its work on."""
+    return not needs_you(m) and m.state != State.COMBINED and (m.state != State.DONE or bool(m.publish_requests))
 
 def flow_rank(m: Mission) -> int:
     """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
     order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3,
-             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8}
+             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9}
     return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
 def _brief(slug: str) -> ResearchBrief | None:
@@ -222,6 +252,11 @@ def agent_name(agent: str) -> str:
 
 def worker_name(worker: str) -> str:
     return _(settings.WORKERS[worker])
+
+def seat_name(seat: str) -> str:
+    """A worker copy's name in the UI's language ("Research Assistant 2"); "" for a seat that is no worker's."""
+    worker, _sep, n = seat.partition("-")
+    return f"{_(settings.WORKERS[worker])} {n}".strip() if worker in settings.WORKERS else ""
 
 def elapsed(since: float) -> str:
     seconds = max(0, int(time.time() - since))
@@ -269,6 +304,10 @@ form.loop-ctl button.play:disabled { opacity:.55; cursor:default; }
 form.loop-ctl button.play .ico { width:1rem; height:1rem; }
 form.loop-ctl button.play .ico svg { stroke-width:2.6; }
 form.loop-ctl button.play:not(.on):not(.stopping) .ico svg { fill:currentColor; }   /* a solid play triangle */
+form.loop-ctl button.play.off { background:#237a35; border-color:#237a35; color:#fff; animation:go-pulse 2s ease-out infinite; }
+form.loop-ctl button.play.off:hover { background:#2b8a3e; border-color:#2b8a3e; animation:none; }
+@keyframes go-pulse { 0% { box-shadow:0 0 0 0 rgba(47,158,68,.6); } 70%, 100% { box-shadow:0 0 0 .55rem rgba(47,158,68,0); } }
+@media (prefers-reduced-motion: reduce) { form.loop-ctl button.play.off { animation:none; } }
 .status { display:inline-flex; align-items:center; gap:.4rem;
           color:var(--muted); font-size:.9rem; font-weight:600; }
 .status.on { color:var(--fg); }
@@ -298,6 +337,37 @@ h3.stage .ico { color:var(--muted); }
 .card { display:block; border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin-bottom:.6rem;
         text-decoration:none; color:var(--fg); }
 .card:hover { border-color:var(--muted); }
+button.card.add-mission { display:flex; align-items:center; justify-content:center; gap:.55rem; width:100%;
+  margin:-.6rem 0 1.5rem; padding:.7rem 1rem; font:inherit; font-size:1.05rem; font-weight:700; cursor:pointer;
+  color:var(--muted); background:var(--quote); border:2px dashed var(--rule); border-radius:10px; }
+button.card.add-mission:hover { color:var(--fg); border-color:var(--muted); border-style:solid; }
+button.card.add-mission .ico { width:1.25rem; height:1.25rem; }
+button.card.add-mission .ico:first-child svg { stroke-width:3; }
+dialog.wizard { --tone:#237a35; width:min(36rem, calc(100vw - 2rem)); box-sizing:border-box; padding:1.2rem 1.4rem;
+  border:1px solid var(--rule); border-radius:12px; background:var(--bg); color:var(--fg); }
+dialog.wizard input:focus-visible, dialog.wizard textarea:focus-visible { outline:2px solid var(--tone); outline-offset:-1px;
+  border-color:var(--tone); }
+dialog.wizard button:focus-visible { outline:2px solid var(--tone); outline-offset:2px; }
+dialog.wizard::backdrop { background:rgba(0,0,0,.45); }
+dialog.wizard:focus { outline:none; }
+dialog.wizard [hidden] { display:none; }
+dialog.wizard header { display:flex; justify-content:space-between; align-items:center; }
+dialog.wizard header strong { display:flex; align-items:center; gap:.45rem; font:700 1.2rem Georgia, serif; }
+dialog.wizard .wiz-close { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
+dialog.wizard fieldset { border:none; padding:0; margin:0; min-width:0; }
+dialog.wizard legend { font-weight:700; margin-bottom:.4rem; padding:0; }
+dialog.wizard input, dialog.wizard textarea { width:100%; box-sizing:border-box; }
+.wiz-dots { display:flex; gap:.4rem; list-style:none; padding:0; margin:.8rem 0 1rem; }
+.wiz-dots li { flex:1; height:4px; border-radius:2px; background:var(--rule); }
+.wiz-dots li.on, .wiz-dots li.done { background:var(--tone); }
+.wiz-nav { display:flex; justify-content:flex-end; gap:.5rem; margin:1.2rem 0 0; }
+.wiz-nav .wiz-back { margin-right:auto; }
+.wiz-nav .wiz-add:not([hidden]) { display:contents; }
+.wiz-nav .wiz-go { display:inline-flex; align-items:center; gap:.35rem; color:var(--tone); border-color:var(--tone); }
+.wiz-nav .wiz-go:hover { background:var(--tone); color:#fff; }
+.wiz-nav .wiz-go .ico { width:.85rem; height:.85rem; }
+.wiz-nav .wiz-go .ico svg { fill:currentColor; }
+.wiz-sum { overflow-wrap:anywhere; }
 .card.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
 .card.active .sub { color:var(--fg); }
 .card .row { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; }
@@ -395,9 +465,11 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
               display:flex; flex-direction:column; gap:.6rem; padding:1rem; background:var(--bg);
               border-right:1px solid var(--rule); box-shadow:4px 0 18px rgba(0,0,0,.12); }
 .chat-panel[hidden] { display:none; }
-.chat-panel header { display:flex; justify-content:space-between; align-items:center; }
-.chat-panel header strong { font:700 1.2rem Georgia, serif; }
-.chat-panel header button { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
+.chat-panel header { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+.chat-panel header strong { font:700 1.2rem Georgia, serif; white-space:nowrap; }
+.chat-panel header span { display:flex; gap:.3rem; flex:none; }
+.chat-panel header button { padding:.2rem .5rem; font-size:.85rem; line-height:1.3; }
+.chat-panel header #chat-close { padding:.2rem .6rem; font-size:1.1rem; line-height:1; }
 .chat-panel .model { display:flex; gap:.5rem; align-items:center; margin:0; }
 .chat-panel .model select { flex:1; min-width:0; }
 .chat-panel .hint { margin:0; }
@@ -442,6 +514,19 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .worker ul li { margin:.15rem 0; }
 .worker .note { font-size:.85rem; margin:.2rem 0 .6rem; }
 .worker .grow { flex:1; }
+.stepper { display:flex; align-items:center; flex-wrap:wrap; gap:.3rem .7rem; }
+.stepper .steps { display:inline-flex; align-items:stretch; border:1px solid var(--rule); border-radius:8px;
+                  overflow:hidden; background:var(--bg); }
+.stepper .steps:focus-within { border-color:var(--muted); }
+.stepper button { border:0; border-radius:0; padding:.3rem .8rem; font-size:1.1rem; line-height:1; min-width:2.4rem; }
+.stepper button:hover:not(:disabled) { background:var(--quote); }
+.stepper button:disabled { color:var(--muted); opacity:.45; cursor:default; }
+.stepper input[type=number] { width:3.2rem; padding:.3rem 0; border:0; border-radius:0; text-align:center;
+                              font-weight:700; border-left:1px solid var(--rule); border-right:1px solid var(--rule);
+                              -moz-appearance:textfield; appearance:textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+.stepper input:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.stepper .hint { font-size:.85rem; }
 .crew { position:relative; height:116px; margin:0 -1rem; border-top:1px solid var(--rule);
         background:linear-gradient(var(--quote), var(--quote)) bottom / 100% 9px no-repeat; }
 .crew canvas.lab-stage { bottom:0; height:116px; }
@@ -458,6 +543,8 @@ a.back { font-weight:600; text-decoration:none; }
 .card.pub .topic { color:var(--fg); }
 ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
 ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
+li.link-row form.inline { display:inline-flex; margin:0 0 0 .4rem; vertical-align:middle; }
+p.objective { white-space:pre-line; }
 form.republish { display:flex; flex-wrap:wrap; gap:.3rem 1rem; align-items:center; margin:.6rem 0 0;
                  padding-top:.6rem; border-top:1px solid var(--rule); }
 form.republish button { margin-left:auto; }
@@ -578,7 +665,7 @@ def loop_button() -> str:
     else:
         action, ico, text, dot = "stop", "pause", _("Running"), "on"
         title = _("Pause the loop")
-    button = (f'<button class="play {dot}" title="{escape(title)}" aria-label="{escape(title)}"'
+    button = (f'<button class="play {dot or "off"}" title="{escape(title)}" aria-label="{escape(title)}"'
               f' onclick="this.form.back.value = location.pathname"{"" if action else " disabled"}>{icon(ico)}</button>')
     return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
             f'<input type="hidden" name="back" value="/"><input type="hidden" name="every" value="{every:g}">'
@@ -608,9 +695,9 @@ def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
     script = f"""<script>
 let sig = "{signature()}";
 async function check() {{
-  const busy = [...document.querySelectorAll("textarea, input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
+  const busy = [...document.querySelectorAll("textarea:not(#chat-q), input[type=text]")].some(e => e.value.trim() && e.value !== e.defaultValue)
             ||["TEXTAREA", "INPUT"].includes(document.activeElement.tagName)
-            || document.body.classList.contains("chat-open");
+            || document.body.classList.contains("chat-open") || !!document.querySelector("dialog[open]");
   if (busy || document.hidden) return;
   try {{ const s = await (await fetch("/api/signature")).text(); if (s !== sig && await refresh()) sig = s; }} catch (e) {{}}
 }}
@@ -652,7 +739,8 @@ async function refresh() {{
     return HTMLResponse(html)
 
 JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
-              "No answer. Is the UI still running?", "{n} parked here"]
+              "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
+              "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed"]
 
 def js_strings() -> str:
     """The few strings the page's scripts show, in the UI's language (window.I18N; English needs none)."""
@@ -664,7 +752,7 @@ def js_strings() -> str:
 def flash(request: Request) -> str:
     done, err = request.query_params.get("done"), request.query_params.get("error")
     if err in ERRORS:
-        return f'<div class="flash err">{escape(_(ERRORS[err]))}</div>'
+        return f'<div class="flash err">{escape(_(ERRORS[err]).replace("{max}", str(settings.MAX_COUNT)))}</div>'
     if done in MESSAGES:
         return f'<div class="flash">{escape(_(MESSAGES[done]))}</div>'
     return ""
@@ -684,9 +772,9 @@ def doing(e: dict) -> str:
             f'<a href="/m/{quote(e["slug"])}">{escape(m.topic if m else e["slug"])}</a>{since}')
 
 def flow_status(now: list[dict], running: bool) -> str:
-    """The lines under the strip: who is working on what, and for how long. With both workers busy,
+    """The lines under the strip: who is working on what, and for how long. With more than one worker busy,
     one line each, named."""
-    lines = [(f'<span class="who">{worker_name(e["worker"])}</span> ' if e["worker"] in settings.WORKERS
+    lines = [(f'<span class="who">{seat_name(e["worker"])}</span> ' if seat_name(e["worker"])
               and len(now) > 1 else "") + doing(e) for e in now]
     return "<br>".join(lines) or (_("Idle") if running else "")   # the loop panel already says it is off
 
@@ -705,7 +793,7 @@ def flow_state() -> dict:
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
                      "name": agent_name(e["agent"])} for e in now],
-        "waiting": {"epic_review": len(store.all_epics("proposed")),
+        "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - writing, "article_check": writing},
@@ -720,7 +808,7 @@ def flow_strip(state: dict) -> str:
     always drawn; with the loop off nothing on it is lit. assets/flow.js keeps it current without reloading the
     page (and stacks it on a narrow screen), and the pixel researchers stand on its tiles."""
     auto = settings.auto_mode()
-    steps, lit = flow_steps(auto), {e["step"]: e["worker"] for e in state["working"]}
+    steps, lit = flow_steps(auto), {e["step"]: settings.seat_worker(e["worker"]) for e in state["working"]}
     track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you", auto=auto)
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
@@ -780,6 +868,14 @@ def theorist_notes() -> str:
         m = store.get_mission(last["mission"]) if last.get("mission") else None
         if m:
             made.append(f'<li>{_("Proposed mission")} <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a></li>')
+        c = store.get_combine(last["combine"]) if last.get("combine") else None
+        if c:
+            state = {"proposed": _("waiting for you"), "approved": _("approved"),
+                     "rejected": _("rejected")}.get(c.status, c.status)
+            made.append(f'<li>{_("Proposed combining {n} missions into").format(n=len(c.members))} '
+                        f'<strong>{escape(c.topic)}</strong> ({state})</li>')
+        for a, b in last.get("links", []):
+            made.append(f'<li>{_("Linked")} {mission_link(a)} · {mission_link(b)}</li>')
         if made:
             parts.append(f"<ul>{''.join(made)}</ul>")
         if last.get("notes"):
@@ -906,7 +1002,7 @@ def publish_form(m: Mission, rows: list[dict], back: str) -> str:
 def places_html(m: Mission, rows: list[dict]) -> str:
     return "".join(f'<li><strong>{escape(r["name"])}</strong>: {r["status"]}</li>' for r in rows)
 
-# ---------- settings: the two workers and the LLM connection ----------
+# ---------- settings: the two workers and the model providers ----------
 
 WORKER_BLURBS = {
     "assistant": "Small model. Searches and reads.",
@@ -925,19 +1021,49 @@ ROLE_STEPS = {                             # where each worker's model is used; 
 def gb(size: int) -> str:
     return f"{size / 1e9:.1f} GB" if size >= 1e8 else f"{size / 1e6:.0f} MB"
 
-def model_options(current: str, conn: dict) -> str:
-    names = [m["name"] for m in conn["models"]]
-    opts = [f'<option value="{escape(m["name"], quote=True)}"{" selected" if m["name"] == current else ""}>'
-            f'{escape(m["name"])} · {gb(m["size"])}{" · " + _("loaded") if m["name"] in conn["loaded"] else ""}</option>'
-            for m in conn["models"]]
+def model_options(current: str, conn: dict, models: list[dict] | None = None) -> str:
+    """The worker's model list: Ollama's installed models, then each connected cloud provider's, grouped."""
+    models = models if models is not None else llm.catalog(conn)
+    groups: dict[str, list[str]] = {}
+    for m in models:
+        bits = [escape(m["name"])]
+        if m["size"]:
+            bits.append(gb(m["size"]))
+        if m["loaded"]:
+            bits.append(_("loaded"))
+        groups.setdefault(m["provider"], []).append(
+            f'<option value="{escape(m["ref"], quote=True)}"{" selected" if m["ref"] == current else ""}>'
+            f'{" · ".join(bits)}</option>')
+    opts = [f'<optgroup label="{escape(settings.PROVIDERS[pid]["name"], quote=True)}">{"".join(o)}</optgroup>'
+            for pid, o in groups.items()]
     if not current:                        # nothing chosen on this machine yet: the code has no default
         opts.insert(0, f'<option value="" selected disabled>{_("Choose a model")}</option>')
-    elif current not in names:             # saved before, or Ollama is closed: still show what it is set to
-        missing = _("not pulled") if conn["ok"] else _("Ollama not reachable")
+    elif current not in {m["ref"] for m in models}:   # saved before, or its provider is closed: still show it
+        pid, name = settings.split_model(current)
+        if pid == settings.LOCAL:
+            missing = _("not pulled") if conn["ok"] else _("Ollama not reachable")
+        else:
+            prov = settings.PROVIDERS[pid]['name']
+            missing = (_("{provider} not connected").format(provider=prov) if not settings.provider_on(pid)
+                       else _("not offered by {provider}").format(provider=prov))
         opts.insert(0, f'<option value="{escape(current, quote=True)}" selected>{escape(current)} ({missing})</option>')
     return "".join(opts)
 
-def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
+def count_stepper(worker: str) -> str:
+    """How many of this worker run at once: − and + (assets: WORKER_COUNT_JS, which waits for the clicks to settle
+    before saving) or a number typed in."""
+    n, top = settings.worker_count(worker), settings.MAX_COUNT
+    hint = _("each on its own mission") if n > 1 else ""
+    name = worker_name(worker)
+    fewer = escape(_("One fewer {worker}").format(worker=name), quote=True)
+    more = escape(_("One more {worker}").format(worker=name), quote=True)
+    return f"""<label for="{worker}_count">{_("Copies")}</label>
+  <div class="stepper">
+    <span class="steps"><button type="button" data-step="-1" aria-label="{fewer}"{" disabled" if n <= 1 else ""}>&minus;</button><input type="number" id="{worker}_count" name="count" value="{n}" min="1" max="{top}" step="1" inputmode="numeric" onchange="this.form.requestSubmit()"><button type="button" data-step="1" aria-label="{more}"{" disabled" if n >= top else ""}>+</button></span>
+    <span class="hint">{hint}</span>
+  </div>"""
+
+def worker_card(worker: str, conn: dict, now: list[dict], models: list[dict] | None = None) -> str:
     on, model, other = settings.worker_on(worker), settings.worker_model(worker), settings.other(worker)
     name, other_name = worker_name(worker), worker_name(other)
     steps = "".join(f"<li>{_(s)}</li>" for s in ROLE_STEPS[worker])
@@ -949,8 +1075,10 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     else:
         extra = "" if settings.worker_on(other) else f'<li>{_("The {other}\'s steps, while it\'s off").format(other=other_name)}</li>'
         steps += extra
-        busy = next((e for e in now if e["worker"] == worker), None)
-        note = f'<p class="note">{_("Now:")} {doing(busy)}</p>' if busy else ""
+        busy = [e for e in now if settings.seat_worker(e["worker"]) == worker]
+        many = settings.worker_count(worker) > 1
+        note = "".join(f'<p class="note">{_("Now")}{" (" + escape(seat_name(e["worker"])) + ")" if many else ""}: '
+                       f'{doing(e)}</p>' for e in busy)
     checked = " checked" if on else ""
     crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
@@ -959,7 +1087,8 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
     <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{checked} onchange="this.form.requestSubmit()" aria-label="{escape(_("{name} on").format(name=name), quote=True)}"></label></div>
   <p class="tagline hint">{_(WORKER_BLURBS[worker])}</p>
   <label for="{worker}_model">{_("Model")}</label>
-  <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn)}</select>
+  <select id="{worker}_model" name="model" onchange="this.form.requestSubmit()">{model_options(model, conn, models)}</select>
+  {count_stepper(worker)}
   <label>{_("Steps")}</label>
   <ul>{steps}</ul>
   {note}<div class="grow"></div>
@@ -967,7 +1096,7 @@ def worker_card(worker: str, conn: dict, now: list[dict]) -> str:
   {crew}
 </form>"""
 
-def workers_section(conn: dict) -> str:
+def workers_section(conn: dict, models: list[dict] | None = None) -> str:
     now = running_now()
     if settings.missing_models():          # the code has no models of its own: this machine picks them
         lead = f'<strong>{_("Choose a model for each worker; the loop won\'t start until you do.")}</strong>'
@@ -975,10 +1104,32 @@ def workers_section(conn: dict) -> str:
         lead = ""
     else:
         w = next(w for w in settings.WORKERS if settings.worker_on(w))
-        lead = _("Only the {worker} is on. It runs every step, one at a time.").format(worker=worker_name(w))
-    cards = "".join(worker_card(w, conn, now) for w in settings.WORKERS)
+        n = settings.worker_count(w)
+        lead = (_("Only the {worker} is on. It runs every step, one at a time.") if n == 1 else
+                _("Only the {worker} is on. It runs every step, {n} at a time.")).format(worker=worker_name(w), n=n)
+    models = models if models is not None else llm.catalog(conn)
+    cards = "".join(worker_card(w, conn, now, models) for w in settings.WORKERS)
     return (f'{heading("people", _("Workers"))}{f"<p>{lead}</p>" if lead else ""}'
-            f'<div class="workers">{cards}</div>')
+            f'<div class="workers">{cards}</div>{WORKER_COUNT_JS}')
+
+# The − and + beside a worker's count: each click changes the number at once and the form saves once the clicks
+# stop for a moment, so three quick clicks are one save, not three page loads.
+WORKER_COUNT_JS = """<script>
+document.querySelectorAll(".stepper").forEach(box => {
+  const input = box.querySelector("input"), lo = +input.min, hi = +input.max;
+  const buttons = box.querySelectorAll("button[data-step]");
+  let timer = null;
+  const show = n => buttons.forEach(b => { b.disabled = +b.dataset.step < 0 ? n <= lo : n >= hi; });
+  buttons.forEach(b => b.addEventListener("click", () => {
+    const n = Math.max(lo, Math.min(hi, (parseInt(input.value, 10) || lo) + +b.dataset.step));
+    if (n === +input.value) return;
+    input.value = n; show(n);
+    clearTimeout(timer);
+    timer = setTimeout(() => input.form.requestSubmit(), 700);
+  }));
+  input.addEventListener("input", () => show(parseInt(input.value, 10) || lo));
+});
+</script>"""
 
 def ollama_form() -> str:
     saved, env = settings.saved().get("ollama_host", ""), settings._env("OLLAMA_HOST")
@@ -988,26 +1139,98 @@ def ollama_form() -> str:
   <button>{_("Save")}</button><span class="hint">{_("Empty uses {address}").format(address=escape(env or settings.OLLAMA_DEFAULT))}</span>
 </form>"""
 
-def connection_section(conn: dict) -> str:
-    host = escape(conn["host"])
-    if not conn["ok"]:
-        return (f'{heading("plug", _("LLM connection"))}<p>'
-                + _("Can't reach Ollama at {host} ({error}).").format(host=f"<code>{host}</code>",
-                                                                       error=escape(conn["error"]))
-                + "</p>" + ollama_form())
+def model_users() -> dict[str, list[str]]:
+    """Model ref -> the workers that are on and use it."""
     users: dict[str, list[str]] = {}
     for w in settings.WORKERS:
         if settings.worker_on(w):
             users.setdefault(settings.worker_model(w), []).append(worker_name(w))
+    return users
+
+def ollama_card(conn: dict) -> str:
+    host = escape(conn["host"])
+    connect = (f'<form method="post" action="/settings/ollama-connect" class="actions"><button class="primary">'
+               f'{_("Connect Ollama")}</button> <span class="hint">{_("Gives each worker without a model one of its models.")}'
+               f'</span></form>')
+    head = (f'<div class="pubbox channel"><div class="head"><h3>Ollama</h3><span class="badge">{_("On this machine")}'
+            f'</span></div>')
+    if not conn["ok"]:
+        link = '<a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com</a>'
+        return (f'{head}<p>{_("Not reachable at {host} ({error}).").format(host=f"<code>{host}</code>", error=escape(conn["error"]))} '
+                f'{_("Install it from {link}, pull a model, then connect.").format(link=link)}</p>{connect}{ollama_form()}</div>')
+    users = model_users()
     rows = "".join(
         f'<tr><td><code>{escape(m["name"])}</code></td><td class="size">{gb(m["size"])}</td>'
         f'<td class="size">{gb(conn["loaded"][m["name"]]) if m["name"] in conn["loaded"] else ""}</td>'
         f'<td>{", ".join(users.get(m["name"], []))}</td></tr>' for m in conn["models"])
     count = len(conn["models"])
-    return (f'{heading("plug", _("LLM connection"))}<p>{_("Ollama at {host}").format(host=f"<code>{host}</code>")} · '
-            f'{_("connected")} · {_n("{n} model", "{n} models", count)}</p>{ollama_form()}'
-            f'<table class="events models"><tr><td class="when">{_("Model")}</td><td class="when">{_("Size")}</td>'
-            f'<td class="when">{_("In memory")}</td><td class="when">{_("Used by")}</td></tr>{rows}</table>')
+    table = (f'<table class="events models"><tr><td class="when">{_("Model")}</td><td class="when">{_("Size")}</td>'
+             f'<td class="when">{_("In memory")}</td><td class="when">{_("Used by")}</td></tr>{rows}</table>' if rows else "")
+    lead = (_("Connected at {host}").format(host=f"<code>{host}</code>") + " · " + _n("{n} model", "{n} models", count))
+    return f'{head}<p>{lead}</p>{connect if settings.missing_models() else ""}{ollama_form()}{table}</div>'
+
+def cloud_card(pid: str) -> str:
+    spec = settings.PROVIDERS[pid]
+    names, error = providers.models(pid)
+    users = model_users()
+    used = sorted({w for ref, ws in users.items() if settings.split_model(ref)[0] == pid for w in ws})
+    if error:
+        status = _("Not answering: {error}").format(error=escape(error))
+    else:
+        status = _("Connected") + " · " + _n("{n} model", "{n} models", len(names))
+    if pid == "custom":
+        status += f" · <code>{escape(settings.provider_url(pid))}</code>"
+    if used:
+        status += " · " + _("used by {workers}").format(workers=", ".join(used))
+    if settings.provider_saved(pid):
+        remove = (f'<form method="post" action="/settings/provider"><input type="hidden" name="do" value="forget">'
+                  f'<input type="hidden" name="provider" value="{pid}"><button>'
+                  f'{_("Disconnect {provider}").format(provider=escape(spec["name"]))}</button></form>')
+    else:
+        remove = f'<p class="hint">{_("Set in .env ({key}).").format(key=escape(spec["key_env"]))}</p>'
+    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(spec["name"])}</h3><span class="badge">{_("Cloud")}</span>'
+            f'</div><p>{status}</p>{remove}</div>')
+
+def add_provider_forms() -> str:
+    out = []
+    for pid in settings.PROVIDERS:
+        if pid == settings.LOCAL or settings.provider_on(pid):
+            continue
+        spec = settings.PROVIDERS[pid]
+        get_key = (" " + _("Get a key at {link}.").format(
+            link=f'<a href="{escape(spec["keys"], quote=True)}" target="_blank" rel="noopener">'
+                 f'{escape(spec["keys"].split("//")[-1].split("/")[0])}</a>') if spec["keys"] else "")
+        env = " " + _("Or set {key} in .env.").format(key=f'<code>{escape(spec["key_env"])}</code>') if spec["key_env"] else ""
+        url = ""
+        if pid == "custom":
+            url = f"""<label for="url_{pid}">{_("Address")} <span class="hint">{_("API base URL, before /chat/completions")}</span></label>
+  <input type="text" id="url_{pid}" name="url" required maxlength="300" placeholder="http://127.0.0.1:1234/v1">"""
+        key_label = _("API key") + (f' <span class="hint">{_("optional")}</span>' if spec.get("optional_key") else "")
+        required = "" if spec.get("optional_key") else " required"
+        out.append(f"""<details class="pubbox add"><summary><strong>{escape(spec["name"])}</strong> · {escape(_(spec["blurb"]))}</summary>
+<p>{_("Billed per use by {provider}.").format(provider=escape(spec["name"]))}{get_key} {_("Key saved to data/providers.json.")}{env}</p>
+<form method="post" action="/settings/provider">
+  <input type="hidden" name="do" value="connect"><input type="hidden" name="provider" value="{pid}">
+  {url}
+  <label for="key_{pid}">{key_label}</label>
+  <input type="password" id="key_{pid}" name="key"{required} maxlength="500" autocomplete="off">
+  <p><button>{_("Connect")}</button></p>
+</form></details>""")
+    return "".join(out)
+
+def connection_section(conn: dict) -> str:
+    cards = ollama_card(conn) + "".join(cloud_card(p) for p in settings.cloud_providers())
+    return (f'{heading("plug", _("Model providers"), anchor="providers")}'
+            f'{cards}<h3 class="sub">{_("Add a provider")}</h3>{add_provider_forms()}')
+
+def ollama_picks(conn: dict) -> dict[str, str]:
+    """Which installed model each worker without one gets: the biggest to the Principal Investigator (writing), the
+    smallest to the Research Assistant (legwork). Chosen from what this machine has; the code names none."""
+    by_size = sorted(conn["models"], key=lambda m: (m["size"], m["name"]))
+    if not by_size:
+        return {}
+    pick = {"pi": by_size[-1]["name"], "assistant": by_size[0]["name"]}
+    return {w: pick[w] for w in settings.WORKERS if not settings.worker_model(w)}
 
 async def save_ollama(request: Request) -> Response:
     if not same_origin(request):
@@ -1018,6 +1241,50 @@ async def save_ollama(request: Request) -> Response:
         return go("/settings", error="ollama_host")
     return go("/settings", done="ollama_saved")
 
+async def connect_ollama(request: Request) -> Response:
+    """One click: is Ollama there, and does every worker have a model? Fills in the workers that have none."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    conn = await run_in_threadpool(llm.connection, 5)
+    if not conn["ok"]:
+        return go("/settings", error="ollama")
+    if not conn["models"]:
+        return go("/settings", error="ollama_empty")
+    picks = ollama_picks(conn)
+    for worker, model in picks.items():
+        settings.set_worker(worker, model, settings.worker_on(worker))
+    return go("/settings", done="ollama_connected" if picks else "ollama_ready")
+
+async def save_provider(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    pid, do = str(form.get("provider") or ""), str(form.get("do") or "")
+    if pid not in settings.PROVIDERS or pid == settings.LOCAL:
+        return go("/settings", error="provider")
+    name = settings.PROVIDERS[pid]["name"]
+    if do == "forget":
+        settings.forget_provider(pid)
+        providers.forget_models(pid)
+        return go("/settings", done="provider_off")
+    key, url = str(form.get("key") or "").strip()[:500], str(form.get("url") or "").strip()[:300]
+    try:
+        url = settings._http_address(url) if url else ""
+        if not key and not settings.PROVIDERS[pid].get("optional_key"):
+            raise ValueError(_("paste the API key"))
+        if any(c.isspace() for c in key):
+            raise ValueError(_("that doesn't look like an API key"))
+        if not url and not settings.PROVIDERS[pid]["url"]:
+            raise ValueError(_("enter the server address"))
+        found = await run_in_threadpool(providers.list_models, pid, key, url or settings.PROVIDERS[pid]["url"])
+        settings.save_provider(pid, key, url)
+    except (ValueError, providers.ProviderError) as e:
+        return page(_("Settings"), settings_body(request, _("{provider} not connected: {error}").format(provider=name, error=e)))
+    providers.forget_models(pid)
+    if not found:
+        return page(_("Settings"), settings_body(request, _("{provider} connected, but offers no chat models for this key.").format(provider=name)))
+    return go("/settings", done="provider_on")
+
 async def save_worker(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -1026,12 +1293,26 @@ async def save_worker(request: Request) -> Response:
     model = str(form.get("model") or "").strip()[:200]
     if worker not in settings.WORKERS:
         return go("/settings", error="worker_model")
-    was_on = settings.worker_on(worker)
-    if model != settings.worker_model(worker):
-        conn = await run_in_threadpool(llm.connection)
-        if not conn["ok"]:
-            return go("/settings", error="ollama")
-        if model not in {m["name"] for m in conn["models"]}:
+    was_on, was_count, was_model = settings.worker_on(worker), settings.worker_count(worker), settings.worker_model(worker)
+    if form.get("count") is not None:       # the card's stepper (saved on its own); a form without one leaves it be
+        try:
+            settings.set_worker_count(worker, int(str(form.get("count")).strip()))
+        except ValueError:
+            return go("/settings", error="worker_count")
+    if model == was_model and on == was_on:  # only the count changed: no model to check yet is fine
+        return go("/settings", done="worker_count" if settings.worker_count(worker) != was_count else "worker_saved")
+    if model != was_model:
+        pid = settings.split_model(model)[0]
+        if pid == settings.LOCAL:
+            conn = await run_in_threadpool(llm.connection)
+            if not conn["ok"]:
+                return go("/settings", error="ollama")
+            offered = {m["name"] for m in conn["models"]}
+        else:
+            if not settings.provider_on(pid):
+                return go("/settings", error="worker_model")
+            offered = {settings.model_ref(pid, n) for n in (await run_in_threadpool(providers.models, pid))[0]}
+        if model not in offered:
             return go("/settings", error="worker_model")
     try:
         settings.set_worker(worker, model, on)
@@ -1300,9 +1581,10 @@ def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
+    models = llm.catalog(conn)
     sprites = RESEARCHERS if settings.animations() else ""
     return f"""{err}<h1>{_("Settings")}</h1>
-{workers_section(conn)}
+{workers_section(conn, models)}
 {connection_section(conn)}
 {heading("clock", _("Loop"))}
 <form method="post" action="/settings/loop-every" class="inline">
@@ -1364,7 +1646,8 @@ async def save_chat_color(request: Request) -> Response:
         return go("/settings", error="chat_color")
     return go("/settings", done="chat_color_saved")
 async def save_auto(request: Request) -> Response:
-    """The top bar's Auto switch. Turning it on approves what already waits (briefs, proposed epics) right away;
+    """The top bar's Auto switch. Turning it on approves what already waits (briefs, proposed epics and combines)
+    right away;
     the loop approves the rest as they come. Publishing always stays with the human."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -1372,7 +1655,7 @@ async def save_auto(request: Request) -> Response:
     on = form.get("auto") == "on"          # an unticked box sends nothing
     settings.set_auto_mode(on)
     if on:
-        orchestrator.auto_approve(clock.now())
+        orchestrator.auto_approve(clock.now(), {e["slug"] for e in running_now()})
     if loop_running():
         wake()
     return go(_back(form), done="auto_on" if on else "auto_off")
@@ -1589,6 +1872,64 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
             f'<form method="post" action="/epics/{slug}/reject"><button>{_("Reject")}</button></form>'))
     return out
 
+def mission_link(slug: str) -> str:
+    m = store.get_mission(slug)
+    return f'<a href="/m/{quote(slug)}">{escape(m.topic if m else slug)}</a>'
+
+def combine_proposals() -> list[str]:
+    """The Theorist's proposed combines, each waiting for the human to approve or reject it."""
+    out = []
+    for c in store.all_combines("proposed"):
+        items = "".join(f'<li>{mission_link(s)}'
+                        + (f' <span class="hint">· {escape(label(m))}</span>' if (m := store.get_mission(s)) else "")
+                        + "</li>" for s in c.members)
+        epic = f'<div class="sub">{_("Epic")}: {escape(c.epic)}</div>' if c.epic else ""
+        why = f'<div class="sub">{escape(c.why)}</div>' if c.why else ""
+        out.append(ask(
+            "propose", c.topic, _("Combine missions"),
+            f'<div class="sub">{_("Theorist proposes combining {n} missions into one.").format(n=len(c.members))}</div>'
+            f'{epic}{why}<ul>{items}</ul>'
+            f'<details><summary>{_("Objective")}</summary><p>{escape(c.objective)}</p></details>',
+            f'<form method="post" action="/combines/{quote(c.slug)}/approve"><button class="primary">{_("Combine")}</button></form>'
+            f'<form method="post" action="/combines/{quote(c.slug)}/reject"><button>{_("Keep separate")}</button></form>'))
+    return out
+
+def connections(m: Mission) -> str:
+    """The mission page's Connections: what it was combined from or into, and its links, each with why and a way
+    to remove it, plus a form to link it to another mission by hand."""
+    slug, rows = quote(m.slug), []
+    if m.combined_into:
+        rows.append(f"<li>{_('Combined into {mission}').format(mission=mission_link(m.combined_into))}</li>")
+    if m.combines:
+        rows.append(f"<li>{_('Combines {missions}').format(missions=', '.join(mission_link(s) for s in m.combines))}</li>")
+    for k in store.links_of(m.slug):
+        other = store.get_mission(k.other(m.slug))
+        state = f' <span class="hint">· {escape(label(other))}</span>' if other else ""
+        who = _("Theorist") if k.by == "theorist" else _("you") if k.by == "human" else k.by
+        why = f": {escape(k.why)}" if k.why else ""
+        rows.append(f'<li class="link-row">{_("Linked to {mission}").format(mission=mission_link(k.other(m.slug)))}{state} '
+                    f'<span class="hint">{_("by {who}").format(who=escape(who))}</span>{why}'
+                    f'<form method="post" action="/m/{slug}/unlink" class="inline">'
+                    f'<input type="hidden" name="other" value="{escape(k.other(m.slug), quote=True)}">'
+                    f'<button>{_("Unlink")}</button></form></li>')
+    form = ""
+    if m.state != State.COMBINED:
+        options = "".join(f'<option value="{escape(o.slug, quote=True)}">{escape(o.topic)}</option>'
+                          for o in store.all_missions() if o.slug != m.slug and o.state != State.COMBINED
+                          and (is_open(m) or is_open(o)) and not store.get_link(m.slug, o.slug))
+        if options:
+            form = (f'<details><summary>{_("Link to another mission")}</summary>'
+                    f'<form method="post" action="/m/{slug}/link" class="actions">'
+                    f'<label for="link-to" style="margin-top:0">{_("Mission")} <span class="hint">{_("open, or published")}'
+                    f'</span></label><select id="link-to" name="to">{options}</select>'
+                    f'<label for="link-why">{_("Why")} <span class="hint">{_("research sees this")}</span></label>'
+                    f'<input type="text" id="link-why" name="why" maxlength="300">'
+                    f'<p><button>{_("Link")}</button></p></form></details>')
+    if not rows and not form:
+        return ""
+    body = f'<ul class="places">{"".join(rows)}</ul>' if rows else f'<p class="hint">{_("No connections.")}</p>'
+    return heading("link", _("Connections"), len(rows) or None, cls="sec") + body + form
+
 def epic_list(missions: list[Mission]) -> str:
     active = store.all_epics("active")
     if not active:
@@ -1625,7 +1966,8 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     live = next((e for e in now or [] if e["slug"] == m.slug), None) if lab else None
     stage = ""
     if live:                               # researchers only visit while a model works on it, mostly its worker's crew
-        stage = ' data-lab="busy"' + (f' data-worker="{live["worker"]}"' if live["worker"] in settings.WORKERS else "")
+        crew = settings.seat_worker(live["worker"])
+        stage = ' data-lab="busy"' + (f' data-worker="{crew}"' if crew in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
@@ -1677,7 +2019,8 @@ def queue_section(queued: list) -> str:
 
 async def home(request: Request) -> HTMLResponse:
     """The flow chart read from its end: what needs you, then what is in progress closest to published first,
-    grouped by stage; then the inputs (inspiration, epics, a new mission). Published articles live on /published:
+    grouped by stage; then the inputs (inspiration, epics). Adding a mission is one slim card right under the
+    strip that opens a wizard (new_mission). Published articles live on /published:
     the top bar's Published button, and a card at the very bottom for anyone who scrolls looking for it. What waits
     to be published is one card under In progress that leads there; the queue itself is on that page."""
     missions = store.all_missions()
@@ -1685,11 +2028,11 @@ async def home(request: Request) -> HTMLResponse:
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     lab = settings.animations()
-    body = [flash(request), loop_panel("/")]
+    body = [flash(request), loop_panel("/"), new_mission()]
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
-    asks += [(6, a) for a in epic_proposals(missions)]
+    asks += [(6, a) for a in epic_proposals(missions) + combine_proposals()]
     body.append(heading("touch", _("Needs you"), len(asks), "needs-you"))
     body.append("".join(a for _rank, a in sorted(asks, key=lambda a: a[0]))
                 or f'<p class="muted empty">{_("Nothing needs you.")}</p>')
@@ -1716,17 +2059,6 @@ async def home(request: Request) -> HTMLResponse:
 
     body.append(finder_panel())
     body.append(epic_list(missions))
-    body.append(epic_datalist() + heading("pencil", _("New mission")) + f"""<form method="post" action="/missions" class="actions">
-  <label for="topic" style="margin-top:0">{_("Topic")}</label>
-  <input type="text" id="topic" name="topic" required placeholder="{escape(_("e.g. Did the new transit levy pass, and who paid for the campaign?"), quote=True)}">
-  <label for="objective">{_("Objective")} <span class="hint">{_("optional")}</span></label>
-  <textarea id="objective" name="objective" rows="4"></textarea>
-  <label for="slug">{_("Short name")} <span class="hint">{_("optional, made from the topic")}</span></label>
-  <input type="text" id="slug" name="slug" placeholder="transit-levy">
-  <label for="epic">{_("Epic")} <span class="hint">{_("optional, pick or type 1–4 words")}</span></label>
-  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="{escape(_("e.g. Fed Policy Capture"), quote=True)}">
-  <p><button class="primary">{_("Add mission")}</button></p>
-</form>""")
     tail = log_tail()
     if tail:
         body.append(f'<details><summary>{icon("terminal")}{_("Loop log")}</summary><pre class="notes">'
@@ -1738,6 +2070,83 @@ async def home(request: Request) -> HTMLResponse:
     if lab:
         body.append(RESEARCHERS)
     return page("Mission Loop", "\n".join(body), poll=True)
+
+def new_mission() -> str:
+    """A long slim card right under the pipeline strip; clicking it opens a three-step wizard (topic, objective,
+    epic and short name) in a dialog that posts to /missions like the CLI's add. The page's own refresh holds off
+    while it is open."""
+    steps = [
+        (_("Topic"), f"""<label for="topic">{_("Topic")} <span class="hint">{_("one line")}</span></label>
+  <input type="text" id="topic" name="topic" required placeholder="{escape(_("e.g. Did the new transit levy pass, and who paid for the campaign?"), quote=True)}">"""),
+        (_("Objective"), f"""<label for="objective">{_("Objective")} <span class="hint">{_("optional: the question, what counts as evidence, a hypothesis")}</span></label>
+  <textarea id="objective" name="objective" rows="5"></textarea>"""),
+        (_("Epic"), f"""<label for="epic">{_("Epic")} <span class="hint">{_("optional, pick or type 1–4 words")}</span></label>
+  <input type="text" id="epic" name="epic" list="epic-names" maxlength="48" placeholder="{escape(_("e.g. Fed Policy Capture"), quote=True)}">
+  <label for="slug">{_("Short name")} <span class="hint">{_("optional, made from the topic")}</span></label>
+  <input type="text" id="slug" name="slug" placeholder="transit-levy">
+  <p class="hint wiz-sum" data-prefix="{escape(_("Adding:"), quote=True)}"></p>"""),
+    ]
+    panes = "".join(f'<fieldset class="wiz-step" data-step="{i}"{"" if i == 0 else " hidden"}>'
+                    f'<legend>{_("Step {n} of {total}").format(n=i + 1, total=len(steps))}: {title}</legend>{fields}</fieldset>'
+                    for i, (title, fields) in enumerate(steps))
+    if loop_running():
+        go_label, go_title = _("Add and research next"), _("Research Assistant takes it next.")
+    else:
+        go_label, go_title = _("Add and start loop"), _("Starts the loop on this mission first.")
+    return (epic_datalist()
+            + f'<button type="button" class="card add-mission" id="add-mission" aria-haspopup="dialog" '
+              f'aria-controls="wizard">{icon("plus")}{icon("pencil")}<span>{_("Add a mission")}</span></button>'
+            + f'''<dialog id="wizard" class="wizard" aria-labelledby="wizard-title">
+<form method="post" action="/missions">
+  <header><strong id="wizard-title">{icon("pencil")}{_("New mission")}</strong>
+    <button type="button" class="wiz-close" aria-label="{_("Close")}">&times;</button></header>
+  <ol class="wiz-dots" aria-hidden="true">{"".join("<li></li>" for _step in steps)}</ol>
+  {panes}
+  <p class="wiz-nav"><button type="button" class="wiz-back" hidden>{_("Back")}</button>
+    <button type="button" class="primary wiz-next">{_("Next")}</button>
+    <span class="wiz-add" hidden><button class="primary">{_("Add mission")}</button>
+    <button class="wiz-go" name="go" value="start" title="{escape(go_title)}">{icon("play")}{go_label}</button></span></p>
+</form></dialog>{WIZARD_JS}''')
+
+WIZARD_JS = """<script>
+(() => {
+  if (window.wizardReady) return;
+  window.wizardReady = true;
+  // The page's refresh swaps in a fresh dialog (scripts in it don't run), so each click sets up the one on the page now.
+  function setup(dlg) {
+    if (dlg.wiz) return dlg.wiz;
+    const form = dlg.querySelector("form"), steps = [...dlg.querySelectorAll(".wiz-step")];
+    const dots = [...dlg.querySelectorAll(".wiz-dots li")], topic = dlg.querySelector("#topic");
+    const back = dlg.querySelector(".wiz-back"), next = dlg.querySelector(".wiz-next"), add = dlg.querySelector(".wiz-add");
+    let at = 0;
+    function show(i) {
+      at = i;
+      steps.forEach((s, n) => s.hidden = n !== i);
+      dots.forEach((d, n) => d.className = n < i ? "done" : n === i ? "on" : "");
+      back.hidden = i === 0; next.hidden = i === steps.length - 1; add.hidden = !next.hidden;
+      if (i === steps.length - 1) { const sum = dlg.querySelector(".wiz-sum"); sum.textContent = sum.dataset.prefix + " " + topic.value.trim(); }
+      const first = steps[i].querySelector("input, textarea");
+      if (first) first.focus();
+    }
+    function forward() {
+      if (at === 0 && !topic.reportValidity()) return;
+      if (at < steps.length - 1) show(at + 1);
+    }
+    next.addEventListener("click", forward);
+    back.addEventListener("click", () => show(at - 1));
+    dlg.querySelector(".wiz-close").addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });   // a click on the backdrop
+    form.addEventListener("keydown", e => {                                        // Enter moves on, never submits early
+      if (e.key === "Enter" && e.target.tagName === "INPUT" && at < steps.length - 1) { e.preventDefault(); forward(); }
+    });
+    return dlg.wiz = { open() { form.reset(); show(0); dlg.showModal(); topic.focus(); } };
+  }
+  document.addEventListener("click", e => {
+    const dlg = document.getElementById("wizard");
+    if (dlg && e.target.closest("#add-mission")) setup(dlg).open();
+  });
+})();
+</script>"""
 
 def actions_for(m: Mission) -> str:
     slug = quote(m.slug)
@@ -1827,7 +2236,7 @@ async def mission(request: Request) -> Response:
             f'<span class="muted">{escape(m.slug)}</span></p>',
             f"<h1>{escape(m.topic)}</h1>"]
     if m.objective:
-        body.append(f'<p class="muted">{escape(m.objective)}</p>')
+        body.append(f'<p class="muted objective">{escape(m.objective)}</p>')
     step = working_on(m, running_now()) or next_step(m)
     if step:
         body.append(f"<p><strong>{escape(step)}</strong></p>")
@@ -1841,6 +2250,7 @@ async def mission(request: Request) -> Response:
                 f'<input type="text" id="epic" name="epic" list="epic-names" maxlength="48" '
                 f'value="{escape(current.title if current else "", quote=True)}" placeholder="{_("none")}">'
                 f'<button>{_("Save")}</button></form>')
+    body.append(connections(m))
 
     if m.validator_notes:
         title = "Why it stopped" if m.state == State.PARKED else \
@@ -1899,8 +2309,9 @@ def themed_preview(html: str) -> str:
     return html.replace("</head>", override + "</head>", 1) if "</head>" in html else override + html
 
 # ---------- Researcher Chat: ask what the loop is doing, or look something up on the web ----------
-# A bubble on every page opens a panel over the left third. The conversation is kept in this browser tab
-# (sessionStorage) so the page's own refreshes don't wipe it; the assistant itself remembers nothing.
+# A bubble on every page opens a panel over the left third. The conversation, the unsent draft and a question still
+# being answered are kept in this browser tab (sessionStorage), so moving between pages or closing the panel loses
+# nothing; Clear starts over and Copy puts the conversation on the clipboard. The assistant itself remembers nothing.
 # It needs only Ollama, not the loop: its loop tools read what the loop leaves on disk.
 # With animations on, a pixel researcher for the picked model walks in at the top of the panel (assets/researchers.js,
 # the "chatguide" event): a worker's own model brings that worker's crew, any other model by its size.
@@ -1917,6 +2328,7 @@ CHAT_JS = """<script>
   const store = (k, v) => { try { v === undefined ? null : sessionStorage.setItem(k, JSON.stringify(v));
                                   return JSON.parse(sessionStorage.getItem(k)); } catch (e) { return null; } };
   let history = store("chat-history") || [], loaded = false, crews = {};
+  const copyBtn = document.getElementById("chat-copy");
 
   // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
   // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
@@ -1987,27 +2399,68 @@ CHAT_JS = """<script>
     bubbleBtn.setAttribute("aria-expanded", open); store("chat-open", open);
     if (open) { loadModels(); box.focus(); log.scrollTop = log.scrollHeight; }
   }
+  // The question goes into the history as soon as it is sent, and the answer it waits for is remembered by id, so
+  // a page that navigates away mid-answer hands it to the next page (/chat/answer) instead of losing both.
+  function save() { history = history.slice(-20); store("chat-history", history); }
+  async function wait(pending, request) {
+    box.disabled = true;
+    const note = show("assistant", t("Looking…"), "", "wait");
+    let answer, model = pending.model;
+    try {
+      const r = await request();
+      const data = await r.json();
+      answer = data.lost ? t("Answer lost when the UI restarted. Ask again.") : data.answer;
+    } catch (e) {
+      if (leaving) return;                     // the page is going; the next one picks it up
+      answer = t("No answer. Is the UI still running?");
+    }
+    note.remove();
+    if ((store("chat-pending") || {}).id !== pending.id) return;      // cleared while it was thinking
+    show("assistant", answer, model);
+    history.push({role: "assistant", content: answer, model}); save(); store("chat-pending", null);
+    box.disabled = false; if (!panel.hidden) box.focus();
+  }
   async function ask(question) {
     question = question.trim();
     if (!question || box.disabled) return;
     setOpen(true); suggest.hidden = true;
-    const model = pickModel.value;
-    show("user", question); box.value = ""; box.disabled = true;
-    const wait = show("assistant", t("Looking…"), "", "wait");
-    let answer;
-    try {
-      const r = await fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({question, model, history: history.slice(-4).map(({role, content}) => ({role, content}))})});
-      answer = (await r.json()).answer;
-    } catch (e) { answer = t("No answer. Is the UI still running?"); }
-    wait.remove(); show("assistant", answer, model);
-    history.push({role: "user", content: question}, {role: "assistant", content: answer, model});
-    history = history.slice(-20); store("chat-history", history);
-    box.disabled = false; box.focus();
+    const model = pickModel.value, id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const past = history.slice(-4).map(({role, content}) => ({role, content}));
+    show("user", question); box.value = ""; store("chat-draft", "");
+    history.push({role: "user", content: question}); save();
+    const pending = {id, model}; store("chat-pending", pending);
+    await wait(pending, () => fetch("/chat/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question, model, id, history: past})}));
   }
+  function transcript() {
+    return history.map(h => h.role === "user" ? `${t("You")}: ${h.content}`
+                                              : `${t("Researcher Chat")}${h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
+  }
+  async function copy() {
+    const text = transcript(), was = t("Copy");
+    let ok = !!text;
+    if (ok) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) {                                    // older browsers: copy from a hidden textarea instead
+        const t = document.createElement("textarea"); t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+        document.body.appendChild(t); t.select();
+        try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+        t.remove();
+      }
+    }
+    copyBtn.textContent = !text ? t("Nothing to copy") : ok ? t("Copied") : t("Copy failed");
+    clearTimeout(copy.timer); copy.timer = setTimeout(() => { copyBtn.textContent = was; }, 1500);
+  }
+  let leaving = false;
+  addEventListener("pagehide", () => { leaving = true; });
   bubbleBtn.addEventListener("click", () => setOpen(panel.hidden));
   document.getElementById("chat-close").addEventListener("click", () => setOpen(false));
-  document.getElementById("chat-clear").addEventListener("click", () => { history = []; store("chat-history", history); redraw(); });
+  document.getElementById("chat-clear").addEventListener("click", () => {
+    history = []; save(); store("chat-pending", null); store("chat-draft", "");
+    box.value = ""; box.disabled = false; redraw(); box.focus();
+  });
+  copyBtn.addEventListener("click", copy);
+  box.addEventListener("input", () => store("chat-draft", box.value));
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !panel.hidden) setOpen(false); });
   pickModel.addEventListener("change", () => { try { localStorage.setItem("chat-model", pickModel.value); } catch (e) {} guide(); });
   form.addEventListener("submit", e => { e.preventDefault(); ask(box.value); });
@@ -2016,7 +2469,10 @@ CHAT_JS = """<script>
   // one listener for every "Ask the assistant" button, so ones swapped in by a page refresh work too
   document.addEventListener("click", e => { const b = e.target.closest("[data-ask]"); if (b) ask(b.dataset.ask); });
   redraw();
+  box.value = store("chat-draft") || "";
   if (store("chat-open")) setOpen(true);
+  const pending = store("chat-pending");
+  if (pending && pending.id) wait(pending, () => fetch(`/chat/answer?id=${encodeURIComponent(pending.id)}`));
 })();
 </script>"""
 
@@ -2028,7 +2484,8 @@ def chat_widget() -> str:
     return f"""<button type="button" id="chat-bubble" class="chat-bubble" aria-label="{chat}" aria-expanded="false"
  aria-controls="chat-panel">{ICON_CHAT}</button>
 <aside id="chat-panel" class="chat-panel" aria-label="{chat}" hidden>{guide}
-<header><strong>{chat}</strong><span><button type="button" id="chat-clear" title="{_("Start over")}">{_("Clear")}</button>
+<header><strong>{chat}</strong><span><button type="button" id="chat-copy" title="{_("Copy the conversation")}">{_("Copy")}</button>
+ <button type="button" id="chat-clear" title="{_("Start over")}">{_("Clear")}</button>
  <button type="button" id="chat-close" aria-label="{_("Close")}">×</button></span></header>
 <label class="model">{_("Model")} <select id="chat-model" aria-label="{_("Model")}"></select></label>
 <p class="hint" id="chat-hint">{_("Ask about the loop, or search the web.")}</p>
@@ -2057,6 +2514,23 @@ def chat_crew(model: str) -> dict:
     from agents.assistant import crew
     return {"crew": crew(model), "family": model.split(":")[0]}
 
+# Answers the page is waiting for, by the id the page gave its question, so one survives the page navigating away
+# mid-answer: the next page picks it up from /chat/answer. This UI process only, the last few, never on disk.
+CHAT_JOBS: dict[str, concurrent.futures.Future] = {}
+CHAT_JOBS_KEPT = 20
+_chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat")
+
+def _answer(question: str, history: list, model: str | None) -> str:
+    try:
+        return agents.chat(question, history, model)
+    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
+        return _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
+
+def _keep_job(job_id: str, job: concurrent.futures.Future) -> None:
+    CHAT_JOBS[job_id] = job
+    for old in [k for k, f in CHAT_JOBS.items() if f.done()][:max(0, len(CHAT_JOBS) - CHAT_JOBS_KEPT)]:
+        CHAT_JOBS.pop(old, None)
+
 async def chat_ask(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -2064,14 +2538,22 @@ async def chat_ask(request: Request) -> Response:
         data = await request.json()
         question, history = str(data.get("question") or ""), data.get("history") or []
         model = str(data.get("model") or "")[:100] or None
+        job_id = str(data.get("id") or "")[:64]
         history = history if isinstance(history, list) else []
     except (ValueError, AttributeError):
         return JSONResponse({"answer": _("That question didn't arrive in one piece. Try again.")}, status_code=400)
-    try:
-        answer = await run_in_threadpool(agents.chat, question, [h for h in history if isinstance(h, dict)], model)
-    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
-        answer = _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
-    return JSONResponse({"answer": answer})
+    job = _chat_pool.submit(_answer, question, [h for h in history if isinstance(h, dict)], model)
+    if job_id:
+        _keep_job(job_id, job)
+    # shielded, so a page that navigates away doesn't cancel the answer the next page will pick up
+    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
+
+async def chat_answer(request: Request) -> JSONResponse:
+    """The answer to a question an earlier page asked, waiting for it if it is still being worked out."""
+    job = CHAT_JOBS.get(request.query_params.get("id", ""))
+    if job is None:
+        return JSONResponse({"lost": True}, status_code=404)
+    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
@@ -2151,6 +2633,16 @@ async def act(request: Request) -> Response:
             return go(back, done="republish_off")
         wake()
         return go(back, done="republish")
+    elif action in ("link", "unlink"):
+        other = str(form.get("to" if action == "link" else "other") or "")
+        try:
+            if action == "link":
+                orchestrator.link(m.slug, other, str(form.get("why") or "")[:300], now)
+            else:
+                orchestrator.unlink(m.slug, other, now)
+        except ValueError:
+            return go(here, error="link" if action == "link" else "state")
+        return go(here, done=action + "ed")  # read from the next search on; nothing for the loop to wake for
     elif action == "epic":
         name = str(form.get("epic") or "")
         if name.strip() and not epic_title(name):
@@ -2180,11 +2672,19 @@ async def add_mission(request: Request) -> Response:
     if name.strip() and not epic_title(name):
         return go("/", error="epic")
     epic = store.create_epic(name).slug if name.strip() else ""
-    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=epic))
-    store.log_event(slug, clock.now(), "", State.QUEUED.value, "added in the UI")
+    rush = form.get("go") == "start"       # "Add and start loop": researched next, and the loop started if off
+    store.save_mission(Mission(slug=slug, topic=topic, objective=objective, epic=epic, rush=rush))
+    store.log_event(slug, clock.now(), "", State.QUEUED.value,
+                    "added in the UI" + (", to be researched next" if rush else ""))
     if loop_running():
         wake()
-    return go(f"/m/{quote(slug)}", done="added")
+        done = "added_next" if rush else "added"
+    elif rush:
+        start_loop(settings.loop_every())
+        done = "added_started"
+    else:
+        done = "added"
+    return go(f"/m/{quote(slug)}", done=done)
 
 async def save_inspiration(request: Request) -> Response:
     if not same_origin(request):
@@ -2237,6 +2737,26 @@ async def epic_action(request: Request) -> Response:
                   "epic_target" if action == "merge" else "state")
     return go("/", done=done)
 
+async def combine_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    slug, action = request.path_params["slug"], request.path_params["action"]
+    if not store.get_combine(slug):
+        return PlainTextResponse("No such combine.", status_code=404)
+    now = clock.now()
+    try:
+        if action == "approve":
+            made = orchestrator.approve_combine(slug, now, busy={e["slug"] for e in running_now()})
+            if loop_running():
+                wake()
+            return go(f"/m/{quote(made.slug)}", done="combined")
+        if action == "reject":
+            orchestrator.reject_combine(slug, now)
+            return go("/", done="combine_rejected")
+    except ValueError:
+        return go("/", error="combine")
+    return PlainTextResponse("Unknown action.", status_code=404)
+
 async def loop_action(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -2267,6 +2787,7 @@ app = Starlette(routes=[
     Route("/settings", settings_page),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),
+    Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/animations", save_animations, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
@@ -2276,6 +2797,8 @@ app = Starlette(routes=[
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
+    Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),
+    Route("/settings/provider", save_provider, methods=["POST"]),
     Route("/settings/join-1f916", join_1f916, methods=["POST"]),
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/settings/github", github_action, methods=["POST"]),
@@ -2287,6 +2810,7 @@ app = Starlette(routes=[
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),
     Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
+    Route("/combines/{slug}/{action}", combine_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),
