@@ -7,6 +7,7 @@ import asyncio, json
 from pydantic import ValidationError
 from contracts import Mission, ResearchBrief, OutreachRecord, Article
 from agents import llm
+import stopping
 
 SYSTEM = """You are a skeptical, nonpartisan investigative writer.
 Write a short, sharp article (500 to 900 words) from the research brief below. The brief is the only
@@ -64,10 +65,15 @@ async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRec
     schema = Article.model_json_schema()
     error = None
     for _ in range(2):                     # one repair attempt for malformed JSON
-        msg = await llm.chat(messages, format=schema)
+        try:
+            msg = await llm.chat(messages, format=schema)
+        except llm.Cut as cut:             # stop's grace ran out: keep what got written
+            raise stopping.Interrupted(stopping.salvage(cut.text, Article))
         try:
             return Article.model_validate_json(msg.content)
         except ValidationError as e:
+            if stopping.requested():       # no time for a repair round
+                raise stopping.Interrupted(stopping.salvage(msg.content, Article))
             error = e
             messages.append({"role": "assistant", "content": msg.content})
             messages.append({"role": "user", "content": f"That JSON was invalid:\n{e}\nReturn corrected JSON only."})

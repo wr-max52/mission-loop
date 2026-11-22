@@ -147,9 +147,9 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1")):
 
 @app.command()
 def stop():
-    orchestrator.STOP_FLAG.parent.mkdir(exist_ok=True)
-    orchestrator.STOP_FLAG.touch()
-    print("stop requested; the current task will finish first")
+    import stopping
+    stopping.press(orchestrator.STOP_FLAG)
+    print(f"stop requested; the current agent writes out what it has (at most {stopping.GRACE // 60} min), then the loop stops")
 
 @app.command()
 def approve(slug: str):

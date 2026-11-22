@@ -2,7 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 import activity
 import agents                              # switchboard: see agents/__init__.py
-import store
+import stopping, store
 from agents import bluesky, f916, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
@@ -42,11 +42,20 @@ def step(m: Mission, now) -> str | None:
 
     if m.state == State.RESEARCHING:
         m.attempts += 1
+        brief, m.interrupted_brief = m.interrupted_brief, None   # a stop's draft: check it, don't redo it
         try:
-            activity.begin(m.slug, "sources")
-            brief = agents.research(m, now)
+            if brief is None:
+                activity.begin(m.slug, "sources")
+                brief = agents.research(m, now)
+                if stopping.requested():   # finished, but leave checking it for the next pass
+                    raise stopping.Interrupted(brief)
             activity.begin(m.slug, "source_check")
             ok, notes = agents.validate(m, brief)
+        except stopping.Interrupted as e:  # a stopped attempt isn't a failed one
+            m.attempts -= 1
+            m.interrupted_brief = e.draft
+            saved = "its draft is checked" if e.draft else "nothing usable was written; research restarts"
+            return f"stopped mid-research; {saved} when the loop starts again"
         except Exception as e:             # model, tool or network failure counts as a failed attempt
             brief, ok, notes = None, False, f"research crashed: {type(e).__name__}: {e}"
         if ok:
@@ -88,11 +97,20 @@ def step(m: Mission, now) -> str | None:
     if m.state == State.WRITING:
         m.write_attempts += 1
         brief, records = _brief(m), _outreach(m)
+        article, m.interrupted_article = m.interrupted_article, None
         try:
-            activity.begin(m.slug, "writer")
-            article = agents.write(m, brief, records)
+            if article is None:
+                activity.begin(m.slug, "writer")
+                article = agents.write(m, brief, records)
+                if stopping.requested():
+                    raise stopping.Interrupted(article)
             activity.begin(m.slug, "article_check")
             ok, notes = agents.check_article(m, brief, article, records)
+        except stopping.Interrupted as e:
+            m.write_attempts -= 1
+            m.interrupted_article = e.draft
+            saved = "its draft is checked" if e.draft else "nothing usable was written; writing restarts"
+            return f"stopped mid-writing; {saved} when the loop starts again"
         except Exception as e:             # same rule as research: a crash is a failed attempt
             article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
         if ok:
@@ -190,7 +208,7 @@ def tick(now) -> int:
     changed = 0
     for m in store.active_missions():
         if STOP_FLAG.exists():
-            break                          # stop between tasks, never mid-task
+            break                          # mid-task, a stop gets agents to write out what they have
         before = m.state
         try:
             note = step(m, now)
