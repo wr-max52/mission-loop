@@ -189,11 +189,21 @@ def next_step(m: Mission) -> str:
         then = "requeue it or push it through" if orchestrator.parked_draft(m) else "requeue it"
         return f"Gave up after {m.max_attempts} {stage} attempts. Read why, then {then}."
     if m.state == State.RESEARCHING:
-        doing = "Writing the brief from its sources." if m.gathered or m.interrupted_brief else "Finding sources."
-        try_ = m.attempts if m.gathered or m.interrupted_brief else m.attempts + 1
+        if m.brief_sources:
+            doing = "Writing the brief's claims from its checked sources."
+        elif m.brief_pick:
+            doing = "Checking the sources picked for the brief."
+        elif m.gathered or m.interrupted_brief:
+            doing = "Writing the brief from its sources."
+        else:
+            doing = "Carrying on the paused search." if m.search_paused else "Finding sources."
+        same = m.gathered or m.interrupted_brief or m.search_paused   # the attempt already counted carries on
+        try_ = m.attempts if same else m.attempts + 1
         return f"{doing} Attempt {try_} of {m.max_attempts}." if m.attempts and try_ > 1 else doing
     if m.state == State.WRITING:
-        return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}."
+        done = (f" {len(m.article_draft.sections)} of {len(m.article_draft.plan.sections)} sections written."
+                if m.article_draft else "")
+        return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}.{done}"
     if m.state == State.DONE and m.publish_requests:
         return "To " + ", ".join(orchestrator.channel_name(k) for k in m.publish_requests) + ", ahead of everything else."
     return ""

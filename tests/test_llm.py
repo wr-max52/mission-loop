@@ -103,3 +103,29 @@ def test_fit_counts_thinking():
     messages = [{"role": "system", "content": "rules"}, {"role": "tool", "content": "a" * 1000},
                 Message(role="assistant", content="", thinking="t" * room(llm.REPLY_TOKENS))]
     assert llm.fit(messages, llm.REPLY_TOKENS)[1]["content"].endswith("[cut to fit]")
+
+class RepeatingClient(FakeClient):
+    """Ollama giving up on a model that repeats itself, after it wrote a little."""
+    async def chat(self, stream=False, **kw):
+        if not stream:
+            raise llm.ollama.ResponseError("prediction aborted, token repeat limit reached", 500)
+        async def gen():
+            yield chunk('{"thesis": "x"')
+            raise llm.ollama.ResponseError("prediction aborted, token repeat limit reached", 500)
+        return gen()
+
+async def test_ollama_giving_up_on_a_repeating_model_is_a_stuck_reply_not_a_crash(monkeypatch):
+    monkeypatch.setattr(llm.ollama, "AsyncClient", lambda host=None: RepeatingClient())
+    with pytest.raises(llm.Overrun, match="repeating itself") as e:
+        await llm.chat([{"role": "user", "content": "go"}], format={"type": "object"})
+    assert e.value.text == '{"thesis": "x"'                         # what it wrote first can still be salvaged
+    with pytest.raises(llm.Overrun, match="repeating itself"):      # a search turn too: the search keeps what it found
+        await llm.chat([{"role": "user", "content": "go"}], tools=[])
+
+async def test_other_ollama_errors_still_raise(monkeypatch):
+    class Broken(FakeClient):
+        async def chat(self, stream=False, **kw):
+            raise llm.ollama.ResponseError("model not found", 404)
+    monkeypatch.setattr(llm.ollama, "AsyncClient", lambda host=None: Broken())
+    with pytest.raises(llm.ollama.ResponseError):
+        await llm.chat([{"role": "user", "content": "go"}], format={"type": "object"})

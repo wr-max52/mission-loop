@@ -18,7 +18,7 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - CLI: `python run.py <command>` — `ui init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic`
-- Tests: `pytest -q` (expects 445 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 488 passed; no Ollama or network needed; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -126,7 +126,22 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   steps that can be done at different times. `gather` (Research Assistant) runs the search/fetch tool loop
   for at most 15 minutes (`SOURCE_TIME_LIMIT`) and saves the transcript as the mission's `evidence` artifact
   (`Mission.gathered`); a research attempt counts from here. `write_brief` (Principal Investigator) writes the
-  brief from it, then the evidence is dropped. A stop during the search keeps the evidence. `page_tools.py` adds `find_in_page` (exact sentences from the text
+  brief from it, then the evidence is dropped. A stop during the search pauses it (see Stopping and progress). The search loop's
+  `Guard` answers calls that can't help without running them, saying what to do instead: the call just made, a
+  search already run, a blocked site, a site that refused us earlier in the run; and a failed fetch says what it
+  means (a 401/403 site is unreadable for the rest of the run; try its Wayback copy or another site). After
+  `MAX_REFUSED` (3) refused calls in a row the search ends with what it found. In the last `LOW_BUDGET` (10)
+  calls or third of the time, each result says what is left (the brief writer doesn't see that note).
+  The brief is written in two steps, so no reply is long and the first is kept: step 1 picks the thesis and
+  sources (`SourcePick`), and code checks each quote against its page right away (`validator.source_problem`;
+  a page that won't load is checked against its Wayback copy, which is then cited). Failed sources go back with
+  what the check found (the closest real sentence, an archived copy) for up to 2 rounds of fixes (`SourceFix`);
+  the ones still failing are dropped, and fewer than 3 supporting websites left fails the attempt with its draft
+  and notes (`BriefFailed`). The passed sources are saved on the mission (`Mission.brief_sources`) until the
+  attempt ends (the raw pick, `Mission.brief_pick`, is saved before its checks). Step 2 writes the claims and counterpoint (`ClaimSet`) citing only
+  those sources; code fixes what it safely can (repeats dropped, a claim worded as a possibility labeled one),
+  feeds back the rest with the claim numbers (`validator.claim_problems`, each problem once) for up to 2 rounds,
+  then drops claims that still break a rule. `validate` is still the gate on the whole brief. `page_tools.py` adds `find_in_page` (exact sentences from the text
   the validator checks), `page_links` (a page's links to other sites) and `wayback_versions` (the Wayback
   Machine's copies of a page: the ones that changed, spread over time, and the one nearest a date), and
   requests only public addresses. `wayback.py` (code, no model) makes an archived copy work like a live page:
@@ -140,10 +155,21 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   and the pages they cited. They are background only: the site never leaves this machine, so they
   can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
   finds contacts, and code checks their names and emails before the main model is called.
-- Writing: `agents/writer.py` (one structured Ollama call), checked by `checks/article_check.py`. Articles cite
-  sources by short id (`[s1]`). A source whose id isn't one (a model sometimes uses the URL) gets the next free
-  `s<n>` whenever a brief is read (`ResearchBrief._short_ids`, so saved briefs are fixed too), and the writer turns
-  a bracketed citation of a brief source's URL into its id (`contracts.cite_by_id`); any other URL still fails.
+- Writing: `agents/writer.py`, checked by `checks/article_check.py`, in steps: a plan (`ArticlePlan`: title,
+  dek, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section on its own,
+  seeing the plan and the sections before it. Code checks each piece as soon as it is written
+  (`article_check.plan_problems`, `section_problems`: citations, unknown ids, links, quotes not in a source
+  quote, with the closest real one shown, possibilities it must carry, the counterpoint's citation) and sends back
+  only that piece's problems: one round for the plan (then code places unplaced possibilities and adds a missing
+  counterpoint section), up to 2 for a section (then the version with the fewest problems is kept). The plan and
+  every finished section are saved on the mission (`Mission.article_draft`): a stop or crash resumes after the
+  last saved section, and after a failed article check only the sections its notes name are rewritten (all of
+  them for a problem not tied to one section), each shown its last version and its problems. A passed article,
+  a human's send-back and a push-through clear the draft. Articles cite sources by short id (`[s1]`).
+  A source whose id isn't one (a model sometimes uses the URL) gets the next free `s<n>` whenever a brief
+  or source pick is read (`ResearchBrief._short_ids`, `SourcePick._short_ids`, so saved briefs are fixed
+  too), and each written section has a bracketed citation of a brief source's URL turned into its id
+  (`contracts.cite_by_id`) before it is checked; any other URL still fails.
 - Every model call goes through `agents/llm.py`, which keeps it bounded (cloud models go on from there to
   `agents/providers.py`; the numbers below are Ollama's, see Model providers for theirs). Before the call, tool results
   are cut to fit the 32k context (the longest pages lose their ends first; instructions and the final
@@ -153,9 +179,10 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   ~25k tokens every turn; results the model hasn't read yet stay whole. The brief writer gets the transcript
   without the small model's thinking, failed tool calls cut to one line and repeated results dropped. Replies are capped at `REPLY_TOKENS` (8192; a brief is about 4k) or
   `TURN_TOKENS` (2048) for tool turns, and at `REPLY_TIME_LIMIT` (10 minutes; a brief takes about 2).
-  A reply that hits either limit raises `llm.Overrun`: a stuck search turn ends the search, and a stuck
-  brief, article or finder reply keeps whatever valid JSON it wrote before (checked as usual), else the
-  attempt fails. A writing retry after a failed article check sees its failed draft and revises it.
+  A reply that hits either limit raises `llm.Overrun`, and so does Ollama giving up on a model that keeps
+  repeating tokens ("token repeat limit reached"): a stuck search turn ends the search, and a stuck structured
+  reply keeps whatever valid JSON it wrote before (checked as usual), else the attempt fails. `llm.ask` is the
+  shared structured call: one repair round for malformed JSON, the Overrun salvage, and stop handling.
 - Publishing has two parts: the local site, the foundation every article is written to first, and channels,
   everywhere else it goes, each posting from the local site's feed. Where each article went is recorded per
   mission in `Mission.channels` (key -> when and where):
@@ -294,6 +321,25 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_
   By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
   then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
   reloading it.
+- Stopping and progress (`stopping.py`, `checkpoint.py`): the database otherwise changes only when a task ends,
+  so long tasks save each finished piece the moment it is done through `checkpoint.save`, and the orchestrator
+  writes it (`orchestrator.save_progress`, set up per worker task in `_as_worker`). A checkpoint writes only the
+  progress fields (`PROGRESS`: `brief_pick`, `brief_sources`, `article_draft`) onto the stored mission, plus any
+  artifact given, so it never undoes a human's change made mid-task; everything else is saved when the task
+  ends, as before. A stop or a killed loop loses at most the piece in flight:
+  - Search: the transcript is saved after every answered turn (artifact `evidence`, `finished=False`, with its
+    `attempt` and `seconds`). A stop pauses the search (`Mission.search_paused`) instead of handing a half
+    search to the brief writer; the next start carries it on (`gather(m, now, resume)`), as the same attempt,
+    with the tool calls and time it has left. A transcript a killed loop left behind carries on the same way; a
+    finished one is used as it is; a crashed search's is deleted, so the retry starts afresh.
+  - Brief: the source pick is saved as soon as the model writes it, checks stop between source checks (each can
+    take seconds), and a resumed run checks the saved pick again instead of asking the model. Once step 1 is
+    checked and saved, a stop ends the task before step 2 starts.
+  - Article: the plan and each finished section are saved as they are done, and a stop never starts a new
+    section. After a failed check, a section already rewritten before a stop isn't rewritten again.
+  Pieces are short, so whatever is in flight when stop is pressed usually finishes inside the grace
+  (`TURN_GRACE` 30 s for a tool turn, `GRACE` 120 s for a reply). The UI's mission cards say how far saved work
+  got ("Carrying on the paused search.", "1 of 3 sections written.").
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -374,7 +420,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Have the Theorist look across the desk now | Ask the Theorist under the inspiration box, or `python run.py theorize` (its notes fold out under the box) |
 | Run once until blocked | `python run.py run` |
 | Run forever | `python run.py loop --every 15` (or install `ops/com.missionloop.loop.plist`, see the comments in it) |
-| Stop | `python run.py stop` (finishes the current task first) |
+| Stop | `python run.py stop` (the piece in flight finishes or is cut at the grace; everything finished is already saved) |
 | Read a brief / article | `python run.py show <slug>`; the article preview is `missions/<slug>/preview.html` |
 | Approve a brief | `python run.py approve <slug>` |
 | Approve every brief and new epic automatically (never publishing) | the Auto switch at the top of the UI, or `python run.py auto on` (`off` to stop) |

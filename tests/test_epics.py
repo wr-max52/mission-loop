@@ -146,7 +146,7 @@ def test_reference_block_reaches_the_research_prompt(monkeypatch):
     from agents import researcher
     published("fed", "Federal Reserve audit secrecy")
     prompts = []
-    async def fake_tool_loop(system, tb, budget, limit=None):
+    async def fake_tool_loop(system, tb, budget, limit=None, **kw):
         prompts.append(system)
         raise RuntimeError("stop here")
     monkeypatch.setattr(researcher, "tool_loop", fake_tool_loop)

@@ -187,3 +187,24 @@ def test_validator_page_cache_stays_small(monkeypatch):
     for n in range(validator.CACHE_PAGES + 5):
         REAL_FETCH(f"https://example.com/{n}")
     assert len(validator._cache) == validator.CACHE_PAGES and "https://example.com/0" not in validator._cache
+
+def test_a_problem_repeated_by_many_claims_is_noted_once():
+    claims = [Claim(text=f"x{i}", source_ids=["s9"]) for i in range(50)]
+    ok, notes = validator.validate(M, brief(claims=claims))
+    assert not ok and notes.count("unknown source id 's9'") == 1
+
+def test_a_page_that_wont_load_is_checked_against_its_archived_copy(monkeypatch):
+    copy = "https://web.archive.org/web/20261113000000/https://gone.com/a"
+    monkeypatch.setattr(validator, "fetch", lambda url: {copy: ("<p>x</p>", f"Archived. {Q}")}.get(url))
+    monkeypatch.setattr(wayback, "snapshot", lambda page, when="": ("20261113000000", copy))
+    s = Source(id="s9", url="https://gone.com/a", title="G", quote=Q, stance="supports")
+    assert validator.source_problem(s, set(), archive=True) == (None, copy)       # cited as the archived copy
+    problem, url = validator.source_problem(s, set())                              # the final gate only hints
+    assert "could not fetch https://gone.com/a" in problem and copy in problem and url == s.url
+
+def test_claim_problems_name_the_claims_they_apply_to():
+    claims = [Claim(text="x", source_ids=["s9"]), Claim(text="y", source_ids=["s1"]),
+              Claim(text="z", source_ids=["s9"], kind="possibility")]
+    problems = validator.claim_problems(claims, {"s1", "s2"})
+    assert "Claims 1, 3 cite unknown source id 's9'; cite only the brief's source ids (s1, s2)" in problems
+    assert "Claim 3 is a possibility, so must be worded 'It is possible that ...'" in problems

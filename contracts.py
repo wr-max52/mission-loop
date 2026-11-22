@@ -36,8 +36,12 @@ class Mission(BaseModel):
     rejected_brief: "RejectedBrief | None" = None  # last brief the validator failed; retries revise it
     rejected_article: "RejectedArticle | None" = None  # last article the check failed
     gathered: bool = False                 # the Research Assistant's sources are saved (artifact "evidence"); brief next
+    search_paused: bool = False            # a stop cut the search short; it carries on as the same attempt
     interrupted_brief: "ResearchBrief | None" = None   # written out when stop was pressed; checked when the loop starts again
     interrupted_article: "Article | None" = None       # same for the writer
+    brief_pick: "SourcePick | None" = None      # the brief's first step as written, before its sources are checked
+    brief_sources: "SourcePick | None" = None   # the brief's first step, checked: kept until the attempt ends
+    article_draft: "ArticleDraft | None" = None # the article's plan and the sections written so far
     unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
     unchecked_article: str = ""            # same for a failed article
     published_at: datetime | None = None
@@ -90,10 +94,12 @@ class POC(BaseModel):
     why_them: str
 
 class ResearchBrief(BaseModel):
+    # The model writes fields in this order. Claims come last: a model stuck repeating claims hits the reply
+    # cap there, and a cut-off draft still has the sources and counterpoint its claims rely on.
     thesis: str
-    claims: list[Claim]
-    counterpoint: str
     sources: list[Source]
+    counterpoint: str
+    claims: list[Claim]
     pocs: list[POC] = []                   # validator requires 3+ only when outreach is on
     question_for_pocs: str = ""
 
@@ -103,20 +109,47 @@ class ResearchBrief(BaseModel):
         an outside link), so code gives such a source the next free "s<n>" and points its claims there; a
         claim that cites a source by its URL is pointed at that source's id too. Runs on every load, so a
         brief saved with URL ids is fixed when it is read back."""
+        renamed = _shorten(self.sources)
         taken = {s.id for s in self.sources}
-        renamed, n = {}, 0
-        for s in self.sources:
-            if SOURCE_ID.fullmatch(s.id):
-                continue
-            n += 1
-            while f"s{n}" in taken:
-                n += 1
-            renamed[s.id] = s.id = f"s{n}"
-            taken.add(s.id)
         by_url = {_bare(s.url): s.id for s in self.sources}
         for c in self.claims:
             c.source_ids = [renamed.get(i) or (i if i in taken else by_url.get(_bare(i), i)) for i in c.source_ids]
         return self
+
+def _shorten(sources: list) -> dict[str, str]:
+    """Give every source whose id isn't a short label (a URL, say) the next free "s<n>"; returns old -> new."""
+    taken = {s.id for s in sources}
+    renamed, n = {}, 0
+    for s in sources:
+        if SOURCE_ID.fullmatch(s.id):
+            continue
+        n += 1
+        while f"s{n}" in taken:
+            n += 1
+        renamed[s.id] = s.id = f"s{n}"
+        taken.add(s.id)
+    return renamed
+
+class SourcePick(BaseModel):
+    """A brief's first step: the thesis and the sources it rests on. Code checks every source against its
+    page before any claim is written, so claims only ever cite sources that passed."""
+    thesis: str
+    sources: list[Source]
+
+    @model_validator(mode="after")
+    def _short_ids(self):
+        """Short ids from the start, so the claims written next cite what an article can cite."""
+        _shorten(self.sources)
+        return self
+
+class SourceFix(BaseModel):
+    """Replacements for the sources that failed the check; a failed source left out is dropped."""
+    sources: list[Source]
+
+class ClaimSet(BaseModel):
+    """A brief's second step, citing only the sources that passed."""
+    counterpoint: str
+    claims: list[Claim]
 
 class RejectedBrief(BaseModel):
     brief: ResearchBrief
@@ -136,6 +169,23 @@ class Article(BaseModel):
     title: str
     dek: str                               # one-sentence summary shown under the title
     sections: list[Section] = Field(min_length=2)
+
+class PlannedSection(BaseModel):
+    heading: str
+    point: str                             # what the section says, in one sentence
+    claims: list[int] = []                 # numbers (from 1) of the brief's claims it uses
+    counterpoint: bool = False             # the section that presents the case against the thesis
+
+class ArticlePlan(BaseModel):
+    """An article's first step. Each section is then written and checked on its own."""
+    title: str
+    dek: str
+    sections: list[PlannedSection] = Field(min_length=2)
+
+class ArticleDraft(BaseModel):
+    """What the writer has so far: its plan, and the sections written and checked, in plan order."""
+    plan: ArticlePlan
+    sections: list[Section] = []
 
 class RejectedArticle(BaseModel):
     article: Article
@@ -183,3 +233,6 @@ class Evidence(BaseModel):
     Investigator writes the brief from it, possibly in a later pass."""
     messages: list[dict] = []
     pocs: list[POC] | None = None
+    finished: bool = True                  # False: a stop (or a killed loop) cut the search short; it carries on
+    attempt: int = 0                       # the research attempt it belongs to, so carrying on doesn't count anew
+    seconds: float = 0                     # search time spent so far, out of the source finder's limit
