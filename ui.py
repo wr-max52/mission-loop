@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, doctor, library, mcp_share, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -95,11 +95,17 @@ MESSAGES = {
     "search_saved": "Web search key checked and saved. Research searches the web from its next task.",
     "search_unchecked": "Web search key saved, but Brave couldn't be asked about it just now. If research can't search, check the key.",
     "search_off": "Web search key removed from this machine.",
+    "mcp_on": "Sharing on this network. Copy a setup below into the app you want to connect.",
+    "mcp_off": "Sharing stopped. Nothing on the network can reach the tools now.",
+    "mcp_token": "New token made. Apps holding the old one are refused until you give them this one.",
+    "mcp_port": "Port saved.",
     "setup_hidden": "Setup hidden. Settings → Setup shows what is left and brings it back.",
     "setup_shown": "Setup is back at the top of the Missions page.",
     "publication_saved": "Publication saved. The site's pages, About page and feeds use it now.",
 }
 ERRORS = {
+    "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
+    "mcp_port": "A port is a number from 1024 to 65535.",
     "combine": "That combine can't go ahead now: a worker is busy with one of its missions, or they moved on.",
     "link": "Those two can't be linked: pick another mission, at least one of them not published yet.",
     "topic": "A mission needs a topic.",
@@ -625,6 +631,12 @@ main:has(.settings) { max-width: 72rem; }
 .set h3.part { display:flex; align-items:center; gap:.5rem; font-size:.8rem; text-transform:uppercase;
                letter-spacing:.08em; color:var(--muted); margin:2rem 0 .6rem; scroll-margin-top:1.25rem; }
 .set h3.part .ico { width:1.05rem; height:1.05rem; color:var(--fg); }
+.mcp .inline input[readonly] { flex:1 1 16rem; min-width:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; }
+.mcp pre.mcp-snippet { white-space:pre-wrap; word-break:break-all; font-size:.8rem; background:var(--quote);
+  padding:.6rem .75rem; border-radius:8px; margin:.5rem 0 .3rem; max-width:100%; overflow-x:auto; }
+.mcp ul.mcp-tools { padding-left:1.1rem; margin:.4rem 0; display:grid; gap:.3rem; }
+.mcp .warn { color:var(--accent); }
+.mcp p .ico { width:1rem; height:1rem; vertical-align:-.15rem; margin-right:.35rem; }
 .set > h2 + h3.part { margin-top:.4rem; }
 .set > h2 + .actions, .set > h2 + form.actions { margin-top:0; }
 .set .actions[id], .set form[id] { scroll-margin-top:1.25rem; }
@@ -1858,6 +1870,7 @@ SETTINGS_SECTIONS = [
     ("workers", "people", "Workers"),
     ("providers", "plug", "Model providers"),
     ("research", "search", "Research"),
+    ("mcp", "link", "MCP server"),
     ("display", "monitor", "Display"),
     ("publication", "newspaper", "Publication"),
     ("publishing", "broadcast", "Publishing"),
@@ -1939,6 +1952,7 @@ def settings_body(request: Request, error: str = "") -> str:
         settings_section("workers", workers_section(conn, models) + loop),
         settings_section("providers", connection_section(conn)),
         settings_section("research", search_section() + library_section(conn)),
+        settings_section("mcp", mcp_section()),
         settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
         settings_section("publication", publication_section()),
         settings_section("publishing", publishing_section()),
@@ -2529,6 +2543,127 @@ def toolbox_status() -> str:
     bad = [f"{name}: {why}" for name, why in found.items() if why and "not installed" in why]
     return (f'<p class="hint">{escape("; ".join(bad))}. Install with <code>brew install node uv</code>.</p>' if bad else "")
 
+MCP_COPY_JS = """<script>
+document.querySelectorAll(".mcp [data-copy]").forEach(b => b.onclick = async () => {
+  const src = document.getElementById(b.dataset.copy), text = src.value ?? src.textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
+  catch { src.select?.(); b.textContent = "Press Ctrl/Cmd-C"; }
+  setTimeout(() => b.textContent = "Copy", 1600);
+});
+document.querySelectorAll(".mcp [data-show]").forEach(b => b.onclick = () => {
+  const f = document.getElementById(b.dataset.show), hidden = f.type === "password";
+  f.type = hidden ? "text" : "password"; b.textContent = hidden ? "Hide" : "Show";
+});
+</script>"""
+
+def mcp_setups(address: str, token: str) -> list[tuple[str, str, str]]:
+    """Ready-to-paste setups for the apps people connect most: (id, name and where it goes, text)."""
+    name = mcp_share.NAME
+    entry = {"type": "http", "url": address, "headers": {"Authorization": f"Bearer {token}"}}
+    return [
+        ("claude-code", "Claude Code: run in a terminal",
+         f'claude mcp add --transport http {name} {address} --header "Authorization: Bearer {token}"'),
+        ("json", "Cursor, VS Code, LM Studio, Windsurf and most others: add to the app's mcp.json",
+         json.dumps({"mcpServers": {name: entry}}, indent=2)),
+        ("desktop", "Claude Desktop: add to claude_desktop_config.json (needs Node for npx)",
+         json.dumps({"mcpServers": {name: {"command": "npx", "args": [
+             "-y", "mcp-remote", address, "--allow-http", "--header", f"Authorization:Bearer {token}"]}}}, indent=2)),
+    ]
+
+def mcp_section() -> str:
+    """Settings -> MCP server: share every tool Researcher Chat has with other apps on this network (mcp_share.py)."""
+    st = mcp_share.status()
+    on = settings.mcp_share()
+    intro = ('<p class="hint">Every tool Researcher Chat has, and so every tool the Theorist and the other agents '
+             'use, as one MCP server other apps can connect to: the loop and its missions, epics and briefs, the '
+             'Theorist\'s moves (the line, epics, combines, links, the board), the desk\'s library, and the web '
+             'research tools. Only devices on this machine\'s local network get in, and each needs the token below. '
+             'Nothing goes through the cloud. Changes go through the same checks as the chat\'s; approving and '
+             'publishing stay here.</p>')
+    switch = (f'<form method="post" action="/settings/mcp"><input type="hidden" name="do" value="{"off" if on else "on"}">'
+              f'<label class="switch"><input type="checkbox" role="switch"{" checked" if on else ""} '
+              f'onchange="this.form.requestSubmit()">Share on this network</label>'
+              f'<noscript><p><button>{"Stop sharing" if on else "Share"}</button></p></noscript></form>')
+    if not on:
+        return f'<div class="actions mcp">{intro}{switch}</div>'
+    if st["starting"]:
+        state = '<p class="hint">Starting the tool servers… refresh in a moment.</p>'
+    elif not st["running"]:
+        why = st["error"] or "it isn't running (it runs while this app is open)"
+        state = (f'<p class="warn">{icon("alert")}Switched on, but {escape(why)}.</p>'
+                 f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="on">'
+                 f'<button>Try again</button></form>')
+    else:
+        servers = {}
+        for server, tool in st["tools"]:
+            servers.setdefault(server, []).append(tool)
+        rows = "".join(f'<li><strong>{escape(s)}</strong> <span class="hint">{escape(", ".join(sorted(ts)))}</span></li>'
+                       for s, ts in servers.items())
+        skipped = "".join(f'<li><strong>{escape(s)}</strong> <span class="hint">not shared: {escape(why)}</span></li>'
+                          for s, why in st["skipped"].items())
+        search = ("" if "search" in servers or "search" in st["skipped"] else
+                  '<li><strong>search</strong> <span class="hint">not shared: no Brave Search key '
+                  '(add one under Research)</span></li>')
+        state = (f'<p>{icon("check")}Sharing {len(st["tools"])} tools on port {st["port"]}.</p>'
+                 f'<details><summary>The tools</summary><ul class="mcp-tools">{rows}{skipped}{search}</ul></details>')
+    address, token = mcp_share.url(), settings.mcp_token()
+    local = mcp_share.url("127.0.0.1")
+    setups = "".join(
+        f'<details{" open" if n == 0 else ""}><summary>{escape(title)}</summary>'
+        f'<pre class="mcp-snippet" id="mcp-{sid}">{escape(text)}</pre>'
+        f'<p><button type="button" data-copy="mcp-{sid}">Copy</button></p></details>'
+        for n, (sid, title, text) in enumerate(mcp_setups(address, token)))
+    connect = (f'<label for="mcp-url">Address</label><div class="inline">'
+               f'<input type="text" id="mcp-url" value="{escape(address, quote=True)}" readonly>'
+               f'<button type="button" data-copy="mcp-url">Copy</button></div>'
+               f'<p class="hint">On this computer, <code>{escape(local)}</code> works too. If another device can\'t '
+               f'reach it, allow incoming connections for Python when macOS asks, or in System Settings → Network → '
+               f'Firewall.</p>'
+               f'<label for="mcp-token">Token</label><div class="inline">'
+               f'<input type="password" id="mcp-token" value="{escape(token, quote=True)}" readonly autocomplete="off">'
+               f'<button type="button" data-show="mcp-token">Show</button>'
+               f'<button type="button" data-copy="mcp-token">Copy</button></div>'
+               f'<p class="hint">Apps send it as <code>Authorization: Bearer &lt;token&gt;</code>. Keep it like a '
+               f'password: anyone on your network with it can use the tools.</p>'
+               f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="token">'
+               f'<button>New token</button><span class="hint">refuses every app holding the old one</span></form>')
+    port = (f'<form method="post" action="/settings/mcp" class="inline"><input type="hidden" name="do" value="port">'
+            f'<label for="mcp-port" style="margin:0">Port</label>'
+            f'<input type="number" id="mcp-port" name="port" value="{settings.mcp_port()}" min="1024" max="65535" '
+            f'style="width:6rem"><button>Save</button></form>')
+    return (f'<div class="actions mcp">{intro}{switch}{state}{connect}'
+            f'{part("plug", "Connect an app")}{setups}{port}</div>{MCP_COPY_JS}')
+
+async def save_mcp(request: Request) -> Response:
+    """Settings -> MCP server: switch sharing on or off, make a new token, or change the port."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    do = str(form.get("do") or "")
+    back = "/settings#mcp"
+    if do == "off":
+        settings.set_mcp_share(False)
+        await run_in_threadpool(mcp_share.stop)
+        return go(back, done="mcp_off")
+    if do == "token":
+        settings.new_mcp_token()
+        return go(back, done="mcp_token")
+    if do == "port":
+        try:
+            settings.set_mcp_port(int(str(form.get("port") or "")))
+        except ValueError:
+            return go(back, error="mcp_port")
+        if settings.mcp_share():
+            await run_in_threadpool(mcp_share.stop)
+            if await run_in_threadpool(mcp_share.start):
+                return go(back, error="mcp_start")
+        return go(back, done="mcp_port")
+    settings.set_mcp_share(True)
+    settings.mcp_token()                   # made now, so the page has one to show
+    if await run_in_threadpool(mcp_share.start):
+        return go(back, error="mcp_start")
+    return go(back, done="mcp_on")
+
 def publication_section() -> str:
     name, tag, about_text = settings.publication_name(), settings.tagline(), settings.about_statement()
     return (f'<form method="post" action="/settings/publication" class="actions">'
@@ -2550,6 +2685,7 @@ async def save_search(request: Request) -> Response:
     back = _back(form) if form.get("back") else "/settings"
     if form.get("remove"):
         settings.forget_search_key()
+        await run_in_threadpool(mcp_share.restart)   # the search tool goes from what is shared
         return go(back, done="search_off")
     key = str(form.get("key") or "").strip()
     if not key or len(key) > 200 or any(c.isspace() for c in key):
@@ -2558,6 +2694,7 @@ async def save_search(request: Request) -> Response:
     if not ok:
         return go(back, error="search_key")
     settings.save_search_key(key)
+    await run_in_threadpool(mcp_share.restart)       # the search tool joins what is shared
     return go(back, done="search_unchecked" if note else "search_saved")
 
 async def save_publication(request: Request) -> Response:
@@ -4187,6 +4324,7 @@ app = Starlette(routes=[
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/mcp", save_mcp, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),

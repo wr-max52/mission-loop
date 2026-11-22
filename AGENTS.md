@@ -11,7 +11,9 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys and `data/search.json` the Brave Search key: never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+`data/providers.json` the cloud model providers' API keys, `data/search.json` the Brave Search key and
+`data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
+copy): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## Running
 
@@ -19,9 +21,9 @@ identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.j
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
-- CLI: `python run.py <command>` — `ui doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+- CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 683 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
+- Tests: `pytest -q` (expects 708 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
   custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
   `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -395,6 +397,20 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty (the
   search server's `BRAVE_API_KEY`, which `settings.search_key` also reads from `data/search.json`). `Toolbox.skipped`
   says which and why; the finder stops with that reason instead of searching with no tool.
+- Sharing the tools on this network (`mcp_share.py`, Settings -> MCP server): every tool Researcher Chat has, and so
+  every tool the Theorist and the other agents use, as one MCP server other apps connect to (Claude Code, Claude
+  Desktop through `mcp-remote`, Cursor, VS Code, LM Studio, another machine's agent). No tool is written twice: the
+  gateway opens exactly the chat's servers (`assistant.servers()`, so a new server or tool there is shared too)
+  through `agents/toolbox.py` and serves their tools over MCP's streamable HTTP at `http://<LAN address>:<port>/mcp`
+  (`settings.mcp_port`, default 8780). LAN only, no cloud: it listens on every interface, `Guard` refuses any client
+  address not on this network (`on_this_network`: loopback, private, link-local; never public nor 100.64/10) and any
+  request without `Authorization: Bearer <settings.mcp_token()>` (made on first use, `data/mcp_share.json` mode 600,
+  read each request, so New token takes effect at once). Off unless switched on (`settings.mcp_share`, saved only
+  while on). The UI runs it on a thread beside itself (`mcp_share.start`/`stop`; started when `ui` starts if on),
+  restarts it when the web search key changes (the tool list is read at start), and the section shows the address,
+  the token (hidden until Show), the tools it shares and what it skips, and ready-to-paste setups
+  (`ui.mcp_setups`). `python run.py mcp` runs it alone in the foreground. Writes go through the chat's checks;
+  approving, publishing, start and stop stay UI buttons, never tools.
 - Researcher Chat: `agents/assistant.py` answers the human's questions about the loop and the desk's findings, looks
   things up on the web, and can do everything the Theorist can (read the desk as it does, search the library, evolve
   the line, propose epics and combines, link missions, queue a mission, ask for its turn), through the Theorist's own
@@ -417,7 +433,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
   `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
   and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
-  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`, and
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`,
+  `board_overview` and `arrange_board` (the Theorist's board turn: the board as it reads it, and moves held by
+  `theorist.settle_board`, saved `by="chat"`), and
   `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and
   combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
   `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
@@ -513,7 +531,7 @@ the Published page. Published articles are not listed there, only the Published 
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
 order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
-between looks for work, Model providers, Research (web search and the library), Display (appearance, chat colour, board,
+between looks for work, Model providers, Research (web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`
@@ -581,6 +599,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
+| Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
 | Set the published site's name, tagline and About statement | Settings → Publication |
 | Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |
