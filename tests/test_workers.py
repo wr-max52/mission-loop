@@ -271,7 +271,8 @@ def test_cards_relight_live_from_the_flow_poll(client, monkeypatch):
     monkeypatch.setattr(ui, "loop_running", lambda: True)
     researching(); writing()
     html = client.get("/").text
-    assert '<div class="cards" data-lab-ok><a class="card" href="/m/r">' in html   # researchers may visit In progress
+    assert '<div class="cards" data-lab-ok><a class="card" href="/m/w">' in html   # researchers may visit In progress
+    assert html.index('href="/m/w"') < html.index('href="/m/r"')                   # writing above research: the flow
     assert '<span class="doing" data-idle="Researching."> · Researching.</span>' in html
     activity.work_as("assistant"); activity.begin("r", "sources")
     activity.work_as("pi"); activity.begin("w", "writer")

@@ -322,3 +322,11 @@ def test_settings_asks_for_an_oauth_app_when_the_copy_has_none(client):
 def test_settings_refuses_cross_site_posts(signed_in, client):
     r = client.post("/settings/github", data={"do": "forget"}, headers={"origin": "https://evil.example"})
     assert r.status_code == 403 and github.connected()
+
+def test_a_new_github_site_gets_every_past_article_on_the_next_pass(signed_in):
+    from test_bluesky import backlog
+    backlog(*[f"old-{i}" for i in range(6)])           # published before GitHub was set up
+    github.create_site("news")
+    orchestrator.run_until_idle(lambda: T0)
+    assert all("github" in store.get_mission(f"old-{i}").channels for i in range(6))
+    assert all(f"old-{i}/index.html" in signed_in.files("octo/news") for i in range(6))

@@ -63,6 +63,10 @@ MESSAGES = {
     "github_unlinked": "Site unlinked. The repo and the site stay on GitHub; nothing is pushed there any more.",
     "github_off": "GitHub disconnected. Its token was deleted from this machine; the repo and the site stay on GitHub.",
     "github_app_saved": "GitHub OAuth app saved. Connect GitHub to sign in with it.",
+    "custom_added": "Custom channel added. Published articles go there from the next publishing pass, newest first.",
+    "custom_removed": "Custom channel removed. Nothing more goes there; what it already got stays where it is.",
+    "republish": "Publishing requested. The loop does it within seconds, ahead of everything else waiting.",
+    "republish_off": "Publishing requested. It goes out, ahead of everything else waiting, once the loop is running.",
 }
 ERRORS = {
     "topic": "A mission needs a topic.",
@@ -83,6 +87,7 @@ ERRORS = {
     "ollama": "Ollama isn't reachable, so the model list can't be checked. Start the Ollama app and try again.",
     "handle": "A 1F916 handle is 2 to 32 letters, digits, _ or -.",
     "github_app": "That doesn't look like an OAuth app client ID (it's on the app's page on GitHub).",
+    "places": "Tick at least one place to publish it to.",
 }
 
 # ---------- loop status ----------
@@ -133,6 +138,8 @@ def tone(m: Mission) -> str:
     return "parked" if m.state == State.PARKED else ""
 
 def label(m: Mission) -> str:
+    if m.state == State.DONE and m.publish_requests:
+        return "Publishing again"
     if m.state == State.BRIEF_READY and m.approved:
         return "Approved, writing next"
     if m.state == State.ARTICLE_READY and m.reviewed:
@@ -152,7 +159,19 @@ def next_step(m: Mission) -> str:
         return f"Research attempt {m.attempts + 1} of {m.max_attempts}." if m.attempts else "Researching."
     if m.state == State.WRITING:
         return f"Writing attempt {m.write_attempts + 1} of {m.max_attempts}."
+    if m.state == State.DONE and m.publish_requests:
+        return "To " + ", ".join(orchestrator.channel_name(k) for k in m.publish_requests) + ", ahead of everything else."
     return ""
+
+def in_progress(m: Mission) -> bool:
+    """On the Missions page: everything not published yet, and published articles a human asked to publish again."""
+    return not needs_you(m) and (m.state != State.DONE or bool(m.publish_requests))
+
+def flow_rank(m: Mission) -> int:
+    """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
+    order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3,
+             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8}
+    return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
 def _brief(slug: str) -> ResearchBrief | None:
     data = store.load_artifact(slug, "brief")
@@ -394,6 +413,31 @@ canvas.lab-stage { position:absolute; left:0; pointer-events:none; image-renderi
 .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 .who { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
 table.models td.size { white-space:nowrap; color:var(--muted); }
+a.back { font-weight:600; text-decoration:none; }
+.card.site-link { margin-top:1.5rem; border-style:dashed; }
+.card.site-link .topic { display:inline-flex; align-items:center; gap:.4rem; }
+.card.site-link svg, .card.site-link .topic svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
+                       stroke-linecap:round; stroke-linejoin:round; }
+.card.pub:hover { border-color:var(--rule); }
+.card.pub.publish:hover { border-color:var(--tone); }
+.card.pub .topic { color:var(--fg); }
+ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
+ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
+form.republish { display:flex; flex-wrap:wrap; gap:.3rem 1rem; align-items:center; margin:.6rem 0 0;
+                 padding-top:.6rem; border-top:1px solid var(--rule); }
+form.republish button { margin-left:auto; }
+label.tick { display:inline-flex; align-items:center; gap:.35rem; margin:0; font-weight:600; cursor:pointer; }
+label.tick input { width:auto; margin:0; }
+label.tick .hint { margin-left:-.15rem; }
+.pubbox { border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin:.6rem 0; }
+.pubbox .head { display:flex; justify-content:space-between; align-items:center; gap:.6rem; flex-wrap:wrap; }
+.pubbox h3 { margin:0; font-family:Georgia, serif; font-size:1.15rem; }
+.pubbox p:last-child, .pubbox form:last-child p:last-child { margin-bottom:0; }
+.pubbox form button { margin-top:.2rem; }
+.pubbox.add { border-style:dashed; }
+.pubbox.add > summary { color:var(--fg); font-size:1rem; }
+.pubbox details.formats { margin:.8rem 0; }
+h3.sub { font-size:.95rem; margin:1.4rem 0 .3rem; }
 """
 
 ELAPSED_JS = """<script>
@@ -472,7 +516,7 @@ async function refresh() {{
             f"<title>{escape(title)}</title>{THEME_INIT}<style>{CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Loop</a>'
             f'<span class="links">{nav_status()}<a href="/">{ICON_MISSIONS}Missions</a>'
-            f'<a href="/site/" target="_blank">{ICON_SITE}Published site</a>'
+            f'<a href="/published">{ICON_SITE}Published site</a>'
             f'<a href="/settings">{ICON_SETTINGS}Settings</a>{THEME_TOGGLE}</span></nav>'
             f"{body}</main>{chat_widget()}{script}</body></html>")
     return HTMLResponse(html)
@@ -498,10 +542,7 @@ FLOW = [
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
     ("article_review", "human", "Review article"),
-    ("publisher", "agent", "Publish"),
-    ("1f916", "agent", "1F916"),
-    ("github", "agent", "GitHub Pages"),
-    ("bluesky", "agent", "Bluesky"),
+    ("publisher", "agent", "Publish"),     # the local site and every channel: one step on the strip
 ]
 HUMAN_STEPS = {"brief_review": ("Brief review: you approve the brief or send it back", "review"),
                "article_review": ("Article review: you publish the article or send it back", "publish")}
@@ -509,10 +550,12 @@ CHECK_TITLE = ("{name}: code, no model. A failure goes back for another try; "
                "after {n} tries the mission is parked for you")
 
 def flow_steps() -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: channels and outreach that are off are left out."""
-    on = {"contacts": settings.OUTREACH, "1f916": agents.f916_enabled(), "github": agents.github_enabled(),
-          "bluesky": agents.bluesky_enabled()}
-    return [s for s in FLOW if on.get(s[0], True)]
+    """The strip's steps for this setup: contacts only while outreach is on."""
+    return [s for s in FLOW if s[0] != "contacts" or settings.OUTREACH]
+
+def strip_step(agent: str) -> str:
+    """Where an agent sits on the strip: posting to a channel is part of the one Publish step."""
+    return "publisher" if agent in ("1f916", "github", "bluesky") else agent
 
 def doing(e: dict) -> str:
     """What one working agent is doing, e.g. "Source finder is working on <topic> · 2m 3s"."""
@@ -537,13 +580,13 @@ def flow_state() -> dict:
     when a worker's step ends."""
     running = loop_running()
     shown = {k for k, _, _ in flow_steps()}
-    now = [e for e in running_now() if e["agent"] in shown]   # a channel switched off mid-pass: nothing to light
+    now = [e for e in running_now() if strip_step(e["agent"]) in shown]
     missions = store.all_missions()
     parked = [m for m in missions if m.state == State.PARKED]
     writing = sum(orchestrator.parked_while_writing(m) for m in parked)
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
-        "working": [{"worker": e["worker"], "step": e["agent"], "slug": e["slug"], "since": float(e["since"]),
+        "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
                      "name": activity.AGENTS[e["agent"]]} for e in now],
         "waiting": {"brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
@@ -615,22 +658,10 @@ def finder_panel() -> str:
   <p><button>Save inspiration</button></p>
 </form>"""
 
-def channel_names(m: Mission) -> str:
-    """Where a published mission went, e.g. "Local site, 1F916" or "Local site · 1F916 queued #2"."""
-    names = ", ".join(orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m))
-    if agents.f916_enabled() and "1f916" not in m.channels:
-        slugs = [e["slug"] for e in orchestrator.queue(f916)]
-        names += f" · 1F916 queued #{slugs.index(m.slug) + 1}" if m.slug in slugs else ""
-    if agents.github_enabled() and "github" not in m.channels:
-        names += " · GitHub Pages queued"
-    if agents.bluesky_enabled() and "bluesky" not in m.channels:
-        names += " · Bluesky queued"
-    return names
-
 def f916_status() -> str:
     """One line on the 1F916 channel: who we post as, how many wait, when the next post can go."""
     if not agents.f916_enabled():
-        return ('1F916 is off. Join on the <a href="/settings">Settings</a> page, '
+        return ('1F916 is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
                 "or once with <code>python run.py join-1f916 &lt;handle&gt;</code>.")
     queued, until, state = len(orchestrator.queue(f916)), f916.spent_until(), f916.load_state()
     if until and until > clock.now():
@@ -645,7 +676,7 @@ def f916_status() -> str:
 def bluesky_status() -> str:
     """One line on the Bluesky channel: who we post as, how many wait, and the last failure if any."""
     if not agents.bluesky_enabled():
-        return ('Bluesky is off. Add your handle and an app password on the <a href="/settings">Settings</a> page, '
+        return ('Bluesky is off. Add it under Channels on the <a href="/settings#publishing">Settings</a> page, '
                 "or set <code>BLUESKY_HANDLE</code> and <code>BLUESKY_APP_PASSWORD</code> in .env and run "
                 "<code>python run.py check-bluesky</code>.")
     queued, problem = len(orchestrator.queue(bluesky)), bluesky.load_state().get("note", "")
@@ -653,7 +684,7 @@ def bluesky_status() -> str:
     line = (f"Bluesky: posting as <strong>{escape(bluesky.handle())}</strong>{server}, at most one article every 10 minutes, "
             f"newest first · {queued} queued")
     if not settings.site_url():
-        line += ('<br><span class="hint">No site address, so posts link to the 1F916 copy when there '
+        line += ('<br><span class="hint">No hosted address for the site, so posts link to the 1F916 copy when there '
                  "is one and otherwise carry no link.</span>")
     return line + (f'<br><span class="hint">Last try failed: {escape(problem)}</span>' if problem else "")
 
@@ -663,7 +694,7 @@ def _link(url: str, text: str = "") -> str:
 def github_status() -> str:
     """One line on the GitHub Pages channel: which repo, where the site is, the last push or failure."""
     if not agents.github_enabled():
-        return ('GitHub Pages is off. Connect GitHub on the <a href="/settings">Settings</a> page to put the site '
+        return ('GitHub Pages is off. Connect GitHub on the <a href="/settings#publishing">Settings</a> page to put the site '
                 "online, so Bluesky posts link to each article.")
     state, repo = github.load_state(), github.repo()
     line = (f"GitHub Pages: {_link(github.site_address())} from "
@@ -675,7 +706,73 @@ def github_status() -> str:
     if state.get("note"):
         line += f'<br><span class="hint">Last push failed: {escape(state["note"])}</span>'
     return line
+def custom_status(c) -> str:
+    """One line on a custom channel: what it sends where, and how many wait."""
+    cfg = c.cfg
+    where = (f"POSTs to <code>{escape(urlparse(cfg['target']).netloc)}</code>" if cfg["kind"] == "webhook"
+             else f"writes files into <code>{escape(cfg['target'])}</code>")
+    fmt = settings.CUSTOM_FORMATS.get(cfg["format"], cfg["format"])
+    return f"{escape(c.NAME)}: {where} as {escape(fmt)}, newest first · {len(orchestrator.queue(c))} queued"
 
+def channel_status(c) -> str:
+    if c.KEY == f916.KEY:
+        return f916_status()
+    if c.KEY == bluesky.KEY:
+        return bluesky_status()
+    if c.KEY == github.KEY:
+        return github_status()
+    return custom_status(c)
+
+def live_channels() -> list:
+    """The channels that are set up and post, in posting order."""
+    return [c for c in agents.channels() if c.enabled()]
+
+def places(m: Mission, queues: dict[str, list[str]] | None = None) -> list[dict]:
+    """Every place this published article is or could be: the local site, then each channel that is set up,
+    then any it reached on a channel since switched off. Each: key, name, posted (bool), on (bool), status (HTML)."""
+    live = live_channels()
+    if queues is None:
+        queues = {c.KEY: [e["slug"] for e in orchestrator.queue(c)] for c in live}
+    reached, out = orchestrator.channels(m), []
+    keys = ["site"] + [c.KEY for c in live] + [k for k in reached if k != "site" and k not in {c.KEY for c in live}]
+    for key in keys:
+        post, bits = reached.get(key), []
+        if post:
+            where = escape(post.where)
+            link = (f'<a href="{where}" target="_blank" rel="noopener">{where}</a>'
+                    if post.where.startswith(("https://", "http://")) else
+                    f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>' if key == "site" else where)
+            bits.append(f"{'written' if key == 'site' else 'posted'} {post.at:%b %-d, %Y %H:%M} UTC · {link}")
+        if key in m.publish_requests:
+            bits.append(f'<strong>publishing requested {m.publish_requests[key]:%b %-d %H:%M} UTC</strong>, ahead of '
+                        "everything else" + ("" if loop_running() else "; it goes out once the loop is running"))
+        elif not post and key in queues:
+            slugs = queues[key]
+            bits.append(f"waiting, #{slugs.index(m.slug) + 1} of {len(slugs)} in the queue" if m.slug in slugs
+                        else "waiting for the feed to carry its text")
+        if m.channel_errors.get(key):
+            bits.append(f"refused the last try: {escape(m.channel_errors[key])}")
+        out.append({"key": key, "name": orchestrator.channel_name(key), "posted": bool(post),
+                    "on": key == "site" or key in queues, "status": " · ".join(bits) or "not posted"})
+    return out
+
+def channel_names(m: Mission) -> str:
+    """Where a published mission went, e.g. "Local site, 1F916"."""
+    return ", ".join(orchestrator.channel_name(k) for k in orchestrator.channels(m))
+
+def publish_form(m: Mission, rows: list[dict], back: str) -> str:
+    """Publish a published article again: tick where. Places it hasn't reached yet are ticked already."""
+    boxes = "".join(
+        f'<label class="tick"><input type="checkbox" name="to" value="{escape(r["key"], quote=True)}"'
+        f'{"" if r["posted"] and r["key"] != "site" else " checked"}> {escape(r["name"])}'
+        f'<span class="hint">{" (rewrite the page)" if r["key"] == "site" else " (again)" if r["posted"] else ""}</span></label>'
+        for r in rows if r["on"])
+    return (f'<form method="post" action="/m/{quote(m.slug)}/republish" class="republish">'
+            f'<input type="hidden" name="back" value="{escape(back, quote=True)}">{boxes}'
+            f'<button class="primary">Publish</button></form>')
+
+def places_html(m: Mission, rows: list[dict]) -> str:
+    return "".join(f'<li><strong>{escape(r["name"])}</strong>: {r["status"]}</li>' for r in rows)
 
 # ---------- settings: the two workers and the LLM connection ----------
 
@@ -899,7 +996,10 @@ token is typed here. The app can then reach your public repos only, and its toke
 <form method="post" action="/settings/github" class="actions"><input type="hidden" name="do" value="connect">
   <p><button>Connect GitHub</button></p></form>"""
 
-def settings_body(request: Request, error: str = "") -> str:
+STUB_RUN = "Off while MISSION_LOOP_STUBS=1, so a test run never posts for real."
+
+def local_site_box() -> str:
+    """The foundation: the static site in site/ on this machine, which every channel posts from."""
     url, env = settings.site_url(), settings.SITE_URL
     count = len(publisher.entries())
     feeds = ('<a href="/site/feed.xml" target="_blank">site/feed.xml</a> (RSS) · '
@@ -907,44 +1007,129 @@ def settings_body(request: Request, error: str = "") -> str:
     hosted = escape(url.rstrip("/") + "/")
     links = (f"Links in the feeds are full addresses under {hosted}; once the site is there, its feeds are "
              f"{hosted}feed.xml and {hosted}feed.json." if url else
-             "No site address yet, so links in the feeds are relative to the feed file. "
+             "No hosted address yet, so links in the feeds are relative to the feed file. "
              "That works wherever the site folder is served.")
     source = (' <span class="hint">(from MISSION_LOOP_SITE_URL in .env; saving here overrides it)</span>'
-              if env and not settings.saved().get("site_url") else "")
-    if agents.f916_enabled():
-        f916_row = f"<p>{f916_status()}</p>"
-    elif os.environ.get("MISSION_LOOP_STUBS") == "1":
-        f916_row = "<p>1F916 is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
+              if env and not settings.saved().get("site_url") else
+              ' <span class="hint">(the GitHub Pages address until you type one)</span>'
+              if url and not settings.saved().get("site_url") else "")
+    return f"""<div class="pubbox">
+<div class="head"><h3>Local site</h3><span class="badge">Foundation · always on</span></div>
+<p>Every published article is written here first, as files on this machine: a page per article in <code>site/</code>,
+an index page and two feeds. It is the record of what is published, and every channel posts from it.</p>
+<p>{count} article{"" if count == 1 else "s"} · {feeds} · <a href="/published">See what's published</a></p>
+<form method="post" action="/settings/site-url">
+  <label for="site_url">Hosted address{source} <span class="hint">optional: where a copy of <code>site/</code> is served,
+  e.g. https://example.com/news/. Feed links and Bluesky link cards use it. Empty: the GitHub Pages address once that
+  channel is set up, else none while the site is only on this machine.</span></label>
+  <input type="text" id="site_url" name="site_url" maxlength="300" value="{escape(settings.saved().get("site_url", ""), quote=True)}" placeholder="{escape(url or "https://example.com/news/", quote=True)}">
+  <p class="hint">{links}</p>
+  <p><button>Save hosted address</button></p>
+</form></div>"""
+
+def channel_card(c) -> str:
+    """One channel that is set up: what it is, how it is doing, and how to take it away."""
+    if c.KEY == f916.KEY:
+        kind, remove = "Built in", ('<p class="hint">Joined for good: <code>data/1f916.json</code> is the citizen\'s '
+                                    "whole identity, with no recovery, so it can't be removed here.</p>")
+    elif c.KEY == github.KEY:               # its status and its unlink / disconnect buttons
+        return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">Built in</span>'
+                f'</div>{github_row()}</div>')
+    elif c.KEY == bluesky.KEY:
+        kind = "Built in"
+        remove = ("""<form method="post" action="/settings/bluesky"><input type="hidden" name="forget" value="1">
+  <button>Disconnect Bluesky</button></form>""" if bluesky.saved_credentials() else
+                  '<p class="hint">Set in .env; remove BLUESKY_HANDLE and BLUESKY_APP_PASSWORD there to turn it off.</p>')
     else:
-        f916_row = f"""<p>Off. Joining makes a permanent, public citizen on <a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>.
+        kind = "Custom · " + settings.CUSTOM_KINDS.get(c.cfg["kind"], c.cfg["kind"])
+        remove = (f'<form method="post" action="/settings/custom-channel/remove">'
+                  f'<input type="hidden" name="id" value="{escape(c.cfg["id"], quote=True)}">'
+                  f'<button>Remove channel</button></form>')
+    return (f'<div class="pubbox channel"><div class="head"><h3>{escape(c.NAME)}</h3><span class="badge">{escape(kind)}</span>'
+            f'</div><p>{channel_status(c)}</p>{remove}</div>')
+
+def add_channel_forms() -> str:
+    """Ways to add a channel: the built-in ones not set up yet, and a custom one."""
+    out = []
+    if not agents.f916_enabled():
+        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Posts each article's full text,
+one a day, newest first. Joining makes a permanent, public citizen on <a href="{escape(settings.f916_url(), quote=True)}" target="_blank" rel="noopener">{escape(settings.f916_url())}</a>.
 Its secret key is saved to <code>data/1f916.json</code> on this machine only; there is no recovery if it is lost.</p>
-<form method="post" action="/settings/join-1f916" class="actions">
-  <label for="handle" style="margin-top:0">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
+<form method="post" action="/settings/join-1f916">
+  <label for="handle">Handle <span class="hint">2 to 32 letters, digits, _ or -; it can't be changed later</span></label>
   <input type="text" id="handle" name="handle" required maxlength="32" pattern="[A-Za-z0-9_-]{{2,32}}" placeholder="e.g. loop-desk">
   <label for="f916_url">Server <span class="hint">the 1F916 to join; the key only works there, so it is saved with the key</span></label>
   <input type="text" id="f916_url" name="f916_url" maxlength="300" value="{escape(settings.f916_url(), quote=True)}">
   <p><button>Join 1F916</button></p>
-</form>"""
-    if agents.bluesky_enabled():
-        forget = ("""<form method="post" action="/settings/bluesky" class="actions"><input type="hidden" name="forget" value="1">
-  <p><button>Disconnect Bluesky</button></p></form>""" if bluesky.saved_credentials() else
-                  '<p class="hint">Set in .env; remove BLUESKY_HANDLE and BLUESKY_APP_PASSWORD there to turn it off.</p>')
-        bluesky_row = f"<p>{bluesky_status()}</p>{forget}"
-    elif os.environ.get("MISSION_LOOP_STUBS") == "1":
-        bluesky_row = "<p>Bluesky is off while MISSION_LOOP_STUBS=1, so a test run never posts for real.</p>"
-    else:
-        bluesky_row = f"""<p>Off. Each published article gets a short post (title and dek) linking to the full text.
-Use an app password from Bluesky's Settings &gt; Privacy and security &gt; App passwords, never your account password.
-It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this machine only.</p>
-<form method="post" action="/settings/bluesky" class="actions">
-  <label for="bsky_handle" style="margin-top:0">Handle <span class="hint">e.g. yourname.bsky.social</span></label>
+</form>""")
+        out.append(f'<details class="pubbox add"><summary><strong>1F916</strong> · built in</summary>{body}</details>')
+    if not agents.github_enabled():         # connect, then pick the repo: open while a step is under way
+        under_way = " open" if (GITHUB_LOGIN or github.connected()) and os.environ.get("MISSION_LOOP_STUBS") != "1" else ""
+        out.append(f'<details class="pubbox add"{under_way}><summary><strong>GitHub Pages</strong> · built in</summary>'
+                   f'{github_row()}</details>')
+    if not agents.bluesky_enabled():
+        body = (f"<p>{STUB_RUN}</p>" if os.environ.get("MISSION_LOOP_STUBS") == "1" else f"""<p>Announces each article with a
+short post (title and dek) linking to the full text, at most one every 10 minutes. Use an app password from Bluesky's
+Settings &gt; Privacy and security &gt; App passwords, never your account password. It is checked with Bluesky, then
+saved to <code>data/bluesky.json</code> on this machine only.</p>
+<form method="post" action="/settings/bluesky">
+  <label for="bsky_handle">Handle <span class="hint">e.g. yourname.bsky.social</span></label>
   <input type="text" id="bsky_handle" name="handle" required maxlength="253" autocomplete="username" placeholder="yourname.bsky.social">
   <label for="bsky_password">App password</label>
   <input type="password" id="bsky_password" name="app_password" required maxlength="64" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx">
   <label for="bsky_service">Server <span class="hint">optional: only for an account on another Bluesky server</span></label>
   <input type="text" id="bsky_service" name="service" maxlength="300" placeholder="{escape(settings.bluesky_service(), quote=True)}">
   <p><button>Check and turn on Bluesky</button></p>
-</form>"""
+</form>""")
+        out.append(f'<details class="pubbox add"><summary><strong>Bluesky</strong> · built in</summary>{body}</details>')
+    kinds = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_KINDS.items())
+    formats = "".join(f'<option value="{k}">{escape(v)}</option>' for k, v in settings.CUSTOM_FORMATS.items())
+    out.append(f"""<details class="pubbox add"><summary><strong>Custom channel</strong> · anything else</summary>
+<p>Sends every published article somewhere you choose, in a format you choose, newest first and once each, like the
+other channels. Point a webhook at a service (a chat room, an automation tool, your own server), or have it drop a
+file per article into a folder another tool picks up (a clone of a site repository, a synced folder).</p>
+<form method="post" action="/settings/custom-channel">
+  <label for="cc_name">Name <span class="hint">what the Published page calls it</span></label>
+  <input type="text" id="cc_name" name="name" required maxlength="40" placeholder="e.g. Team chat">
+  <label for="cc_kind">Send by</label>
+  <select id="cc_kind" name="kind">{kinds}</select>
+  <label for="cc_target">Where <span class="hint">a webhook's full http(s) address, or a folder's full path on this machine</span></label>
+  <input type="text" id="cc_target" name="target" required maxlength="500" placeholder="https://hooks.example.com/abc or /Users/me/outbox">
+  <label for="cc_format">Format</label>
+  <select id="cc_format" name="format">{formats}</select>
+  <details class="formats"><summary>What each format looks like</summary>
+  <p><strong>JSON</strong>: one JSON Feed 1.1 item, the same as the article's entry in <code>site/feed.json</code>:
+  <code>id</code> (the short name), <code>url</code>, <code>title</code>, <code>summary</code> (the dek),
+  <code>content_text</code> (the full article with its sources), <code>date_published</code> and, in an epic,
+  <code>tags</code>. Sent as <code>application/json</code>; a folder gets <code>&lt;short-name&gt;.json</code>.</p>
+  <p><strong>Markdown</strong>: <code># Title</code>, the dek in italics, the link to the hosted site when there is
+  one, then the full text. A folder gets <code>&lt;short-name&gt;.md</code>.</p>
+  <p><strong>Plain text</strong>: the same without the markup, as <code>&lt;short-name&gt;.txt</code>.</p>
+  <p>A webhook counts as posted on any 2xx reply; a JSON reply with a <code>url</code> is shown as where the article
+  can be read. 429 means try later, other 4xx refuse that article, and anything else is tried again next pass.</p>
+  </details>
+  <p><button>Add custom channel</button></p>
+</form></details>""")
+    return "".join(out)
+
+def publishing_section() -> str:
+    live = live_channels()
+    if os.environ.get("MISSION_LOOP_STUBS") == "1":
+        cards = f'<p class="muted">{STUB_RUN}</p>'
+    else:
+        cards = "".join(channel_card(c) for c in live) or \
+            '<p class="muted">No channels yet, so articles stay on the local site. Add one below.</p>'
+    return f"""<h2 class="group" id="publishing">Publishing</h2>
+<p>Publishing has two parts: the <strong>local site</strong>, the foundation every article is written to first, and
+<strong>channels</strong>, everywhere else the articles go. Each channel posts from the local site, newest first, and
+remembers what it has posted. Publish any article again from the <a href="/published">Published</a> page.</p>
+{local_site_box()}
+<h3 class="sub">Channels ({len(live)})</h3>
+{cards}
+<h3 class="sub">Add a channel</h3>
+{add_channel_forms()}"""
+
+def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
     conn = llm.connection()
@@ -958,20 +1143,7 @@ It is checked with Bluesky, then saved to <code>data/bluesky.json</code> on this
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
-<h2 class="group">Feed</h2>
-<p>Every published article goes to the site and to its feeds, side by side. Channels post from the feed.</p>
-<p>{feeds} · {count} article{"" if count == 1 else "s"}</p>
-<form method="post" action="/settings/site-url" class="actions">
-  <label for="site_url" style="margin-top:0">Site address{source} <span class="hint">optional: where the site is hosted, e.g. https://example.com/news/. Leave empty while it is only on this machine.</span></label>
-  <input type="text" id="site_url" name="site_url" maxlength="300" value="{escape(settings.saved().get("site_url", ""), quote=True)}" placeholder="{escape(env or "https://example.com/news/", quote=True)}">
-  <p class="hint">{links}</p>
-  <p><button>Save site address</button></p>
-</form>
-<h2 class="group">Channels</h2>
-<h3>Local site and feeds</h3><p>Always on.</p>
-<h3>1F916</h3>{f916_row}
-<h3>GitHub Pages</h3>{github_row()}
-<h3>Bluesky</h3>{bluesky_row}
+{publishing_section()}
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
@@ -1016,6 +1188,25 @@ async def join_1f916(request: Request) -> Response:
     if loop_running():
         wake()
     return go("/settings", done="joined")
+
+async def add_custom_channel(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        settings.add_custom_channel(str(form.get("name") or ""), str(form.get("kind") or ""),
+                                    str(form.get("target") or "")[:500], str(form.get("format") or ""))
+    except ValueError as e:
+        return page("Settings", settings_body(request, f"Custom channel not added: {e}."))
+    if loop_running():
+        wake()
+    return go("/settings", done="custom_added")
+
+async def remove_custom_channel(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    settings.remove_custom_channel(str((await request.form()).get("id") or ""))
+    return go("/settings", done="custom_removed")
 
 async def save_bluesky(request: Request) -> Response:
     """Log in with the handle and app password first; only credentials Bluesky accepts are saved."""
@@ -1167,7 +1358,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
     color = tone(m)
     working, idle = working_on(m, now), next_step(m)
-    if m.state == State.DONE and m.published_at:
+    if m.state == State.DONE and m.published_at and not m.publish_requests:
         working, idle = "", f"Published {m.published_at:%b %-d, %Y} · {channel_names(m)}"
     sub = working or idle
     classes = " ".join(c for c in ("card", color, "active" if working else "") if c)
@@ -1184,9 +1375,9 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
 
 async def home(request: Request) -> HTMLResponse:
     missions = store.all_missions()
-    groups = [("Needs you", [m for m in missions if needs_you(m)]),
-              ("In progress", [m for m in missions if not needs_you(m) and m.state != State.DONE]),
-              ("Published", [m for m in missions if m.state == State.DONE])]
+    flow = lambda ms: sorted(ms, key=flow_rank)   # stable: within a step, oldest first
+    groups = [("Needs you", flow(m for m in missions if needs_you(m))),
+              ("In progress", flow(m for m in missions if in_progress(m)))]
     now = running_now()
     epics = {e.slug: e for e in store.all_epics()}
     body = [flash(request), loop_panel("/"), finder_panel()]
@@ -1199,13 +1390,14 @@ async def home(request: Request) -> HTMLResponse:
         if ms:
             anchor = ' id="needs-you"' if title == "Needs you" else ""
             body.append(f'<h2 class="group"{anchor}>{title} ({len(ms)})</h2>')
-            if title == "Published":
-                body.append(f'<p class="muted">{f916_status()}</p><p class="muted">{github_status()}</p>'
-                            f'<p class="muted">{bluesky_status()}</p>')
             lab = settings.animations() and title == "In progress"
             cards = "".join(card(m, now, epics, lab) for m in ms)
             # assets/flow.js relights cards in place; researchers may only visit the ones in a data-lab-ok group
             body.append(f'<div class="cards"{" data-lab-ok" if lab else ""}>{cards}</div>')
+    done = sum(m.state == State.DONE for m in missions)
+    body.append(f'<a class="card site-link" href="/published"><div class="row"><span class="topic">{ICON_SITE}Published site</span>'
+                f'<span class="badge">{done} article{"" if done == 1 else "s"}</span></div>'
+                f'<div class="sub">Everything published, where each article went, and publishing any of them again</div></a>')
     body.append(epic_list(missions))
     body.append(epic_datalist() + """<h2 class="group">New mission</h2>
 <form method="post" action="/missions" class="actions">
@@ -1264,34 +1456,48 @@ def actions_for(m: Mission) -> str:
                 f'</div><p class="hint">Requeue gives it a fresh set of {m.max_attempts} attempts and keeps the notes '
                 f'below so the agent can learn from them. {push_hint}</p></div>')
     if m.state == State.DONE:
+        rows = places(m)
         return (f'<div class="actions"><div class="buttons">'
-                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the published site</a></div>'
-                f'{channels_html(m)}</div>')
+                f'<a class="btn" href="/site/{slug}/" target="_blank">View on the local site</a>'
+                f'<a class="btn" href="/published">All published articles</a></div>'
+                f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul class="places">{places_html(m, rows)}</ul>'
+                f'<p class="hint" style="margin-bottom:.2rem">Publish it again</p>{publish_form(m, rows, f"/m/{slug}")}</div>')
     return ""
 
-def channels_html(m: Mission) -> str:
-    rows = []
-    for key, post in orchestrator.channels(m).items():
-        name = escape(orchestrator.CHANNEL_NAMES.get(key, key))
-        where = escape(post.where)
-        link = (f'<a href="{where}" target="_blank" rel="noopener">{where}</a>' if post.where.startswith("https://")
-                else f'<a href="/site/{quote(m.slug)}/" target="_blank">{where}</a>')
-        rows.append(f"<li>{name}: {link} · {post.at:%b %-d, %Y %H:%M} UTC</li>")
-    if agents.f916_enabled() and "1f916" not in m.channels:
-        slugs = [e["slug"] for e in orchestrator.queue(f916)]
-        place = f"#{slugs.index(m.slug) + 1} of {len(slugs)}" if m.slug in slugs else "queued"
-        rows.append(f"<li>1F916: waiting, {place} in the queue (one post a day, newest first)</li>")
-    if m.channel_errors.get("1f916"):
-        rows.append(f'<li>1F916 refused the last try: {escape(m.channel_errors["1f916"])}. '
-                    "It stays queued behind the others.</li>")
-    if agents.github_enabled() and "github" not in m.channels:
-        rows.append("<li>GitHub Pages: waiting for the next push</li>")
-    if agents.bluesky_enabled() and "bluesky" not in m.channels:
-        rows.append("<li>Bluesky: waiting (at most one post every 10 minutes, newest first)</li>")
-    if m.channel_errors.get("bluesky"):
-        rows.append(f'<li>Bluesky refused the last try: {escape(m.channel_errors["bluesky"])}. '
-                    "It stays queued behind the others.</li>")
-    return f'<p class="hint" style="margin-bottom:.2rem">Published to</p><ul>{"".join(rows)}</ul>'
+async def published_page(request: Request) -> HTMLResponse:
+    """The published side: the local site, every channel, and each article with where it went and a way to
+    publish it again."""
+    missions = sorted((m for m in store.all_missions() if m.state == State.DONE),
+                      key=lambda m: str(m.published_at or ""), reverse=True)
+    titles = {e["slug"]: e["title"] for e in publisher.entries()}
+    live = live_channels()
+    queues = {c.KEY: [e["slug"] for e in orchestrator.queue(c)] for c in live}
+    epics = {e.slug: e for e in store.all_epics()}
+    body = [flash(request), '<p><a class="back" href="/">&larr; Back to missions</a></p>', "<h1>Published</h1>",
+            f'<p>{len(missions)} article{"" if len(missions) == 1 else "s"} on the local site. '
+            f'<a class="btn" href="/site/" target="_blank">Open the local site</a> '
+            f'<a class="btn" href="/settings#publishing">Publishing settings</a></p>']
+    rows = ['<li><strong>Local site</strong>: the foundation, always on · files in <code>site/</code> · '
+            '<a href="/site/feed.xml" target="_blank">RSS</a> · <a href="/site/feed.json" target="_blank">JSON Feed</a></li>']
+    rows += [f"<li>{channel_status(c)}</li>" for c in live]
+    if not live:
+        rows.append('<li class="muted">No channels yet. Add one on the <a href="/settings#publishing">Settings</a> page.</li>')
+    body.append(f'<h2 class="group">Where articles go</h2><ul class="places">{"".join(rows)}</ul>')
+    if not loop_running():
+        body.append('<p class="flash">The loop is off, so anything you publish here waits until it starts.</p>')
+    body.append('<h2 class="group">Articles</h2>')
+    if not missions:
+        body.append('<p class="muted">Nothing published yet. Articles show up here once you publish them from the Missions page.</p>')
+    for m in missions:
+        rows = places(m, queues)
+        when = f"{m.published_at:%b %-d, %Y}" if m.published_at else ""
+        body.append(
+            f'<div class="card pub{" publish" if m.publish_requests else ""}" id="a-{escape(m.slug)}">'
+            f'<div class="row"><a class="topic" href="/site/{quote(m.slug)}/" target="_blank">{escape(titles.get(m.slug, m.topic))}</a>'
+            f'<span class="badge{" publish" if m.publish_requests else ""}">{escape(label(m))}</span></div>'
+            f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">mission page</a></div>'
+            f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
+    return page("Published", "\n".join(body), poll=True)
 
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]
@@ -1578,6 +1784,16 @@ async def act(request: Request) -> Response:
         except ValueError:
             return go(here, error="state")
         done = "pushed"
+    elif action == "republish":
+        back = _back(form)
+        try:
+            orchestrator.request_publish(m, [str(k) for k in form.getlist("to")], now)
+        except ValueError:
+            return go(back, error="places" if m.state == State.DONE else "state")
+        if not loop_running():
+            return go(back, done="republish_off")
+        wake()
+        return go(back, done="republish")
     elif action == "epic":
         name = str(form.get("epic") or "")
         if name.strip() and not epic_title(name):
@@ -1689,6 +1905,9 @@ app = Starlette(routes=[
     Route("/settings/bluesky", save_bluesky, methods=["POST"]),
     Route("/settings/github", github_action, methods=["POST"]),
     Route("/settings/github/poll", github_poll, methods=["POST"]),
+    Route("/settings/custom-channel", add_custom_channel, methods=["POST"]),
+    Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
+    Route("/published", published_page),
     Route("/m/{slug}", mission),
     Route("/m/{slug}/preview", preview),
     Route("/m/{slug}/{action}", act, methods=["POST"]),

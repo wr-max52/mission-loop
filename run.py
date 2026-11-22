@@ -229,7 +229,7 @@ def join_1f916(handle: str = typer.Argument(..., help="2-32 letters, digits, _ o
 def _channel_summary(m) -> str:
     if m.state.value != "DONE":
         return ""
-    names = [orchestrator.CHANNEL_NAMES.get(k, k) for k in orchestrator.channels(m)]
+    names = [orchestrator.channel_name(k) for k in orchestrator.channels(m)]
     if agents.f916_enabled() and "1f916" not in m.channels:
         names.append("1F916 queued")
     if agents.github_enabled() and "github" not in m.channels:

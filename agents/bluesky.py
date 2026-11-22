@@ -25,6 +25,7 @@ from render import POSSIBILITY_LABEL
 KEY, NAME = "bluesky", "Bluesky"
 TEXT_MAX = 300                             # Bluesky counts graphemes; code points are never fewer, so this is safe
 POST_GAP = timedelta(minutes=10)           # with a 15-minute loop, one post a pass
+MANUAL_SKIPS_WAIT = True                   # the gap is ours, not Bluesky's: a human's "publish now" goes first
 UNCHECKED = "[Failed automated checks]"
 UNCHECKED_MARK = "[Failed automated checks:"  # what render.article_text puts near the top of an unchecked article
 CRED_FILE = Path("data/bluesky.json")      # {"handle", "app_password", "service"}: saved from the Settings page

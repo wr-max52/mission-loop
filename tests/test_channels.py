@@ -167,9 +167,11 @@ def test_ui_and_status_show_where_it_was_published(joined, capsys):
     published("a", T0)
     published("b", T0 + timedelta(hours=1))
     client = TestClient(ui.app)
-    home = client.get("/").text
-    assert "posting as <strong>loop-desk</strong>" in home and "1 queued" in home
-    assert "Local site, 1F916" in home and "1F916 queued #1" in home
+    assert "posting as <strong>loop-desk</strong>" not in client.get("/").text   # the Missions page only links there
+    pub = client.get("/published").text
+    assert "posting as <strong>loop-desk</strong>" in pub and "1 queued" in pub
+    assert "<strong>1F916</strong>: waiting, #1 of 1 in the queue" in pub
+    assert "<strong>1F916</strong>: posted" in pub and "https://1f916.ai/api/post/101" in pub
     page = client.get("/m/a").text
     assert "https://1f916.ai/api/post/101" in page and "site/a/index.html" in page
     assert "#1 of 1 in the queue" in client.get("/m/b").text
@@ -179,7 +181,9 @@ def test_ui_and_status_show_where_it_was_published(joined, capsys):
 
 def test_ui_says_how_to_join_when_off():
     published("a", T0)
-    assert "join-1f916" in TestClient(ui.app).get("/").text
+    client = TestClient(ui.app)
+    assert 'href="/settings#publishing"' in client.get("/published").text
+    assert "<strong>1F916</strong> · built in" in client.get("/settings").text and "join-1f916" in client.get("/settings").text
 
 def test_1f916_posts_the_feed_entry(site):
     published("a", T0)                                 # on the site before 1F916 is set up
