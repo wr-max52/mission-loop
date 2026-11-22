@@ -533,7 +533,12 @@ repeats soon. Nobody is ever on the page twice at once (the chat's guide include
 while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
 giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
 the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), `tools/sprites.html` the
-playground, and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
+playground, and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. The avatar
+studio (`/avatars`, `assets/avatars.js`) builds them: pieces drawn as your own avatar wearing them, a live preview,
+and "Ask a model" (`agents/avatar.py`, `agents.edit_avatar`: one call held to a JSON schema of the real parts, thinking
+off, a picture only to a local model Ollama says can see, every result checked in the browser with up to two repair
+rounds; nudity refused before any model). Avatars and the on/off list live in `data/sprites.json` (`avatars.py`),
+which `ui.page` hands to every page; Who visits switches anyone off. Between bits they stand about for 4-6.5 s (`rest`; a crew longer), sometimes taking a step or two, and
 most bits pass without a word. They work through about 40 bits weighted by mood (the lit step on the strip): reading, digging and
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.

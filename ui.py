@@ -16,7 +16,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, board, clock, doctor, library, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, doctor, library, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import Mission, State, ResearchBrief, Article, Epic, epic_title, is_open, slugify, SITE_FOLDERS
@@ -559,6 +559,10 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .crew { position:relative; height:116px; margin:0 -1rem; border-top:1px solid var(--rule);
         background:linear-gradient(var(--quote), var(--quote)) bottom / 100% 9px no-repeat; }
 .crew canvas.lab-stage { bottom:0; height:116px; }
+.crew-wrap { position:relative; }
+.crew-edit { position:absolute; top:.45rem; right:.2rem; display:inline-flex; align-items:center; gap:.25rem; font-size:.75rem;
+             color:var(--muted); text-decoration:none; opacity:.75; }
+.crew-edit:hover { color:var(--accent); opacity:1; }
 .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 .who { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
 table.models td.size { white-space:nowrap; color:var(--muted); }
@@ -765,7 +769,7 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="en"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title><style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{avatars.script_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}Missions</a>'
             f'<a href="/published">{ICON_SITE}Published</a>'
@@ -1136,7 +1140,8 @@ def worker_card(worker: str, conn: dict, now: list[dict], models: list[dict] | N
         note = "".join(f'<p class="note">Now{" (" + escape(settings.seat_name(e["worker"])) + ")" if many else ""}: '
                        f'{doing(e)}</p>' for e in busy)
     checked = " checked" if on else ""
-    crew = f'<div class="crew" data-crew="{worker}" aria-hidden="true"></div>' if settings.animations() else ""
+    crew = (f'<div class="crew-wrap"><div class="crew" data-crew="{worker}" aria-hidden="true"></div>'
+            f'<a class="crew-edit" href="/avatars">{icon("pencil")}Customize</a></div>' if settings.animations() else "")
     return f"""<form method="post" action="/settings/worker" class="worker {"on" if on else "off"}">
   <input type="hidden" name="worker" value="{worker}">
   <div class="head"><h3>{name}</h3>
@@ -1744,6 +1749,7 @@ def settings_body(request: Request, error: str = "") -> str:
   Animations <span class="hint">little pixel researchers who drop by the missions a model is working on, and stand by their worker here</span></label>
   <noscript><p><button>Save</button></p></noscript>
 </form>
+{avatar_link()}
 {publication_section()}
 {publishing_section()}
 {sprites}"""
@@ -3469,6 +3475,194 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 
 # ---------- actions (POST, then redirect back) ----------
 
+# ---------- the avatar studio: researchers built from pieces, or by asking a model (assets/avatars.js) ----------
+
+def avatar_link() -> str:
+    """The Settings page's way into the studio, with what is customised so far."""
+    n, off = len(avatars.custom()), len(avatars.off())
+    bits = [f"{n} of your own" if n else "", f"{off} staying home" if off else ""]
+    now = " · ".join(b for b in bits if b) or "just the twelve built-in researchers"
+    return f"""<div class="actions avatar-link">
+  <h3>{icon("person")}Avatars</h3>
+  <p class="hint">Dress a researcher from pieces, or ask a model to draw one. They join their crew and drop by like
+  everyone else; switch anyone off to keep them home. Right now: {escape(now)}.</p>
+  <p><a class="btn" href="/avatars">Open the avatar studio</a></p>
+</div>"""
+
+async def avatars_page(request: Request) -> HTMLResponse:
+    body = (f'<style>{AVATAR_CSS}</style><h1>Avatar studio</h1>'
+            f'<p class="hint lede">Build a researcher from pieces, like dressing a paper doll, or tell a model what you want. '
+            f'Saved avatars join their crew and visit the missions with everyone else. They stay on this machine '
+            f'(<code>data/sprites.json</code>).</p>'
+            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>The studio needs JavaScript.</noscript></div>'
+            f'<script src="{RESEARCHERS_SRC}" defer></script><script src="/assets/avatars.js" defer></script>')
+    return page("Avatar studio", body)
+
+async def avatar_models(request: Request) -> JSONResponse:
+    try:
+        found = await run_in_threadpool(agents.avatar_models)
+    except Exception:
+        found = []
+    return JSONResponse({"models": found})
+
+async def _json(request: Request) -> dict:
+    try:
+        data = await request.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+async def avatar_ask(request: Request) -> JSONResponse:
+    """The designer edits the spec it was sent; the page checks the reply and may send it back with `errors`."""
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    data = await _json(request)
+    spec, look = data.get("spec"), data.get("look")
+    if not isinstance(spec, dict) or len(json.dumps(spec)) > avatars.MAX_SPEC * 2:
+        return JSONResponse({"error": "That avatar didn't arrive in one piece; try again."}, status_code=400)
+    errors = data.get("errors") if isinstance(data.get("errors"), list) else None
+    try:
+        out = await run_in_threadpool(agents.edit_avatar, spec, str(data.get("message") or ""),
+                                      look if isinstance(look, dict) else None, str(data.get("model") or "")[:100] or None,
+                                      data.get("image") if isinstance(data.get("image"), str) else None,
+                                      [str(e) for e in errors] if errors else None,
+                                      data.get("catalog") if isinstance(data.get("catalog"), dict) else None)
+    except ValueError as e:                # a picture that didn't decode, or was too big
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "The model took too long; try a smaller model or a simpler ask."}, status_code=504)
+    except Exception as e:                 # Ollama closed, model missing
+        return JSONResponse({"error": f"The model couldn't answer ({type(e).__name__}: {str(e)[:160]}). Is Ollama running?"},
+                            status_code=502)
+    return JSONResponse(out)
+
+async def avatar_save(request: Request) -> JSONResponse:
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    data = await _json(request)
+    try:
+        key = avatars.save(str(data.get("key") or "").strip(), data.get("spec"), str(data.get("replace") or ""))
+    except avatars.AvatarError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "key": key})
+
+async def avatar_action(request: Request) -> JSONResponse:
+    """Switch a researcher on or off, or delete one of your own."""
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    key, action = request.path_params["key"], request.path_params["action"]
+    try:
+        if action in ("on", "off"):
+            avatars.set_on(key, action == "on")
+        elif action == "delete":
+            if not avatars.delete(key):
+                return JSONResponse({"error": f"There is no avatar called {key}."}, status_code=404)
+        else:
+            return JSONResponse({"error": "Unknown action."}, status_code=404)
+    except avatars.AvatarError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True})
+
+AVATAR_CSS = """
+main:has(#studio) { max-width: 72rem; }
+.lede { max-width: 46rem; margin-top:-.4rem; }
+canvas.px { image-rendering: pixelated; image-rendering: crisp-edges; display:block; }
+.av-studio { display:grid; grid-template-columns: minmax(0, 330px) minmax(0, 1fr); gap:1.4rem; align-items:start; margin-top:1rem; }
+@media (max-width: 820px) { .av-studio { grid-template-columns: 1fr; } }
+.av-left { position:sticky; top:1rem; }
+@media (max-width: 820px) { .av-left { position:static; } }
+/* a little room: a wall with a window of light, and floorboards the avatar stands on */
+.av-room { position:relative; border-radius:14px; overflow:hidden; border:1px solid var(--rule);
+  background:
+    radial-gradient(circle at 78% 22%, rgba(255,236,170,.55) 0 2.4rem, transparent 2.5rem),
+    linear-gradient(to bottom, transparent 0 72%, rgba(0,0,0,.06) 72% 73%, transparent 73%),
+    repeating-linear-gradient(90deg, rgba(0,0,0,.035) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #efe7d8 0 72%, #d9b98c 72% 100%); }
+:root[data-theme="dark"] .av-room { background:
+    radial-gradient(circle at 78% 22%, rgba(140,160,255,.25) 0 2.4rem, transparent 2.5rem),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #24232b 0 72%, #3b3027 72% 100%); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .av-room { background:
+    radial-gradient(circle at 78% 22%, rgba(140,160,255,.25) 0 2.4rem, transparent 2.5rem),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 38px) 0 72% / 100% 28% no-repeat,
+    linear-gradient(to bottom, #24232b 0 72%, #3b3027 72% 100%); } }
+.stage-canvas { width:304px; height:264px; margin:0 auto; max-width:100%; object-fit:contain; }
+.now-doing { position:absolute; left:.7rem; top:.55rem; font:600 .72rem ui-monospace, Menlo, monospace; color:#6b5a45;
+  text-transform:uppercase; letter-spacing:.08em; }
+.av-acts, .av-buttons, .chips, .suggest { display:flex; flex-wrap:wrap; gap:.35rem; margin:.6rem 0; }
+.av-acts button, .chip, .suggest button { font-size:.78rem; padding:.3rem .6rem; border-radius:999px; }
+.av-acts button.on, .chip.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+.av-fields { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+.av-fields label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; font-weight:600; color:var(--muted); margin:0; }
+.av-fields input { width:100%; }
+.av-fields .hint { font-size:.72rem; min-height:1em; } .av-fields .hint.bad { color:#c92a2a; }
+.av-buttons button { font-size:.82rem; padding:.4rem .7rem; }
+.av-status { font:.78rem/1.4 ui-monospace, Menlo, monospace; margin:.2rem 0 0; }
+.av-status.ok { color:#2f7d46; } .av-status.bad { color:#c92a2a; }
+.av-tabs { display:flex; flex-wrap:wrap; gap:.3rem; border-bottom:1px solid var(--rule); padding-bottom:.6rem; }
+.av-tabs button { font-size:.85rem; padding:.4rem .8rem; border-radius:8px 8px 8px 8px; }
+.av-tabs button[aria-selected="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+.av-panel { padding-top:.4rem; }
+.av-group h3 { font-size:.78rem; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:1rem 0 .45rem; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:.45rem; }
+.tile { display:flex; flex-direction:column; align-items:center; gap:.25rem; padding:.45rem .3rem .4rem; border-radius:10px;
+  background:var(--quote); border:2px solid transparent; font-size:.74rem; font-weight:600; color:var(--fg); transition:transform .12s; }
+.tile:hover { transform:translateY(-2px); border-color:var(--rule); }
+.tile.on { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.tile canvas { margin:0 auto; }
+/* in the dark, pieces sit on a lighter card so the sprites' dark outlines still read */
+:root[data-theme="dark"] .tile, :root[data-theme="dark"] .visitor canvas, :root[data-theme="dark"] canvas.mini { background:#34333b; }
+:root[data-theme="dark"] .now-doing { color:#a99a86; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .tile, :root:not([data-theme]) .visitor canvas,
+  :root:not([data-theme]) canvas.mini { background:#34333b; } :root:not([data-theme]) .now-doing { color:#a99a86; } }
+.visitor canvas { border-radius:8px; }
+.swatches { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; }
+.swatch { width:1.7rem; height:1.7rem; padding:0; border-radius:50%; background:var(--c); border:2px solid var(--rule); }
+.swatch.on { outline:2px solid var(--fg); outline-offset:2px; }
+.swatch.own { display:inline-grid; place-items:center; overflow:hidden; cursor:pointer;
+  background:conic-gradient(#e03131, #f08c00, #ffd43b, #2f9e44, #1c7ed6, #7048e8, #e03131); }
+.swatch.own input { opacity:0; width:100%; height:100%; cursor:pointer; }
+.extra { display:flex; align-items:center; gap:.7rem; padding:.45rem .6rem; border:1px solid var(--rule); border-radius:10px; margin:.35rem 0; }
+.extra span { flex:1; font-size:.85rem; }
+canvas.mini { background:var(--quote); border-radius:4px; }
+.av-json { width:100%; font:12px/1.4 ui-monospace, Menlo, monospace; margin:.4rem 0; }
+/* ask a model */
+.av-chat { border:1px solid var(--rule); border-radius:14px; padding:.8rem; }
+.av-log { display:flex; flex-direction:column; gap:.5rem; max-height:22rem; overflow-y:auto; }
+.av-log:empty { display:none; }
+.msg { max-width:80%; padding:.55rem .75rem; border-radius:14px; font-size:.9rem; display:flex; gap:.6rem; align-items:center; }
+.msg p { margin:0; }
+.msg.me { align-self:flex-end; background:var(--chat, var(--accent)); color:var(--chat-ink, #fff); border-bottom-right-radius:4px; }
+.msg.me img { width:44px; height:44px; object-fit:cover; border-radius:6px; }
+.msg.them { align-self:flex-start; background:var(--quote); border-bottom-left-radius:4px; flex-wrap:wrap; }
+.msg.refused { border:1px solid #e8a33d; }
+.msg.pending p { color:var(--muted); animation:blink 1.4s ease-in-out infinite; }
+.msg button.link { background:none; border:0; padding:0; color:var(--accent); font-size:.82rem; text-decoration:underline; }
+.av-ask .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-top:.5rem; }
+.av-ask .row.grow textarea { flex:1; min-width:12rem; }
+.av-ask .model { display:flex; align-items:center; gap:.4rem; font-size:.82rem; font-weight:600; margin:0; }
+.attach.sees { border-color:#2f9e44; }
+.av-thumb { display:inline-flex; align-items:center; gap:.3rem; }
+.av-thumb img { width:2.4rem; height:2.4rem; object-fit:cover; border-radius:6px; border:1px solid var(--rule); }
+.av-thumb button { padding:.1rem .45rem; }
+.av-flag { margin:.5rem 0 0; padding:.45rem .7rem; border-radius:8px; font-size:.85rem; background:#fff3bf; border:1px solid #f0b429; color:#5c3c00; }
+:root[data-theme="dark"] .av-flag { background:rgba(255,212,59,.13); color:#ffd43b; border-color:rgba(255,212,59,.45); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .av-flag { background:rgba(255,212,59,.13); color:#ffd43b; border-color:rgba(255,212,59,.45); } }
+/* who visits */
+.av-cast h3 { font-size:.85rem; margin:1rem 0 .5rem; color:var(--muted); }
+.crew-row { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:.5rem; }
+.visitor { display:flex; flex-direction:column; align-items:center; gap:.2rem; padding:.6rem .4rem; border:1px solid var(--rule);
+  border-radius:12px; text-align:center; transition:opacity .2s, filter .2s; }
+.visitor.off canvas { opacity:.35; filter:grayscale(1); }
+.visitor.editing { border-color:var(--accent); }
+.visitor strong { font-size:.82rem; } .visitor small { color:var(--muted); font-size:.7rem; }
+.visitor .switch { font-size:.75rem; margin:.2rem 0; }
+.visitor-acts { display:flex; gap:.3rem; }
+.visitor-acts button { font-size:.72rem; padding:.25rem .55rem; }
+.visitor-acts .danger:hover { border-color:#c92a2a; color:#c92a2a; }
+.avatar-link .btn { text-decoration:none; }
+"""
+
 def same_origin(request: Request) -> bool:
     """Refuse form posts from other websites (a page elsewhere can't approve or publish for you)."""
     for header in ("origin", "referer"):
@@ -3696,6 +3890,11 @@ app = Starlette(routes=[
     Route("/inspiration", save_inspiration, methods=["POST"]),
     Route("/theorist", ask_theorist, methods=["POST"]),
     Route("/settings", settings_page),
+    Route("/avatars", avatars_page),
+    Route("/avatars/models", avatar_models),
+    Route("/avatars/ask", avatar_ask, methods=["POST"]),
+    Route("/avatars/save", avatar_save, methods=["POST"]),
+    Route("/avatars/{key}/{action}", avatar_action, methods=["POST"]),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),
     Route("/chat/answer", chat_answer),
