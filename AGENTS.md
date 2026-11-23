@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 865 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 868 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -128,7 +128,7 @@ The written issue is what Will approves; nothing after it waits on him until the
 ## Pipeline (v1)
 
 ```
-(Theorist: evolves the inspiration line, may propose epics, 1 mission and 1 combine, links missions; then the finder)
+(Theorist: evolves the inspiration line, 1 mission and 1 combine, links missions; a board turn may propose an epic; then the finder)
 QUEUED -> RESEARCHING -> BRIEF_READY -> OUTREACH -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
           (validator,     (human:        (asks up to  (reply wait:        (article check, (human:
            3 attempts)     approve)       N people)    timer or all        then rating;    review)
@@ -162,16 +162,13 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   the latest published articles with the possibilities they left open, the links and combines so far (and the ones
   a human turned down), and how the line got here (`data/inspiration_log.jsonl`, every change with who made it and
   why). It looks for patterns inside an epic and themes emerging across epics, and replies with those patterns, the
-  line evolved, why, up to 2 new epics, at most 1 new mission, at most 1 combine and up to 3 links (see Connecting
-  dots below). Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
+  line evolved, why, at most 1 new mission (in an active epic or none), at most 1 combine and up to 3 links (see
+  Connecting dots below). It proposes no epics: those come only from the board turn (#131, below). Code holds it to that (`theorist.settle`): the line may only ask questions (1 to 3, each
   ending in "?", at most 500 characters) and must keep at least half of the current line's meaningful words, so
-  it evolves instead of being rewritten (one repair round, else the line stays); a new epic needs 2+ missions
-  (counting its new mission) and a name no epic has; the new mission must not repeat a topic; a combine and a link
+  it evolves instead of being rewritten (one repair round, else the line stays); the new mission must not repeat a topic; a combine and a link
   follow the rules below (`theorist.settle_combine`, `settle_links`). The orchestrator
   applies it on the main thread between tasks (`orchestrator.apply_theory`), so no worker saves over it: a human
-  edit to the line while it was thinking wins, its epics are *proposed* like the finder's (each mission moved
-  keeps its old epic in `Mission.epic_fallback`; missions a worker is busy with stay put), and its mission is
-  queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
+  edit to the line while it was thinking wins, and its mission is queued like a found one (it still needs brief review); its combine is proposed and its links are drawn right
   away. It runs when it has a line and missions, the desk changed
   since its last turn (`desk_fingerprint`: missions, their epics, which are published or combined, the epics, links and combines) and 6 hours
   have passed (`THEORY_GAP`), or right away when a human asks (`data/THINK`, from the UI's Run Theorist button
@@ -180,12 +177,22 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   Every third turn (`orchestrator.BOARD_EVERY`; `theory.json` counts turns, failed ones and a human's asks
   included) is a board turn instead (#69), unless a human asked for that turn, which is always for ideas: `agents.tidy_board` (`theorist.tidy_board`, the same model, one
   structured call, no tools) reads the cork board as text with no style (every note's id, stage, title, x, y and
-  size, every string, and a rough character grid of where the clusters sit) and replies with note moves and sizes
-  and why; nothing about epics, missions, combines, links or the line. Code holds it to the board
-  (`theorist.settle_board`): known notes only, each once, at most `MAX_MOVES` (12), sizes clamped, positions kept
-  within `BOARD_MARGIN` of the board's edges, and a note dropped on another nudged to the nearest free spot; what
-  it drops is noted. `orchestrator.apply_board` saves the moves `by="theorist"` on the main thread between tasks
-  (it may move a note a human dragged) and keeps the last turn that looked across the desk under `"ideas"` in
+  size, every string, a rough character grid of where the clusters sit, and how many active epics the desk has)
+  and replies with note moves and sizes, why, and at most one new epic (`new_epic`, usually null; the prompt says to
+  propose one only when a strand of missions no epic names shows on the board, and to keep epics few); nothing
+  about combines, links or the line. Code holds it to the board (`theorist.settle_board`): known notes only, each
+  once, at most `MAX_MOVES` (12), sizes clamped, positions kept within `BOARD_MARGIN` of the board's edges, and a
+  note dropped on another nudged to the nearest free spot; and its epic to `theorist.settle_board_epic` (#131): none
+  while another proposed epic waits for review, a 1 to 4 word title no epic has, at least `MIN_EXISTING` (2)
+  missions already on the desk and `MIN_EPIC_MISSIONS` (3) in all, counting up to `MAX_NEW_MISSIONS` (2) new
+  missions it writes for the epic (`NewEpic.new_missions`: a topic and an objective each, not like any on the desk).
+  What it drops is noted, and dropping the epic never drops the moves. `orchestrator.apply_board` saves the moves
+  `by="theorist"` on the main thread between tasks (it may move a note a human dragged), proposes the epic through
+  `orchestrator.propose_epic` like the chat's (each mission moved keeps its old epic in `Mission.epic_fallback`;
+  missions a worker is busy with stay put; auto mode approves it) and queues its new missions in it like a found
+  one (`orchestrator._queue_idea`, the same as the ideas turn's mission; they still need brief review). The board
+  turn's entry in `theory.json` names the epic and the missions it queued (`epics`, `missions`), and the notes
+  under the inspiration box list them. It keeps the last turn that looked across the desk under `"ideas"` in
   `theory.json` (`store.last_ideas`), so the notes show the board turn and the turn before it. Its gating is the
   same as any turn's.
 - Connecting dots (the Theorist): two kinds, both in their own tables (`links`, `combines`), never on the mission,
@@ -558,7 +565,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   are MCP servers: the `loop` server (`status_tools.py`: `loop_status`, `list_missions`, `mission_status`,
   `agent_steps`, `search_missions`, `publication_status`, `list_epics`, `add_mission`, `set_mission_epic`, `theorist_notes`,
   and the Theorist's own moves: `desk_overview` (the desk exactly as the Theorist reads it, up to `MAX_DESK_CHARS`),
-  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic`, `propose_combine`, `link_missions`,
+  `set_inspiration` (logged `by: chat`), `ask_theorist`, `propose_epic` (held to `theorist.settle_epic`: at least
+  3 missions already on the desk, since it brings no new ones), `propose_combine`, `link_missions`,
   `board_overview` and `arrange_board` (the Theorist's board turn: the board as it reads it, and moves held by
   `theorist.settle_board`, saved `by="chat"`), and
   `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and

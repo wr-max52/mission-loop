@@ -377,17 +377,17 @@ def test_chat_changes_the_line_and_asks_the_theorist():
 
 def test_chat_proposes_an_epic_through_the_theorists_checks():
     desk()
-    assert "needs at least 2 missions" in status_tools.propose_epic("Public Money", "dam")
-    assert "already exists" in status_tools.propose_epic("Fed Capture", "dam, grid")
-    assert "1 to 4 word" in status_tools.propose_epic("a b c d e f", "dam, grid")
-    said = status_tools.propose_epic("Public Money", "dam, grid, nope", "Both follow public money.")
-    assert said.startswith("Proposed the epic Public Money with 2 mission(s)")
+    assert "needs at least 3 missions" in status_tools.propose_epic("Public Money", "dam, grid")   # #131: 3 now
+    assert "already exists" in status_tools.propose_epic("Fed Capture", "dam, grid, fed-a")
+    assert "1 to 4 word" in status_tools.propose_epic("a b c d e f", "dam, grid, fed-a")
+    said = status_tools.propose_epic("Public Money", "dam, grid, fed-a, nope", "Both follow public money.")
+    assert said.startswith("Proposed the epic Public Money with 3 mission(s)")
     epic = store.find_epic("Public Money")
     assert epic.status == "proposed" and store.get_mission("dam").epic == epic.slug
     assert store.get_mission("dam").epic_fallback == store.find_epic("Water Rights").slug
     assert store.events("dam")[-1]["note"] == ("the chat assistant proposes the new epic Public Money: "
                                                "Both follow public money.")
-    status_tools.propose_epic("Grid Money", "dam, grid", "Both follow grid money.")
+    status_tools.propose_epic("Grid Money", "dam, grid, fed-a", "Both follow grid money.")
     assert store.find_epic("Public Money") is None                       # emptied by the second proposal: dropped
 
 def test_chat_proposes_a_combine_and_links_missions():

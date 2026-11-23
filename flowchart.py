@@ -53,9 +53,9 @@ AUTO_STEPS = {"epic_review": ("Auto-approve epics", "Auto mode: proposed epics a
               "brief_review": ("Auto-approve brief", "Auto mode: briefs that pass the check are approved")}
 RETRY = "Failures retry; parked after {n}."
 CHECKS = {   # every code check on the strip: what it holds the step before it to
-    "theorist_check": "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and "
-                      "a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link "
-                      "needs an open mission, a reason and a new pair. Failures are dropped.",
+    "theorist_check": "Theorist check (code): questions only, keeps half its words; new epic only on a board turn, 3+ "
+                      "missions, 2+ existing, a new name, none while one waits; new mission must be new; a combine takes "
+                      "2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.",
     "finder_check": "Finder check (code): up to 3 missions, each backed by a found page and unlike existing topics; "
                     "new epic needs 2+ missions. Failures are dropped.",
     "source_check": "Source check (code): every claim cited, quotes on the page, 3 sites, 1+ fact, a counterpoint.",

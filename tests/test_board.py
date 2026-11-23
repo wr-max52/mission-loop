@@ -310,6 +310,59 @@ def test_every_third_turn_only_arranges_the_board(monkeypatch):
     one_turn()
     assert store.last_theory()["kind"] == "ideas" and store.last_theory()["turn"] == 4
 
+def test_a_board_turn_may_propose_an_epic_with_new_missions(monkeypatch):
+    """#131: a board turn's epic gathers 2+ missions already on the desk and new ones, 3+ in all."""
+    grid = small_desk()
+    monkeypatch.setattr(agents, "tidy_board", theorist.tidy_board)
+    store.save_theory({"at": "2026-01-01T00:00:00+00:00", "turn": 2, "kind": "ideas", "patterns": ["P"]})
+    seen = []
+    async def fake_chat(messages, tools=None, format=None, model=None):
+        seen.append(messages)
+        reply = theorist.BoardReply(why="Grouped the auctions.", moves=[theorist.NoteMove(id="m:c", x=900, y=900)],
+                                    new_epic=theorist.NewEpic(title="Capacity Auctions", why="b and c share a rule.",
+                                                              missions=["b", "c"], new_missions=[theorist.EpicMission(
+                                                                  topic="Who wrote the capacity auction floor?",
+                                                                  objective="b and c both cite it.")]))
+        return Message(role="assistant", content=reply.model_dump_json())
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    assert one_turn() == 4                                               # one move, two missions moved, one queued
+    system = seen[0][0]["content"]
+    assert "The desk has 1 active epic." in system and "new_epic" in system and "least 2 missions already on the board" in system
+    epic = store.find_epic("Capacity Auctions")
+    assert epic.status == "proposed"
+    assert store.get_mission("b").epic == epic.slug and store.get_mission("b").epic_fallback == grid.slug
+    assert store.get_mission("c").epic == epic.slug
+    new = next(m for m in store.all_missions() if m.topic == "Who wrote the capacity auction floor?")
+    assert new.epic == epic.slug and new.state == State.QUEUED
+    last = store.last_theory()
+    assert (last["kind"], last["epics"], last["missions"]) == ("board", ["Capacity Auctions"], [new.slug])
+    assert store.board_notes()[("mission", "c")].by == "theorist"       # the moves are kept too
+
+def test_settle_board_holds_a_new_epic_to_three_missions_two_existing():
+    small_desk()
+    data = theorist.board_desk()
+    move = theorist.NoteMove(id="m:c", x=0, y=900)
+    idea = lambda t: theorist.EpicMission(topic=t, objective="o")
+    def settle(missions, new=()):
+        e = theorist.NewEpic(title="Capacity Auctions", missions=list(missions), new_missions=[idea(t) for t in new])
+        return theorist.settle_board(theorist.BoardReply(moves=[move], new_epic=e), data)
+    one = settle(["b"], ["Who wrote the floor?", "Who lobbied the floor?"])         # 1 existing + 2 new
+    assert one.new_epic is None and [m.id for m in one.moves] == ["m:c"]
+    assert "needs at least 3 missions, 2 of them already on the desk" in one.dropped[0]
+    assert settle(["b", "c"]).new_epic is None                                       # 2 in all
+    assert settle(["a", "b", "c"]).new_epic.missions == ["a", "b", "c"]              # 3 existing, none new
+    many = settle(["b", "c"], ["Who wrote the floor?", "Who sued over the cap?", "Who set the price?"])
+    assert [m.topic for m in many.new_epic.new_missions] == ["Who wrote the floor?", "Who sued over the cap?"]
+    assert "at most 2 with a new epic" in many.dropped[0]
+    like = settle(["b", "c"], ["PJM auction critics again"])                         # repeats b: dropped, then too few
+    assert like.new_epic is None and "already has one like it" in like.dropped[0]
+    p = store.create_epic("Grid Money")
+    with store.conn() as c:
+        c.execute("UPDATE epics SET status = 'proposed' WHERE slug = ?", (p.slug,))
+    waiting = settle(["a", "b", "c"])
+    assert waiting.new_epic is None and "Grid Money" in waiting.dropped[0] and waiting.moves
+    assert "propose none this turn" in theorist.epics_note(1, ["Grid Money"])
+
 def test_settle_board_holds_moves_to_the_board():
     small_desk()
     data = theorist.board_desk()
