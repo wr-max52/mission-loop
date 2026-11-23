@@ -2,7 +2,7 @@ import fcntl, hashlib, json, time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
-import activity, board, checkpoint
+import activity, board, checkpoint, claim_tags
 import agents                              # switchboard: see agents/__init__.py
 import search_status, settings, stopping, store
 from checks import validator
@@ -10,7 +10,8 @@ from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ArticleRating,
-                       ChannelPost, Combine, COMBINABLE, Epic, Link, SITE_FOLDERS, epic_title, is_open, slugify)
+                       ChannelPost, Combine, COMBINABLE, DeadLead, Epic, Link, OUT_OF_FLOW, SITE_FOLDERS, VERDICTS,
+                       epic_title, is_open, slugify)
 from render import brief_markdown, article_markdown, article_html
 
 STOP_FLAG = Path("data/STOP")
@@ -146,6 +147,11 @@ def _write_brief(m: Mission, now) -> str:
                  "the brief is written again from the same sources")
         return f"stopped mid-brief; {saved} when the loop starts again"
     except Exception as e:             # a crash is a failed attempt; the next one searches again
+        if getattr(e, "verdict", ""):      # the search showed it can't go on (researcher.DeadLeadFound)
+            activity.outcome("done", f"dead lead ({e.verdict}): {e.why}")
+            _drop_evidence(m)
+            return _dead_end(m, DeadLead(slug=m.slug, verdict=e.verdict, why=e.why, sources=e.sources,
+                                         by="research", at=now.isoformat()), now)
         activity.fail(e)
         ok = False                         # a brief that can't pass (too few sources held up) brings its draft
         brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {activity.reason(e)}"
@@ -153,6 +159,7 @@ def _write_brief(m: Mission, now) -> str:
     if ok:
         store.save_artifact(m.slug, "brief", brief)
         _mentions(m.slug)
+        claim_tags.tag_brief(m, brief, now)
         m.unchecked_brief = ""
         path = _write_brief_md(m, brief)
         m.validator_notes = ""
@@ -219,7 +226,7 @@ def step(m: Mission, now) -> str | None:
 
     if m.state == State.WRITING:
         if m.checked_article:
-            return _rate(m)
+            return _rate(m, now)
         m.write_attempts += 1
         brief, records = _brief(m), _outreach(m)
         article, m.interrupted_article = m.interrupted_article, None
@@ -245,6 +252,7 @@ def step(m: Mission, now) -> str | None:
         fixed = f" (code {'; '.join(m.article_draft.fixes)})" if m.article_draft and m.article_draft.fixes else ""
         if ok:
             m.checked_article = article    # the Research Assistant rates it next (_rate), then it goes to review
+            _writer_tag(m, article, now)
             return f"article passed check on attempt {m.write_attempts}{fixed}; the rating is next"
         return _article_failed(m, brief, article, notes)
 
@@ -308,7 +316,27 @@ def _article_failed(m: Mission, brief: ResearchBrief, article: Article | None, n
         return f"writing attempt {m.write_attempts} {rating.summary().lower()}; sent back to the writer"
     return f"writing attempt {m.write_attempts} failed check{why}"
 
-def _rate(m: Mission) -> str:
+def _writer_tag(m: Mission, article: Article, now) -> None:
+    """The writer's claim tag, from its plan, for an article that passed the check. Display only: it never fails
+    the attempt."""
+    plan = m.article_draft.plan if m.article_draft else None
+    if not plan or not plan.claim_status:
+        return
+    try:
+        claim_tags.set_tag(m, plan.claim_status, "writer", plan.claim_status_why, now, article=article)
+    except ValueError as e:
+        print(f"claim tag for {m.slug}: {e}", flush=True)
+
+def _rater_tag(m: Mission, rating: ArticleRating, article: Article, now) -> None:
+    """The rater's check of the claim tag: a change is recorded as the rater's; its score never depends on it."""
+    if not rating.claim:
+        return
+    try:
+        claim_tags.set_tag(m, rating.claim, "rater", rating.claim_why, now, article=article)
+    except ValueError as e:
+        print(f"claim tag for {m.slug}: {e}", flush=True)
+
+def _rate(m: Mission, now) -> str:
     """The Research Assistant rates an article that passed the article check (agents/rater.py). A total of
     RATING_FAIL_AT or less fails the writing attempt like a failed check: the writer gets the rater's reasons and
     writes it again, from a fresh plan. A rater that crashes sends the article to review unrated, marked so: the
@@ -324,6 +352,7 @@ def _rate(m: Mission) -> str:
         activity.fail(e)
         rating = ArticleRating(error=f"the rater crashed: {activity.reason(e)}")
     m.checked_article = None
+    _rater_tag(m, rating, article, now)
     if not rating.passed:
         m.article_draft = None             # written again from a fresh plan: a weak claim or dull story is the plan's
         return _article_failed(m, brief, article, rating.notes(), rating)
@@ -375,17 +404,33 @@ def auto_approve(now, busy: set[str] = frozenset()) -> int:
                 approved += 1
             except ValueError as e:        # its missions moved on meanwhile: the proposal is dropped
                 print(f"combine {c.slug}: {e}", flush=True)
+    for d in store.all_dead_leads("proposed"):
+        if d.slug not in busy:
+            try:
+                approve_dead_lead(d.slug, now, by="auto mode")
+            except ValueError as e:
+                print(f"dead lead {d.slug}: {e}", flush=True)
     return approved
 
 def parked_while_writing(m: Mission) -> bool:
     return store.load_artifact(m.slug, "outreach") is not None   # brief was approved already
 
 def requeue(m: Mission, now) -> None:
-    """Revive a parked mission. Keeps the last notes so the agent can learn from them.
-    A mission that parked while writing goes back to WRITING, not back to research."""
-    if m.state != State.PARKED:
-        raise ValueError(f"{m.slug} is {m.state.value}; only PARKED can be requeued")
+    """Revive a parked mission, or a dead lead. Keeps the last notes so the agent can learn from them.
+    A mission that parked while writing goes back to WRITING, not back to research. A revived dead lead stays on
+    record as revived, so the Theorist doesn't propose it again."""
+    if m.state not in (State.PARKED, State.DEAD_LEAD):
+        raise ValueError(f"{m.slug} is {m.state.value}; only PARKED or DEAD_LEAD can be requeued")
     before = m.state
+    if m.state == State.DEAD_LEAD:
+        d = store.get_dead_lead(m.slug)
+        if d:
+            d.status = "revived"
+            store.save_dead_lead(d)
+        m.state, m.attempts = State.QUEUED, 0
+        store.save_mission(m)
+        store.log_event(m.slug, now, before.value, m.state.value, "dead lead revived by human")
+        return
     if parked_while_writing(m):
         m.state, m.write_attempts = State.WRITING, 0
     else:
@@ -412,6 +457,7 @@ def push_through(m: Mission, now) -> None:
         _mentions(m.slug)
         m.unchecked_brief, m.rejected_brief, m.approved = draft.notes, None, False
         _write_brief_md(m, draft.brief)
+        claim_tags.tag_brief(m, draft.brief, now)
         m.state = State.BRIEF_READY
         note = "failed brief pushed through by human"
     else:
@@ -420,6 +466,7 @@ def push_through(m: Mission, now) -> None:
         m.unchecked_article, m.rejected_article, m.reviewed = draft.notes, None, False
         m.article_draft, m.article_rating = None, draft.rating
         _write_article_review(m, _brief(m), draft.article)
+        claim_tags.set_tag(m, "unconfirmed", "code", "the article was pushed through a failed check", now)
         m.state = State.ARTICLE_READY
         note = "failed article pushed through by human"
     m.validator_notes = ""                 # the writer reads these as problems in its own draft
@@ -454,7 +501,7 @@ def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
     """Steps that need no model (start, moving an approved brief on, the reply wait, publishing) run right away, in
     order."""
     changed = 0
-    while role(m) is None and m.state not in (State.DONE, State.PARKED, State.COMBINED) and not STOP_FLAG.exists():
+    while role(m) is None and m.state not in OUT_OF_FLOW and not STOP_FLAG.exists():
         before = m.state
         try:
             note = step(m, now_fn())
@@ -691,7 +738,8 @@ def board_turn(turn: int) -> bool:
 def desk_fingerprint() -> str:
     """What the Theorist looks across: which missions exist, their epics, which are published, and the epics.
     A mission merely moving through research doesn't count as news."""
-    missions = [(m.slug, m.epic, m.state == State.DONE, m.state == State.COMBINED) for m in store.all_missions()]
+    missions = [(m.slug, m.epic, m.state == State.DONE, m.state == State.COMBINED, m.state == State.DEAD_LEAD)
+                for m in store.all_missions()]
     epics = [(e.slug, e.title, e.status) for e in store.all_epics()]
     links = [(k.a, k.b, k.status) for k in store.all_links(None)]
     combines = [(c.slug, c.status) for c in store.all_combines()]
@@ -796,6 +844,32 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
         link(a.slug, b.slug, k.why, now, by="theorist")
         linked.append([a.slug, b.slug])
         changed += 1
+
+    dead = []
+    for d in getattr(theory, "dead_leads", []):
+        try:
+            propose_dead_lead(d.mission, d.verdict, d.why, now, "theorist")
+            dead.append(d.mission)
+            changed += 1
+        except ValueError as why:
+            notes.append(f"dead lead dropped: {d.mission}, {why}")
+    tagged = []
+    for t in getattr(theory, "claim_tags", []):
+        m = store.get_mission(t.mission)
+        try:
+            if not m:
+                raise ValueError("it is gone")
+            old = store.get_claim_tag(m.slug)
+            if old and old.by == "human":
+                raise ValueError(f"the editor set it to {old.value} meanwhile")
+            got = claim_tags.set_tag(m, t.tag, "theorist", t.why, now)
+            if got.value != t.tag:
+                notes.append(f"claim tag {t.mission}: code kept it {got.value}")
+            if got != old:
+                tagged.append([t.mission, got.value])
+                changed += 1
+        except ValueError as why:
+            notes.append(f"claim tag dropped: {t.mission}, {why}")
     _drop_empty_proposals()
 
     if theory.library:
@@ -803,7 +877,8 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
     store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "ideas",
                        "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
-                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes,
+                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "dead_leads": dead,
+                       "claim_tags": tagged, "notes": notes,
                        "lookups": theory.lookups})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
@@ -1245,6 +1320,86 @@ def approve_combine(slug: str, now, by: str = "", busy: set[str] = frozenset()) 
     store.delete_combine(slug)
     store.save_combine(c)
     return combined
+
+# ---------- dead leads (#132) ----------
+
+DEAD_ENDABLE = COMBINABLE                  # before writing starts; after that it is nearly an article
+
+def _dead_end(m: Mission, d: DeadLead, now) -> str:
+    """The mission stops as a dead lead (the caller saves the mission). Returns the History note."""
+    store.save_dead_lead(d)
+    m.state, m.rush = State.DEAD_LEAD, False
+    who = "" if d.by == "research" else f", {WHO.get(d.by, d.by)}" + (f", approved by {d.decided_by}" if d.decided_by
+                                                                         and d.decided_by != d.by else "")
+    return f"dead lead ({VERDICTS[d.verdict].split(':')[0].lower()}{who}): {d.why}"
+
+def dead_lead_problem(m: Mission | None, busy: set[str] = frozenset()) -> str:
+    """Why this mission can't become a dead lead now, or ""."""
+    if not m:
+        return "no such mission"
+    if m.state not in DEAD_ENDABLE:
+        return f"only missions not yet being written can be dead leads ({m.slug} is {m.state.value.lower()})"
+    if m.slug in busy:
+        return "a worker is busy with it; try again once that task ends"
+    return ""
+
+def propose_dead_lead(slug: str, verdict: str, why: str, now, by: str = "theorist") -> DeadLead:
+    """The Theorist's (or the chat assistant's) proposal that a mission is a dead lead; it waits for the human (or
+    auto mode). Raises ValueError if it can't be one, or the human has seen this one already."""
+    m = store.get_mission(slug)
+    problem = dead_lead_problem(m)
+    old = store.get_dead_lead(slug)
+    if not problem and old and old.status in ("proposed", "rejected", "revived"):
+        problem = {"proposed": "it is waiting for the editor already"}.get(old.status, "the editor kept it going")
+    if not problem and verdict not in VERDICTS:
+        problem = f"a verdict is one of {', '.join(VERDICTS)}"
+    if problem:
+        raise ValueError(problem)
+    d = store.save_dead_lead(DeadLead(slug=slug, verdict=verdict, why=" ".join(why.split())[:300], by=by,
+                                      at=now.isoformat(), status="proposed"))
+    store.log_event(slug, now, m.state.value, m.state.value, f"{WHO.get(by, by)} proposes it is a dead lead: {d.why}")
+    return d
+
+def approve_dead_lead(slug: str, now, by: str = "human", busy: set[str] = frozenset()) -> Mission:
+    """Accept a proposed dead lead: the mission stops. A mission that moved on to writing meanwhile drops it."""
+    d = store.get_dead_lead(slug)
+    if not d or d.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed dead lead")
+    m = store.get_mission(slug)
+    problem = dead_lead_problem(m, busy)
+    if problem:
+        if m and m.slug not in busy:       # it moved on: nothing left to decide
+            d.status, d.decided_by = "rejected", "code"
+            store.save_dead_lead(d)
+        raise ValueError(problem)
+    before = m.state
+    d.status, d.decided_by = "dead", by
+    note = _dead_end(m, d, now)
+    store.save_mission(m)
+    store.log_event(slug, now, before.value, m.state.value, note)
+    return m
+
+def reject_dead_lead(slug: str, now) -> None:
+    """A human keeps the mission going. The proposal is kept as rejected, so it is never proposed again."""
+    d = store.get_dead_lead(slug)
+    if not d or d.status != "proposed":
+        raise ValueError(f"{slug} is not a proposed dead lead")
+    d.status, d.decided_by = "rejected", "human"
+    store.save_dead_lead(d)
+    m = store.get_mission(slug)
+    if m:
+        store.log_event(slug, now, m.state.value, m.state.value, "dead lead rejected by human: kept going")
+
+def mark_dead_lead(m: Mission, verdict: str, why: str, now, busy: set[str] = frozenset()) -> None:
+    """A human marks a mission a dead lead straight away."""
+    problem = dead_lead_problem(m, busy) or ("" if verdict in VERDICTS else f"a verdict is one of {', '.join(VERDICTS)}")
+    if problem:
+        raise ValueError(problem)
+    before = m.state
+    note = _dead_end(m, DeadLead(slug=m.slug, verdict=verdict, why=" ".join(why.split())[:300], by="human",
+                                 at=now.isoformat()), now)
+    store.save_mission(m)
+    store.log_event(m.slug, now, before.value, m.state.value, note)
 
 def reject_combine(slug: str, now) -> None:
     """A human turns a combine down. It is kept as rejected, so the Theorist doesn't propose it again."""

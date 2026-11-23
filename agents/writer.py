@@ -81,7 +81,11 @@ PLAN = """Plan the article before writing it. Output JSON matching the schema:
   claims that make the scene and the claim. The evidence comes next. The last section is the fine print:
   what the sources do not establish and the open questions (with only 3 sections, the counterpoint section
   goes last and carries the fine print too). Put every claim with kind "possibility" in the section it fits
-  best."""
+  best.
+- claim_status_why, then claim_status: compare the brief's thesis with your claim box. "confirmed" only when the
+  claim box states the brief's claim as fact and claims of kind "fact" citing the record show it; "unconfirmed"
+  when it rests on a possibility, or says less than the brief set out to show. One sentence of why. This is a note
+  for the editor; it never appears in the article."""
 
 SECTION = """Write section {n} of {total}: "{heading}". Its point: {point}
 {role}{claims}{counterpoint}{revise}Words you may put in quotation marks, copied exactly (anything else, paraphrase without quotation marks):

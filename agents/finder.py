@@ -17,16 +17,16 @@ TOO_SIMILAR = 0.6                          # share of meaningful words two topic
 
 # The models run at a low temperature, so the same prompt would search the same way every pass.
 # Drawing different angles each time is what keeps the finder wandering.
+# Every angle ends at a record: a document that could answer the lead, so the desk tests the world, not its own ideas.
 ANGLES = [
-    "Invert the consensus: find people arguing the accepted story in this field is backwards.",
-    "Follow the money: who gains if the accepted story stays accepted, and who is saying so.",
-    "Dig up a buried precedent: an earlier episode in this field that was dropped, reversed or forgotten.",
-    "Find the defector: an insider, retired official or credentialed expert who broke with their own field.",
-    "Hunt the anomaly: a number, date or result that the usual explanation in this field cannot handle.",
-    "Read the fringe: the wildest claim circulating in forums, newsletters and podcasts about this field.",
-    "Trace the side effect: an inconvenient consequence of a popular idea here that its supporters avoid.",
-    "Find who was left out: the people, places or data the standard account of this field never mentions.",
-    "Borrow a pattern: something well known in a neighbouring corner of this field that nobody applies here.",
+    "Find the court case: a lawsuit, ruling, settlement or prosecution in this field the usual story leaves out.",
+    "Find the testimony: someone who said it under oath, to a legislature or an inquiry, on the record.",
+    "Follow the money through filings: contracts, lobbying and campaign-finance records, annual reports, tax filings.",
+    "Find the defector: an insider, retired official or credentialed expert who broke with their field on the record.",
+    "Hunt the anomaly in the data: an official dataset, audit or inspection whose number the usual story can't handle.",
+    "Dig up a buried precedent: an earlier episode with a paper trail (an inquiry, a recall, a reversal) now forgotten.",
+    "Find the official record that contradicts the story: a regulator's finding, an arrest or enforcement record, a FOIA release.",
+    "Find who was left out: the people, places or data the standard account never mentions, and the record that shows them.",
 ]
 
 SEARCH = """You are the mission finder for an independent investigative desk. You do not research stories.
@@ -57,14 +57,17 @@ Rules:
 - Stay in the same domain and field as the inspiration line, and close to its main focus.
 - A claim does not need to be true or respectable to be worth finding. It does need to exist already:
   someone must really be making it, on a page your searches return.
+- Prefer claims a document could settle: has anyone testified to it, has a court heard it, is there a
+  filing, an arrest record, an audit or a dataset? A lead nothing on the record could ever answer is weak.
 - When you have about three strong leads, stop calling tools and reply with the word DONE."""
 
 PROPOSE = """Now pick the 1 to 3 most surprising leads from the search results above and output them as JSON
 matching the schema. Each one becomes a mission for the research desk.
-- topic: one specific line naming the theory, claim or possibility to investigate, as a question. Never a
-  general subject.
-- objective: two or three sentences saying what is being claimed, who is claiming it, and what evidence
-  would support or sink it. Treat the claim as a lead to test, not as true.
+- topic: one specific line naming the claim to investigate, as a question a document can answer (has anyone
+  testified that..., was there a ruling on..., do the filings show...). Never a general subject.
+- objective: two or three sentences saying what is being claimed, who is claiming it, and which records
+  would support or sink it, by kind (testimony, court filings, arrest or booking records, regulatory or
+  campaign-finance filings, contracts, datasets, FOIA responses). Treat the claim as a lead to test, not as true.
 - source_url: copied exactly from a search result above, a page showing that this claim is really being made.
 - epic: the title of the desk's existing epic (listed below) this lead fits best, copied exactly. Pick the
   closest one even when the fit is loose. Leave it empty only if the desk has no epics yet.

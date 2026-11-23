@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 865 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 886 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -135,6 +135,7 @@ QUEUED -> RESEARCHING -> BRIEF_READY -> OUTREACH -> AWAITING_COMMENTS -> WRITING
                                                        answered)           3 attempts)
           OUTREACH and the reply wait are skipped while outreach is off or no outreach channel is set up.
 QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mission; out of the flow)
+QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or untestable; out of the flow; requeue revives)
 ```
 
 - Order of work (`orchestrator.work`): there are no fixed passes. The loop works until nothing is left it
@@ -236,7 +237,42 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
   most 3, each resting on a URL the searches returned and not too close to an existing topic. They are
   queued and researched straight away, and still go through human brief review. A finder failure is
-  logged and never stops the loop.
+  logged and never stops the loop. Its angles (`finder.ANGLES`) each end at a record (the court case, the
+  testimony, the filings, the dataset, the official record that contradicts the story), and a lead's topic is a
+  question a document can answer, its objective naming the kinds of record that would (#132; prompting only, no
+  code check).
+- Verifiable leads (#132, prompting only): the finder, the Theorist, research and Researcher Chat's `add_mission` all
+  ask questions a document can answer (has anyone testified..., has a court heard it, is there a filing, an arrest or
+  booking record, a dataset) and name the kinds of record that would answer them. The Theorist tests the desk
+  against the world: a pattern or label the desk made up is never a mission's premise, and an unconfirmed claim is
+  an open question, not a foundation. Private people stay off limits as before.
+- Dead leads (#132): `State.DEAD_LEAD`, out of the flow like COMBINED (`contracts.OUT_OF_FLOW`, not `is_open`, so no
+  links or combines). Why lives in its own table (`dead_leads`, `contracts.DeadLead`: verdict `refuted`,
+  `no_record` or `untestable` (`contracts.VERDICTS`), why, the verified records that sink a refuted one, who, status
+  `proposed`/`dead`/`rejected`/`revived`), never on the mission. Three ways in, all before writing
+  (`orchestrator.DEAD_ENDABLE`, the same states as a combine): research's step 1 may answer `dead_lead` with
+  `dead_lead_why` (`SourcePick`); `researcher._dead_lead` keeps "refuted" only with a contradicting source that
+  passed the quote check, and "no record"/"untestable" only when the sources would fail anyway (fewer than 3
+  supporting sites) and web search was up; otherwise the attempt goes on or fails as before. A kept one raises
+  `DeadLeadFound` and the mission stops after that one attempt. The Theorist (`dead_leads` in its reply, at most
+  `theorist.MAX_DEAD` a turn, `settle_dead_leads`) and Researcher Chat (`propose_dead_lead`) propose one
+  (`orchestrator.propose_dead_lead`); it waits under Needs you (Stop it / Keep going, `/dead-leads/<slug>/...`,
+  counted at the epic review on the strip) and auto mode approves it, waiting while a worker is busy with it
+  (`approve_dead_lead`). A human marks one from the mission page (Mark as dead lead, `mark_dead_lead`). Requeue (the
+  page's Revive, `run.py requeue`) queues it again with fresh attempts and keeps the record as `revived`; rejected and
+  revived ones are never proposed again. The Theorist's desk shows each dead lead with its verdict.
+- Claim tags (#132): every mission with a brief carries `claim: confirmed` or `claim: unconfirmed` (`claim_tags.py`,
+  code; its own table `claim_tags`, `contracts.ClaimTag` with who, why and the earlier values). Code sets the brief's
+  when it passes or is pushed through (`claim_tags.tag_brief`: a thesis worded "It is possible that" is unconfirmed),
+  the writer sets the article's in its plan (`ArticlePlan.claim_status`, saved when the article passes its check,
+  `orchestrator._writer_tag`), the rater may change it (`RatingReply.claim`; it never changes the score,
+  `_rater_tag`), the Theorist may change up to `theorist.MAX_TAGS` a turn (`claim_tags` in its reply,
+  `settle_claim_tags`), Researcher Chat with `set_claim_tag`, and a human on the mission page. Agents have a floor
+  (`claim_tags.floor`): a claim box that says "It is possible that", an article pushed through a failed check, or
+  (before an article) a possibility thesis stays unconfirmed. A human's tag stands; agents don't change it. Missions
+  with a brief but no tag get code's at every CLI start (`claim_tags.backfill`). Shown only on our UI (a tiny tag on
+  cards and Needs you, the mission page with its history), to the Theorist (its desk rows and published articles)
+  and in the chat's `mission_status`; never on the published site, the feeds, or in research or writing prompts.
 - Epics: every mission can sit in one epic, a 1 to 4 word thematic title for a long-running line of
   inquiry (`epics` table; `Mission.epic` is its slug, which never changes when the title does). Humans
   name an epic when adding a mission; a new name makes a new, active epic. The finder sees each active
@@ -755,7 +791,8 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Approve every brief and new epic automatically (never publishing) | the Auto switch at the top of the UI, or `python run.py auto on` (`off` to stop) |
 | Publish an article | `python run.py review <slug>`; while the loop runs it is published within seconds, even mid-task |
 | Send back with notes | `python run.py reject <slug> --notes "..."` (brief → research, article → writer) |
-| Revive a parked mission | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
+| Revive a parked mission or a dead lead | `python run.py requeue <slug>` (resumes at writing if the brief was already approved) |
+| Stop a lead that can't go on, or change a claim tag | a mission page's Mark as dead lead, or its claim tag (ours only) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | Published in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
 | Publish an article again | tick where on the UI's Published page and press Publish (done within seconds; the loop needn't run) |

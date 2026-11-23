@@ -5,7 +5,8 @@ and the loop log. add_mission queues a new mission exactly like the UI's Add mis
 brief review) and set_mission_epic puts a mission in an epic like the Epic field on its page. The rest give the chat
 assistant everything the Theorist can do, through the same checks (agents/theorist.py) and the same orchestrator
 functions: desk_overview reads the desk as the Theorist does, set_inspiration changes the line, propose_epic and
-propose_combine propose (they wait for the human), link_missions links two missions, board_overview and
+propose_combine and propose_dead_lead propose (they wait for the human), set_claim_tag changes a mission's
+claim tag (ours only, never published), link_missions links two missions, board_overview and
 arrange_board read and arrange the cork board as the Theorist's board turn does, and ask_theorist asks for the
 Theorist's turn. None of them changes a mission's stage or work. No tool takes the
 loop's lock or talks to a model, so asking never slows or redirects the work. Answers are short on purpose:
@@ -16,9 +17,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from mcp.server.mcpserver import MCPServer
-import activity, agents, board, doctor, i18n, orchestrator, settings, store, trail
+import activity, agents, board, claim_tags, doctor, i18n, orchestrator, settings, store, trail
 from agents import bluesky, f916, github, theorist
-from contracts import Mission, State, epic_title, words
+from contracts import Mission, OUT_OF_FLOW, State, VERDICTS, epic_title, words
 
 LOG = Path("data/loop.log")
 MAX_LIST = 25
@@ -29,7 +30,7 @@ LABELS = {
     State.OUTREACH: "asking people (outreach)", State.AWAITING_COMMENTS: "waiting for replies",
     State.WRITING: "writing",
     State.ARTICLE_READY: "article ready for human review", State.DONE: "published", State.PARKED: "parked (gave up)",
-    State.COMBINED: "combined into a bigger mission",
+    State.COMBINED: "combined into a bigger mission", State.DEAD_LEAD: "dead lead (stopped: refuted, no record or untestable)",
 }
 
 server = MCPServer("loop")
@@ -130,7 +131,7 @@ def list_missions(stage: str = "active") -> str:
     stage = stage.strip().lower() or "active"
     missions = store.all_missions()
     if stage == "active":
-        missions = [m for m in missions if m.state not in (State.DONE, State.PARKED, State.COMBINED)]
+        missions = [m for m in missions if m.state not in OUT_OF_FLOW]
     elif stage == "waiting":
         missions = [m for m in missions if _needs_human(m)]
     elif stage != "all":
@@ -162,6 +163,13 @@ def mission_status(slug: str) -> str:
                  if epic else "Epic: none")
     if m.combined_into:
         lines.append(f"Combined into: {m.combined_into}")
+    dead = store.get_dead_lead(m.slug)
+    if dead and dead.status in ("dead", "proposed"):
+        lines.append(("Dead lead: " if dead.status == "dead" else "Proposed as a dead lead, waiting for the human: ")
+                     + f"{VERDICTS[dead.verdict]}. {dead.why}")
+    tag = store.get_claim_tag(m.slug)
+    if tag:
+        lines.append(f"Claim tag (ours only, never published): {claim_tags.line(tag)}")
     if m.combines:
         lines.append(f"Combines: {', '.join(m.combines)}")
     for k in store.links_of(m.slug):
@@ -304,7 +312,9 @@ def publication_status() -> str:
 @server.tool()
 def add_mission(topic: str, objective: str = "", epic: str = "") -> str:
     """Queue a new research mission, like the UI's Add mission box. topic is the question or claim to look
-    into (one sentence); objective says what a good answer finds out; epic is an optional 1 to 4 word title
+    into (one sentence), best asked as a question a document can answer (has anyone testified..., is there a
+    court filing..., do the records show...); objective says what a good answer finds out and which kinds of
+    record would answer it (testimony, court filings, arrest records, filings, datasets); epic is an optional 1 to 4 word title
     (an existing epic's title, or a new one). The mission waits in the queue and its brief still needs the
     human's approval. Only call this when the human asks for a new mission."""
     topic, objective = " ".join(topic.split())[:300], " ".join(objective.split())[:600]
@@ -482,6 +492,40 @@ def propose_combine(missions: str, topic: str, objective: str, epic: str = "", w
         return f"Not done: {err}."
     return (f"Proposed combining {', '.join(made.members)} into: {made.topic}. It waits for the human under Needs "
             f"you" + (" (auto mode approves it shortly)." if settings.auto_mode() else "."))
+
+@server.tool()
+def propose_dead_lead(mission: str, verdict: str, why: str) -> str:
+    """Propose that a mission not yet being written (queued, researching, brief in review or parked) is a dead lead,
+    as the Theorist does. verdict: "refuted" (a record shows its claim is wrong), "no_record" (nothing on the record
+    could answer it) or "untestable" (it rests on a framework or label, so no document could answer it). why: one
+    sentence. It waits for the human under Needs you; approving stops the mission. Requeue brings it back."""
+    notes: list[str] = []
+    kept = theorist.settle_dead_leads([theorist.NewDeadLead(mission=mission, verdict=verdict, why=why)],
+                                      store.all_missions(), None, notes)
+    if not kept:
+        return _dropped(notes)
+    d = kept[0]
+    try:
+        orchestrator.propose_dead_lead(d.mission, d.verdict, d.why, _now(), "chat")
+    except ValueError as err:
+        return f"Not done: {err}."
+    return (f"Proposed {d.mission} as a dead lead ({d.verdict}). It waits for the human under Needs you"
+            + (" (auto mode approves it shortly)." if settings.auto_mode() else "."))
+
+@server.tool()
+def set_claim_tag(mission: str, tag: str, why: str) -> str:
+    """Change a mission's claim tag, as the Theorist may: "confirmed" (the record it cites shows its claim as fact) or
+    "unconfirmed" (it rests on a possibility). Only missions with a brief. Ours only: never published. A claim box
+    that says "It is possible that" stays unconfirmed, and a tag the human set stays as it is. why: one sentence."""
+    notes: list[str] = []
+    kept = theorist.settle_claim_tags([theorist.NewClaimTag(mission=mission, tag=tag, why=why)],
+                                      store.all_missions(), notes)
+    if not kept:
+        return _dropped(notes)
+    t = kept[0]
+    got = claim_tags.set_tag(store.get_mission(t.mission), t.tag, "chat", t.why, _now())
+    held = f" (code kept it {got.value})" if got.value != t.tag else ""
+    return f"{t.mission}: {claim_tags.text(got)}{held}"
 
 @server.tool()
 def link_missions(mission: str, to: str, why: str) -> str:

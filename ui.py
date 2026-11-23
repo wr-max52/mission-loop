@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
+import activity, agents, avatars, board, claim_tags, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
@@ -35,7 +35,7 @@ LABELS = {
     State.QUEUED: "Queued", State.RESEARCHING: "Researching", State.BRIEF_READY: "Brief ready",
     State.OUTREACH: "Outreach", State.AWAITING_COMMENTS: "Waiting for replies", State.WRITING: "Writing",
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
-    State.COMBINED: "Combined",
+    State.COMBINED: "Combined", State.DEAD_LEAD: "Dead lead",
 }
 MESSAGES = {
     "approved": "Brief approved.",
@@ -61,6 +61,11 @@ MESSAGES = {
     "epic_deleted": "Epic deleted.",
     "combined": "Combine approved. Combined mission queued.",
     "combine_rejected": "Combine rejected.",
+    "dead_lead": "Marked as a dead lead.",
+    "dead_approved": "Dead lead approved. Mission stopped.",
+    "dead_rejected": "Kept going.",
+    "revived": "Dead lead revived. Queued again.",
+    "claim_set": "Claim tag saved.",
     "linked": "Missions linked.",
     "unlinked": "Link removed.",
     "site_url_saved": "Site address saved.",
@@ -117,6 +122,8 @@ ERRORS = {
     "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
     "mcp_port": "A port is a number from 1024 to 65535.",
     "combine": "Can't combine now: a mission is in use or has moved on.",
+    "dead_lead": "Can't mark it a dead lead now: it is in use or being written.",
+    "claim": "Pick confirmed or unconfirmed.",
     "link": "Can't link those two: at least one must be unpublished.",
     "topic": "A mission needs a topic.",
     "theme": "Pick System, Light or Dark.",
@@ -292,12 +299,14 @@ def next_step(m: Mission) -> str:
 def in_progress(m: Mission) -> bool:
     """On the Missions page: everything not published yet, and published articles a human asked to publish again.
     A mission combined into another is not: the bigger one carries its work on."""
-    return not needs_you(m) and m.state != State.COMBINED and (m.state != State.DONE or bool(m.publish_requests))
+    return not needs_you(m) and m.state not in (State.COMBINED, State.DEAD_LEAD) \
+        and (m.state != State.DONE or bool(m.publish_requests))
 
 def flow_rank(m: Mission) -> int:
     """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
     order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3, State.OUTREACH: 3,
-             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9}
+             State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9,
+             State.DEAD_LEAD: 9}
     return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
 def _brief(slug: str) -> ResearchBrief | None:
@@ -469,6 +478,12 @@ dialog.wizard input, dialog.wizard textarea { width:100%; box-sizing:border-box;
 .card.review, .card.publish, .card.parked { border-color:var(--tone); background:var(--tint);
                                             box-shadow:inset 3px 0 0 var(--tone); }
 .badge.review, .badge.publish, .badge.parked { background:var(--tone); color:#fff; }
+.claim-tag { display:inline-block; font-size:.7rem; line-height:1.3; padding:0 .4rem; margin-right:.4rem; border-radius:999px;
+             border:1px solid var(--rule); color:var(--muted); white-space:nowrap; vertical-align:1px; }
+.claim-tag.confirmed { border-color:#2f9e44; color:#237a35; }
+[data-theme="dark"] .claim-tag.confirmed { color:#69db7c; }
+.claim-row { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem .6rem; }
+.claim-row form { display:inline-flex; gap:.4rem; align-items:center; margin:0; }
 button, .btn { font:600 .9rem -apple-system, system-ui, sans-serif; padding:.5rem .9rem; border-radius:8px;
                border:1px solid var(--rule); background:var(--bg); color:var(--fg); cursor:pointer;
                text-decoration:none; display:inline-block; }
@@ -1124,7 +1139,8 @@ def flow_state() -> dict:
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
                      "name": agent_name(e["agent"])} for e in now],
-        "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed")),
+        "waiting": {"epic_review": len(store.all_epics("proposed")) + len(store.all_combines("proposed"))
+                                   + len(store.all_dead_leads("proposed")),
                     "brief_review": sum(m.state == State.BRIEF_READY and not m.approved for m in missions),
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - len(writing), "article_check": len(writing) - rated,
@@ -2365,6 +2381,87 @@ async def github_poll(request: Request) -> JSONResponse:
 
 # ---------- epics ----------
 
+CLAIM_CHIP = {"confirmed": "claim: confirmed", "unconfirmed": "claim: unconfirmed"}
+VERDICT_NAMES = {"refuted": "Refuted", "no_record": "No record", "untestable": "Untestable"}
+VERDICT_HINTS = {"refuted": "a record shows the claim is wrong", "no_record": "nothing on the record could answer it",
+                 "untestable": "no document could answer it as asked"}
+SET_BY = {"code": "Code", "writer": "Writer", "rater": "Rater", "research": "Research", "theorist": "Theorist",
+          "chat": "Researcher Chat", "human": "you", "auto mode": "auto mode"}
+
+def claim_chip(slug: str) -> str:
+    """The tiny claim tag on a card: ours only (the published site never shows it)."""
+    t = store.get_claim_tag(slug)
+    if not t:
+        return ""
+    title = escape(_("Set by {who}").format(who=_(SET_BY.get(t.by, t.by))) + (f": {t.why}" if t.why else ""), quote=True)
+    return f'<span class="claim-tag {t.value}" title="{title}">{escape(_(CLAIM_CHIP[t.value]))}</span>'
+
+def claim_section(m: Mission) -> str:
+    """The mission page's claim tag: what it is, who set it and why, how it got there, and a way to change it."""
+    t = store.get_claim_tag(m.slug)
+    if not t and not claim_tags.taggable(m):
+        return ""
+    slug = quote(m.slug)
+    options = "".join(f'<option value="{v}"{" selected" if t and t.value == v else ""}>{escape(_(CLAIM_CHIP[v]))}</option>'
+                      for v in CLAIM_CHIP)
+    who = (escape(_("Set by {who}").format(who=_(SET_BY.get(t.by, t.by))) + (f": {t.why}" if t.why else ""))
+           if t else "")
+    earlier = ""
+    if t and t.history:
+        rows = "".join(f'<li>{escape(_(CLAIM_CHIP.get(h.get("value"), h.get("value", ""))))} · '
+                       f'{escape(_("Set by {who}").format(who=_(SET_BY.get(h.get("by"), h.get("by", "")))))}'
+                       + (f': {escape(h.get("why", ""))}' if h.get("why") else "") + "</li>"
+                       for h in reversed(t.history))
+        earlier = f'<details><summary>{_("Earlier")}</summary><ul>{rows}</ul></details>'
+    return (f'<div class="claim-row">{claim_chip(m.slug)}<span class="hint">{who}</span>'
+            f'<form method="post" action="/m/{slug}/claim"><select name="tag" aria-label="{_("Claim tag")}">{options}</select>'
+            f'<button>{_("Save")}</button></form></div>'
+            f'<p class="hint">{_("Only you and the Theorist see this tag; it is never published.")}</p>{earlier}')
+
+def dead_lead_section(m: Mission) -> str:
+    """A dead lead's verdict, who said so and the records that sink it; or, for a mission that could still be one,
+    a way to mark it."""
+    d = store.get_dead_lead(m.slug)
+    slug = quote(m.slug)
+    if m.state == State.DEAD_LEAD and d:
+        when = d.at[:10]
+        by = _(SET_BY.get(d.by, d.by)) + (f" · {_(SET_BY.get(d.decided_by, d.decided_by))}"
+                                          if d.decided_by and d.decided_by != d.by else "")
+        sources = "".join(f"<li>{escape(x)}</li>" for x in d.sources)
+        sources = f'<p class="hint" style="margin-bottom:.2rem">{_("Records that sink it")}</p><ul>{sources}</ul>' if sources else ""
+        return ask("parked", f'{_(VERDICT_NAMES[d.verdict])}: {_(VERDICT_HINTS[d.verdict])}', "Dead lead",
+                   f'<div class="sub">{escape(by)} · {escape(when)}</div><p>{escape(d.why)}</p>{sources}'
+                   f'<p class="hint">{_("Revive: queue it again with fresh attempts.")}</p>',
+                   f'<form method="post" action="/m/{slug}/requeue"><button>{_("Revive")}</button></form>')
+    if m.state not in orchestrator.DEAD_ENDABLE or (d and d.status == "proposed"):
+        return ""
+    options = "".join(f'<option value="{v}">{escape(_(VERDICT_NAMES[v]))}: {escape(_(VERDICT_HINTS[v]))}</option>'
+                      for v in VERDICT_NAMES)
+    return (f'<details class="send-back"><summary>{_("Mark as dead lead")}</summary>'
+            f'<form method="post" action="/m/{slug}/dead"><label for="verdict">{_("Verdict")}</label>'
+            f'<select id="verdict" name="verdict">{options}</select>'
+            f'<label for="why">{_("Why")}</label><textarea id="why" name="why" rows="2" required maxlength="300"></textarea>'
+            f'<p><button>{_("Mark dead lead")}</button></p></form></details>')
+
+def dead_lead_proposals() -> list[str]:
+    """Dead leads the Theorist or Researcher Chat proposed, each waiting for the human to stop the mission or keep
+    it going."""
+    out = []
+    for d in store.all_dead_leads("proposed"):
+        m = store.get_mission(d.slug)
+        if not m:
+            continue
+        who = (_("Researcher Chat proposes this is a dead lead.") if d.by == "chat"
+               else _("Theorist proposes this is a dead lead."))
+        out.append(ask(
+            "propose", m.topic, "Dead lead",
+            f'<div class="sub">{who} {escape(_(VERDICT_NAMES.get(d.verdict, d.verdict)))}: '
+            f'{escape(_(VERDICT_HINTS.get(d.verdict, "")))} · {escape(label(m))}</div><p>{escape(d.why)}</p>',
+            f'<form method="post" action="/dead-leads/{quote(d.slug)}/approve"><button class="primary">{_("Stop it")}</button></form>'
+            f'<form method="post" action="/dead-leads/{quote(d.slug)}/reject"><button>{_("Keep going")}</button></form>',
+            f"/m/{quote(d.slug)}"))
+    return out
+
 def mission_pill(m: Mission, epics: dict[str, Epic]) -> str:
     e = epics.get(m.epic)
     return epic_pill(e.title, proposed=e.status == "proposed") if e else ""
@@ -2416,7 +2513,7 @@ def ask(color: str, title: str, badge: str, body: str, actions: str, link: str =
 def mission_ask(m: Mission, epics: dict[str, Epic]) -> str:
     color, href = tone(m), f"/m/{quote(m.slug)}"
     return ask(color, m.topic, label(m),
-               f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)} · {escape(next_step(m))}</div>',
+               f'<div class="sub">{mission_pill(m, epics)}{claim_chip(m.slug)}{escape(m.slug)} · {escape(next_step(m))}</div>',
                f'<a class="btn primary" href="{href}">{_(ASK_ACTION[color])}</a>', href)
 
 def epic_proposals(missions: list[Mission]) -> list[str]:
@@ -2560,7 +2657,7 @@ def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | Non
         stage = ' data-lab="busy"' + (f' data-worker="{crew}"' if crew in settings.WORKERS else "")
     return (f'<a class="{classes}" href="/m/{quote(m.slug)}"{stage}><div class="row"><span class="topic">{escape(m.topic)}</span>'
             f'<span class="badge {color}">{escape(label(m))}</span></div>'
-            f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
+            f'<div class="sub">{mission_pill(m, epics)}{claim_chip(m.slug)}{escape(m.slug)}<span class="doing" data-idle="{escape(idle, quote=True)}">'
             f'{" · " + escape(sub) if sub else ""}</span>{board_link(m.slug)}</div></a>')
 
 # ---------- the publishing queue ----------
@@ -3114,7 +3211,7 @@ async def home(request: Request) -> HTMLResponse:
 
     # Needs you: every decision in one place and one look, closest to published first; new epics before parked
     asks = [(flow_rank(m), mission_ask(m, epics)) for m in flow(m for m in missions if needs_you(m))]
-    asks += [(6, a) for a in epic_proposals(missions) + combine_proposals()]
+    asks += [(6, a) for a in epic_proposals(missions) + combine_proposals() + dead_lead_proposals()]
     body.append(heading("touch", _("Needs you"), len(asks), "needs-you"))
     body.append("".join(a for _rank, a in sorted(asks, key=lambda a: a[0]))
                 or f'<p class="muted empty">{_("Nothing needs you.")}</p>')
@@ -3341,6 +3438,7 @@ async def mission(request: Request) -> Response:
             f'<p><span class="badge {tone(m)}">{escape(label(m))}</span> {mission_pill(m, epics)} '
             f'<span class="muted">{escape(m.slug)}</span> {board_link(m.slug, real=True)}</p>',
             f"<h1>{escape(m.topic)}</h1>"]
+    body.append(claim_section(m))
     if m.objective:
         body.append(f'<p class="muted objective">{escape(m.objective)}</p>')
     step = working_on(m, running_now()) or next_step(m)
@@ -3349,6 +3447,7 @@ async def mission(request: Request) -> Response:
     ask = escape(_("Where is the mission {slug} at, and what is taking so long?").format(slug=slug), quote=True)
     body.append(f'<p><button type="button" class="btn" data-ask="{ask}">{_("Ask chat about this mission")}</button></p>')
     body.append(actions_for(m))
+    body.append(dead_lead_section(m))
     current = epics.get(m.epic)
     hint = " " + _("(proposed)") if current and current.status == "proposed" else ""
     body.append(f'{epic_datalist()}<form method="post" action="/m/{quote(slug)}/epic" class="inline">'
@@ -3764,7 +3863,7 @@ def board_link(slug: str, real: bool = False) -> str:
 PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
          State.OUTREACH: "writing",
          State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
-         State.COMBINED: "queued"}
+         State.COMBINED: "queued", State.DEAD_LEAD: "parked"}
 
 def paper(m: Mission) -> str:
     """The sticky note's colour: the stage it is at, like the cards' tones."""
@@ -3812,7 +3911,8 @@ def board_state() -> dict:
                      thesis_label=_("Thesis") if thesis else _("Objective"), stage=label(m), paper=paper(m),
                      epic=epics[m.epic].title if m.epic in epics else "", url=f"/m/{quote(m.slug)}",
                      open=_("Open article") if article else _("Open brief") if brief else _("Open mission"),
-                     meta=" · ".join(x for x in meta if x), live=m.slug in live, faded=m.state == State.COMBINED,
+                     meta=" · ".join(x for x in meta if x), live=m.slug in live,
+                     faded=m.state in (State.COMBINED, State.DEAD_LEAD), dead=m.state == State.DEAD_LEAD,
                      worker=live.get(m.slug) if live.get(m.slug) in settings.WORKERS else "")
         else:
             count = members.get(n["slug"], 0)
@@ -4561,11 +4661,25 @@ async def act(request: Request) -> Response:
             return go(here, error="state")
         done = "rejected"
     elif action == "requeue":
+        dead = m.state == State.DEAD_LEAD
         try:
             orchestrator.requeue(m, now)
         except ValueError:
             return go(here, error="state")
-        done = "requeued"
+        done = "revived" if dead else "requeued"
+    elif action == "dead":
+        try:
+            orchestrator.mark_dead_lead(m, str(form.get("verdict") or ""), str(form.get("why") or ""), now,
+                                        busy={e["slug"] for e in running_now()})
+        except ValueError:
+            return go(here, error="dead_lead")
+        return go(here, done="dead_lead")
+    elif action == "claim":
+        try:
+            claim_tags.set_tag(m, str(form.get("tag") or ""), "human", "", now)
+        except ValueError:
+            return go(here, error="claim")
+        return go(here, done="claim_set")
     elif action == "push":
         try:
             orchestrator.push_through(m, now)
@@ -4714,6 +4828,24 @@ async def combine_action(request: Request) -> Response:
         return go("/", error="combine")
     return PlainTextResponse("Unknown action.", status_code=404)
 
+async def dead_lead_action(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    slug, action = request.path_params["slug"], request.path_params["action"]
+    if not store.get_dead_lead(slug):
+        return PlainTextResponse("No such dead lead.", status_code=404)
+    now = clock.now()
+    try:
+        if action == "approve":
+            orchestrator.approve_dead_lead(slug, now, by="human", busy={e["slug"] for e in running_now()})
+            return go(f"/m/{quote(slug)}", done="dead_approved")
+        if action == "reject":
+            orchestrator.reject_dead_lead(slug, now)
+            return go("/", done="dead_rejected")
+    except ValueError:
+        return go("/", error="dead_lead")
+    return PlainTextResponse("Unknown action.", status_code=404)
+
 async def loop_action(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -4792,6 +4924,7 @@ app = Starlette(routes=[
     Route("/m/{slug}/{action}", act, methods=["POST"]),
     Route("/epics/{slug}/{action}", epic_action, methods=["POST"]),
     Route("/combines/{slug}/{action}", combine_action, methods=["POST"]),
+    Route("/dead-leads/{slug}/{action}", dead_lead_action, methods=["POST"]),
     Route("/loop/{action}", loop_action, methods=["POST"]),
     Route("/api/signature", api_signature),
     Route("/api/flow", api_flow),

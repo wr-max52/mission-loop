@@ -15,6 +15,7 @@ class State(str, Enum):
     DONE = "DONE"
     PARKED = "PARKED"
     COMBINED = "COMBINED"                  # folded into a bigger mission (combined_into); out of the flow
+    DEAD_LEAD = "DEAD_LEAD"                # refuted, no record, or untestable (store.get_dead_lead says why); out of the flow
 
 class ChannelPost(BaseModel):
     """One place an article was published: when, and where to find it (a path or a URL)."""
@@ -65,8 +66,44 @@ class Mission(BaseModel):
 COMBINABLE = {State.QUEUED, State.RESEARCHING, State.BRIEF_READY, State.PARKED}
 
 def is_open(m: Mission) -> bool:
-    """Not published yet and still the desk's own work (not combined into another mission)."""
-    return m.state not in (State.DONE, State.COMBINED)
+    """Not published yet and still the desk's own work (not combined into another mission, not a dead lead)."""
+    return m.state not in (State.DONE, State.COMBINED, State.DEAD_LEAD)
+
+OUT_OF_FLOW = {State.DONE, State.PARKED, State.COMBINED, State.DEAD_LEAD}   # no worker picks these up
+
+VERDICTS = {                               # a dead lead's verdict -> what it means, as shown to people
+    "refuted": "Refuted: a record shows the claim is wrong",
+    "no_record": "No record: nothing on the record could answer it",
+    "untestable": "Untestable: no document could answer it as asked",
+}
+
+class DeadLead(BaseModel):
+    """A mission that won't go on: research found it refuted, unanswerable or untestable, or the Theorist (or the
+    chat assistant) proposed so and a human or auto mode agreed, or a human marked it. In its own table, keyed by
+    the mission, so no worker saves over it. A proposal the human rejects, or a dead lead a human revives, stays,
+    so the Theorist never proposes it again."""
+    slug: str
+    verdict: Literal["refuted", "no_record", "untestable"]
+    why: str = ""
+    sources: list[str] = []                # for "refuted": the verified record(s) that sink it, "url: quote"
+    by: str = "research"                   # "research", "theorist", "chat" or "human"
+    at: str = ""                           # ISO time
+    status: Literal["proposed", "dead", "rejected", "revived"] = "dead"
+    decided_by: str = ""                   # who approved or rejected a proposal: "human" or "auto mode"
+
+CLAIM_TAGS = ("confirmed", "unconfirmed")
+
+class ClaimTag(BaseModel):
+    """Whether a mission's claim held up: "confirmed" or "unconfirmed". Ours only: the UI, the Theorist and the chat
+    assistant see it; the published site, feeds and the research and writing prompts never do. Set by code from the
+    brief, then the writer, and changed by the rater, the Theorist or a human (claim_tags.py). Its own table, like
+    links, so no worker saves over it."""
+    slug: str
+    value: Literal["confirmed", "unconfirmed"]
+    by: str = "code"                       # "code", "writer", "rater", "theorist", "chat" or "human"
+    why: str = ""
+    at: str = ""
+    history: list[dict] = []               # earlier values, oldest first: {"value", "by", "why", "at"}
 
 class Link(BaseModel):
     """Two missions the Theorist (or a human) connected while keeping them separate: two open missions, or an
@@ -190,9 +227,18 @@ def _shorten(sources: list) -> dict[str, str]:
 
 class SourcePick(BaseModel):
     """A brief's first step: the thesis and the sources it rests on. Code checks every source against its
-    page before any claim is written, so claims only ever cite sources that passed."""
+    page before any claim is written, so claims only ever cite sources that passed. dead_lead is set instead when
+    the search showed the mission can't go on (researcher._dead_lead decides whether it counts)."""
     thesis: str
     sources: list[Source]
+    dead_lead: Literal["", "refuted", "no_record", "untestable"] = ""   # VERDICTS; "" = a normal pick
+    dead_lead_why: str = ""
+
+    @field_validator("dead_lead", mode="before")
+    @classmethod
+    def _verdict(cls, v):
+        v = str(v or "").strip().lower().replace(" ", "_").replace("-", "_")
+        return v if v in VERDICTS else ""
 
     @model_validator(mode="after")
     def _short_ids(self):
@@ -251,6 +297,14 @@ class ArticlePlan(BaseModel):
     dek: str
     claim: str = ""                        # the box at the top: who did what and why it matters, cited
     sections: list[PlannedSection] = Field(min_length=2)
+    claim_status_why: str = ""             # the writer's comparison of the brief's claim with the article's
+    claim_status: Literal["", "confirmed", "unconfirmed"] = ""   # the claim tag it proposes (claim_tags.py)
+
+    @field_validator("claim_status", mode="before")
+    @classmethod
+    def _tag(cls, v):
+        v = str(v or "").strip().lower()
+        return v if v in CLAIM_TAGS else ""
 
 class ArticleDraft(BaseModel):
     """What the writer has so far: its plan, and the sections written and checked, in plan order."""
@@ -275,6 +329,14 @@ class RatingReply(BaseModel):
     intrigue: int = 1
     sources_why: str = ""
     sources: int = 1
+    claim_why: str = ""                    # the rater's check of the writer's claim tag; it never changes the score
+    claim: Literal["", "confirmed", "unconfirmed"] = ""   # "" keeps the writer's tag
+
+    @field_validator("claim", mode="before")
+    @classmethod
+    def _tag(cls, v):
+        v = str(v or "").strip().lower()
+        return v if v in CLAIM_TAGS else ""
 
     @field_validator("logic", "intrigue", "sources", mode="before")
     @classmethod

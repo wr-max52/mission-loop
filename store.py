@@ -1,7 +1,8 @@
 import json, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from contracts import Mission, Epic, Link, Combine, BoardNote, Mention, epic_title, slugify
+from contracts import (Mission, Epic, Link, Combine, BoardNote, Mention, DeadLead, ClaimTag, OUT_OF_FLOW, epic_title,
+                       slugify)
 
 DB = Path("data/loop.db")
 INSPIRATION = Path("data/inspiration.txt") # the human's one line for the mission finder, which the Theorist evolves
@@ -84,6 +85,10 @@ def init():
             kind TEXT, id TEXT, data TEXT NOT NULL, PRIMARY KEY (kind, id));
         CREATE TABLE IF NOT EXISTS mentions(
             a TEXT, b TEXT, kind TEXT, data TEXT NOT NULL, PRIMARY KEY (a, b, kind));
+        CREATE TABLE IF NOT EXISTS dead_leads(
+            slug TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS claim_tags(
+            slug TEXT PRIMARY KEY, data TEXT NOT NULL);
         """)
 
 def save_mission(m: Mission):
@@ -102,7 +107,7 @@ def all_missions() -> list[Mission]:
     return [Mission.model_validate_json(r["data"]) for r in rows]
 
 def active_missions() -> list[Mission]:
-    return [m for m in all_missions() if m.state.value not in ("DONE", "PARKED", "COMBINED")]
+    return [m for m in all_missions() if m.state not in OUT_OF_FLOW]
 
 def save_artifact(slug: str, kind: str, obj):
     if isinstance(obj, list):
@@ -221,6 +226,37 @@ def all_combines(status: str | None = None) -> list[Combine]:
     rows = conn().execute("SELECT data FROM combines ORDER BY rowid").fetchall()
     found = [Combine.model_validate_json(r["data"]) for r in rows]
     return [c for c in found if status in (None, c.status)]
+
+# ---------- dead leads and claim tags: one row per mission, never on the mission ----------
+
+def get_dead_lead(slug: str) -> DeadLead | None:
+    row = conn().execute("SELECT data FROM dead_leads WHERE slug = ?", (slug,)).fetchone()
+    return DeadLead.model_validate_json(row["data"]) if row else None
+
+def save_dead_lead(d: DeadLead) -> DeadLead:
+    with conn() as c:
+        c.execute("INSERT INTO dead_leads VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET "
+                  "status = excluded.status, data = excluded.data", (d.slug, d.status, d.model_dump_json()))
+    return d
+
+def all_dead_leads(status: str | None = None) -> list[DeadLead]:
+    rows = conn().execute("SELECT data FROM dead_leads ORDER BY rowid").fetchall()
+    found = [DeadLead.model_validate_json(r["data"]) for r in rows]
+    return [d for d in found if status in (None, d.status)]
+
+def get_claim_tag(slug: str) -> ClaimTag | None:
+    row = conn().execute("SELECT data FROM claim_tags WHERE slug = ?", (slug,)).fetchone()
+    return ClaimTag.model_validate_json(row["data"]) if row else None
+
+def save_claim_tag(t: ClaimTag) -> ClaimTag:
+    with conn() as c:
+        c.execute("INSERT INTO claim_tags VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET data = excluded.data",
+                  (t.slug, t.model_dump_json()))
+    return t
+
+def all_claim_tags() -> dict[str, ClaimTag]:
+    rows = conn().execute("SELECT data FROM claim_tags").fetchall()
+    return {t.slug: t for t in (ClaimTag.model_validate_json(r["data"]) for r in rows)}
 
 # ---------- the cork board: note positions and the mentions code found ----------
 
