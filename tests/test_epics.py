@@ -52,6 +52,69 @@ def test_rename_keeps_the_slug_and_refuses_a_taken_name():
     with pytest.raises(ValueError):
         orchestrator.rename_epic(a.slug, "grid failures", T0)
 
+def test_titles_are_cleaned_and_old_ones_tidied_at_start():
+    assert store.create_epic("tech_influence").title == "Tech influence"
+    assert store.create_epic("Fed capture").title == "Fed capture"           # not all lower case: left alone
+    assert store.find_epic("tech_influence").title == "Tech influence"
+    with store.conn() as c:                                                  # saved before titles were cleaned
+        c.execute("INSERT INTO epics VALUES ('grid_power', 'grid_power', 'active')")
+        c.execute("INSERT INTO epics VALUES ('dupe', 'tech_influence', 'active')")
+    done = orchestrator.tidy_epic_titles(T0)
+    assert done == [("grid_power", "Grid power")]
+    assert store.get_epic("grid_power").title == "Grid power"
+    assert store.get_epic("dupe").title == "tech_influence"                  # its clean title is taken
+    assert orchestrator.tidy_epic_titles(T0) == []
+
+def test_merge_moves_the_missions_and_removes_the_epic_and_its_board_note():
+    import board
+    a, b = store.create_epic("Dam Money"), store.create_epic("Water Rights")
+    store.save_mission(Mission(slug="m1", topic="One", epic=a.slug))
+    store.save_mission(Mission(slug="m2", topic="Two", epic=b.slug))
+    p = store.create_epic("Dam Loans", status="proposed")
+    store.save_mission(Mission(slug="m3", topic="Three", epic=p.slug, epic_fallback=a.slug))
+    board.layout()
+    with pytest.raises(ValueError):                                          # a worker is busy with m1
+        orchestrator.merge_epic(a.slug, b.slug, T0, busy={"m1"})
+    orchestrator.merge_epic(a.slug, b.slug, T0)
+    assert store.get_epic(a.slug) is None and store.get_mission("m1").epic == b.slug
+    assert store.get_mission("m3").epic_fallback == b.slug                   # a rejection goes to the survivor
+    assert not store.conn().execute("SELECT 1 FROM board WHERE kind = 'epic' AND id = ?", (a.slug,)).fetchone()
+
+def test_delete_only_an_empty_epic():
+    full, empty = store.create_epic("Dam Money"), store.create_epic("Water Rights")
+    store.save_mission(Mission(slug="m1", topic="One", epic=full.slug))
+    with pytest.raises(ValueError, match="merge"):
+        orchestrator.delete_epic(full.slug)
+    orchestrator.delete_epic(empty.slug)
+    assert store.get_epic(empty.slug) is None and store.get_epic(full.slug)
+
+def test_epic_list_merges_and_deletes(client):
+    full, other, empty = (store.create_epic(t) for t in ("Dam Money", "Water Rights", "Empty One"))
+    store.save_mission(Mission(slug="m1", topic="One", epic=full.slug))
+    store.save_mission(Mission(slug="m2", topic="Two", epic=other.slug))
+    html = ui.epic_list(store.all_missions())
+    assert f'action="/epics/{full.slug}/merge"' in html and f'action="/epics/{empty.slug}/delete"' in html
+    assert f'action="/epics/{full.slug}/delete"' not in html
+    r = client.post(f"/epics/{full.slug}/delete", follow_redirects=False)
+    assert "epic_not_empty" in r.headers["location"]
+    assert store.get_epic(full.slug)                                         # refused: it has a mission
+    client.post(f"/epics/{empty.slug}/delete")
+    assert store.get_epic(empty.slug) is None
+    client.post(f"/epics/{full.slug}/merge", data={"into": other.slug})
+    assert store.get_epic(full.slug) is None and store.get_mission("m1").epic == other.slug
+
+def test_cli_merges_and_deletes_epics():
+    from typer.testing import CliRunner
+    import run as cli
+    a, b, e = store.create_epic("Dam Money"), store.create_epic("Water Rights"), store.create_epic("Empty One")
+    store.save_mission(Mission(slug="m1", topic="One", epic=a.slug))
+    r = CliRunner().invoke(cli.app, ["delete-epic", "Dam Money"])
+    assert r.exit_code == 1 and "merge" in r.output
+    assert CliRunner().invoke(cli.app, ["merge-epic", "dam money", "Water Rights"]).exit_code == 0
+    assert store.get_mission("m1").epic == b.slug and store.get_epic(a.slug) is None
+    assert CliRunner().invoke(cli.app, ["delete-epic", "empty_one"]).exit_code == 0
+    assert store.get_epic(e.slug) is None
+
 # ---------- the finder ----------
 
 def test_finder_sees_each_epic_with_its_missions_and_assigns_the_best_fit(monkeypatch):

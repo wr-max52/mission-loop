@@ -57,6 +57,8 @@ MESSAGES = {
     "epic_moved": "Missions moved.",
     "epic_rejected": "Epic rejected. Missions moved back.",
     "epic_renamed": "Epic renamed.",
+    "epic_merged": "Epic merged.",
+    "epic_deleted": "Epic deleted.",
     "combined": "Combine approved. Combined mission queued.",
     "combine_rejected": "Combine rejected.",
     "linked": "Missions linked.",
@@ -131,6 +133,8 @@ ERRORS = {
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different approved epic.",
+    "epic_busy": "A worker is busy with one of its missions. Try again once that task ends.",
+    "epic_not_empty": "That epic still has missions. Merge it into another instead.",
     "site_url": "Enter a full http(s):// address, or leave it empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
     "worker_model": "Pick a model from the list.",
@@ -451,8 +455,9 @@ dialog.wizard input, dialog.wizard textarea { width:100%; box-sizing:border-box;
 .wiz-nav .wiz-go .ico { width:.85rem; height:.85rem; }
 .wiz-nav .wiz-go .ico svg { fill:currentColor; }
 .wiz-sum { overflow-wrap:anywhere; }
-.card.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
+.card.active, .desk.active { border-color:#2f9e44; box-shadow:inset 3px 0 0 #2f9e44; }
 .card.active .sub { color:var(--fg); }
+.desk.active .hint { color:var(--fg); }
 .card .row { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; }
 .card .topic { font-weight:600; }
 .card .sub { color:var(--muted); font-size:.9rem; margin-top:.25rem; }
@@ -557,17 +562,19 @@ details summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
 .ask-actions details.send-back { flex-basis:100%; margin:.2rem 0 0; }
 @media (max-width: 560px) { .ask .sub, .ask > .hint, .ask > ul, .ask-actions { margin-left:0; } }
 .epics form.inline { margin:.3rem 0; }
+.epics .epic-row { display:flex; gap:.4rem 1rem; align-items:center; flex-wrap:wrap; }
+.epics .epic-row select { width:auto; min-width:9rem; }
 select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); border-radius:8px;
          background:var(--bg); color:var(--fg); }
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
 form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20rem; }
 
 @media (prefers-reduced-motion: reduce) { .status .dot.on { animation:none; } }
-.card[data-lab], .card.lab-host { position:relative; padding-bottom:4rem;
+.card[data-lab], .card.lab-host, .desk[data-lab], .desk.lab-host { position:relative; padding-bottom:4rem;
                   background-image:linear-gradient(var(--rule), var(--rule));
                   background-size:calc(100% - 2rem) 2px; background-position:1rem calc(100% - 8px);
                   background-repeat:no-repeat; }
-.card canvas.lab-stage { bottom:0; height:160px; }   /* tall enough for a bubble above the tallest researcher */
+.card canvas.lab-stage, .desk canvas.lab-stage { bottom:0; height:160px; }   /* tall enough for a bubble above the tallest researcher */
 .switch { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; margin:0; font-size:1rem; cursor:pointer; }
 .switch input { appearance:none; -webkit-appearance:none; flex:none; width:2.6rem; height:1.5rem; padding:0; margin:0;
                 border-radius:999px; border:1px solid var(--muted); background:var(--rule); position:relative;
@@ -1163,14 +1170,30 @@ def loop_panel(back: str) -> str:
     return (f'<div class="loop"><span class="dot {dot}"></span><span class="grow">{state}</span>{controls}'
             f'{flow_strip(flow_state())}</div>{script("flow.js")}')   # flow.js keeps the pipeline strip live
 
-def finder_panel() -> str:
+DESK_AGENTS = ("theorist", "finder")       # work for the whole desk (slug ""), so the Inspiration box is their card
+
+def desk_live(now: list[dict] | None) -> dict | None:
+    """The Theorist's or the mission finder's step running now, if either is."""
+    return next((e for e in now or [] if not e["slug"] and e["agent"] in DESK_AGENTS), None)
+
+def finder_panel(now: list[dict] | None = None, lab: bool = False) -> str:
+    """The Inspiration box. It is the desk's card: while the Theorist or the finder works it lights like a mission
+    card a model is on (green outline, "... working now") and, with animations on, gets a visitor from that worker's
+    crew doing that agent's kind of work. assets/flow.js relights it in place (data-desk)."""
     line = store.get_inspiration()
-    state = _("The mission finder searches from this line. Empty turns the finder and Theorist off.")
+    idle = _("The mission finder searches from this line. Empty turns the finder and Theorist off.")
+    live = desk_live(now)
+    state = _("{agent} working now").format(agent=agent_name(live["agent"])) if live else idle
+    attrs = ' class="actions desk active"' if live else ' class="actions desk"'
+    attrs += " data-lab-ok" if lab else ""       # researchers may visit it
+    if live and lab:
+        crew = settings.seat_worker(live["worker"])
+        attrs += f' data-lab="{live["agent"]}"' + (f' data-worker="{crew}"' if crew in settings.WORKERS else "")
     think = (f'<button formaction="/theorist" title="{escape(_("Run the Theorist on the next loop pass"))}">'
              f'{_("Run Theorist")}</button>') if line else ""
     example = escape(_("e.g. Who really decides what the Federal Reserve does?"), quote=True)
-    return heading("brain", _("Inspiration")) + f"""<form method="post" action="/inspiration" class="actions">
-  <label for="inspiration" style="margin-top:0"><span class="hint">{state}</span></label>
+    return heading("brain", _("Inspiration")) + f"""<form method="post" action="/inspiration" id="desk" data-desk{attrs}>
+  <label for="inspiration" style="margin-top:0"><span class="hint" data-idle="{escape(idle, quote=True)}">{escape(state)}</span></label>
   <input type="text" id="inspiration" name="inspiration" maxlength="500" value="{escape(line, quote=True)}" placeholder="{example}">
   <p><button>{_("Save")}</button> {think}</p>{theorist_notes()}
 </form>"""
@@ -2484,16 +2507,27 @@ def connections(m: Mission) -> str:
     return heading("link", _("Connections"), len(rows) or None, cls="sec") + body + form
 
 def epic_list(missions: list[Mission]) -> str:
+    """Every approved epic: rename it, merge it into another (its missions move, it is gone), or delete it once it
+    holds no missions."""
     active = store.all_epics("active")
     if not active:
         return ""
-    rows = "".join(
-        f'<form method="post" action="/epics/{quote(e.slug)}/rename" class="inline">'
-        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
-        f'<span class="hint">{_n("{n} mission", "{n} missions", sum(m.epic == e.slug for m in missions))}</span>'
-        f'<button>{_("Rename")}</button></form>'
-        for e in active)
-    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{rows}</div>'
+    rows = []
+    for e in active:
+        n, slug = sum(m.epic == e.slug for m in missions), quote(e.slug)
+        others = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>'
+                         for a in active if a.slug != e.slug)
+        merge = (f'<form method="post" action="/epics/{slug}/merge" class="inline">'
+                 f'<select name="into" aria-label="{_("Merge into")}">{others}</select>'
+                 f'<button>{_("Merge into")}</button></form>') if n and others else ""
+        delete = "" if n else (f'<form method="post" action="/epics/{slug}/delete" class="inline">'
+                               f'<button>{_("Delete")}</button></form>')
+        rows.append(
+            f'<div class="epic-row"><form method="post" action="/epics/{slug}/rename" class="inline">'
+            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+            f'<span class="hint">{_n("{n} mission", "{n} missions", n)}</span>'
+            f'<button>{_("Rename")}</button></form>{merge}{delete}</div>')
+    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{"".join(rows)}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
 STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("outreach", "people", "Outreach"),
@@ -3105,7 +3139,7 @@ async def home(request: Request) -> HTMLResponse:
                         f'<div class="cards"{" data-lab-ok" if lab else ""}>'
                         + "".join(card(m, now, epics, lab) for m in ms) + "</div>")
 
-    body.append(finder_panel())
+    body.append(finder_panel(now, lab))
     body.append(epic_list(missions))
     tail = log_tail()
     if tail:
@@ -4640,8 +4674,13 @@ async def epic_action(request: Request) -> Response:
             orchestrator.approve_epic(slug, title, now)
             done = "epic_approved"
         elif action == "merge":
-            orchestrator.merge_epic(slug, str(form.get("into") or ""), now)
-            done = "epic_moved"
+            proposed = store.get_epic(slug).status == "proposed"
+            orchestrator.merge_epic(slug, str(form.get("into") or ""), now,
+                                    busy={e["slug"] for e in running_now()})
+            done = "epic_moved" if proposed else "epic_merged"
+        elif action == "delete":
+            orchestrator.delete_epic(slug)
+            done = "epic_deleted"
         elif action == "reject":
             orchestrator.reject_epic(slug, now)
             done = "epic_rejected"
@@ -4651,8 +4690,8 @@ async def epic_action(request: Request) -> Response:
         else:
             return PlainTextResponse("Unknown action.", status_code=404)
     except ValueError as e:
-        return go("/", error="epic_exists" if "already" in str(e) else
-                  "epic_target" if action == "merge" else "state")
+        return go("/", error="epic_exists" if "already" in str(e) else "epic_busy" if "busy" in str(e) else
+                  "epic_target" if action == "merge" else "epic_not_empty" if action == "delete" else "state")
     return go("/", done=done)
 
 async def combine_action(request: Request) -> Response:

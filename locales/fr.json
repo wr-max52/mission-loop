@@ -1132,5 +1132,10 @@
  "Searches by meaning. Good for papers and essays.": "Cherche par le sens. Bien pour les articles de recherche et les essais.",
  "Google results. Cheap per search.": "Résultats de Google. Peu cher par recherche.",
  "Free, no key. Unofficial, so it can be rate-limited.": "Gratuit, sans clé. Non officiel, donc parfois limité.",
- "Free news search, no key. Covers about the last 3 months.": "Recherche d'actualités gratuite, sans clé. Couvre environ les 3 derniers mois."
+ "Free news search, no key. Covers about the last 3 months.": "Recherche d'actualités gratuite, sans clé. Couvre environ les 3 derniers mois.",
+ "Merge into": "Fusionner avec",
+ "Epic merged.": "Série fusionnée.",
+ "Epic deleted.": "Série supprimée.",
+ "A worker is busy with one of its missions. Try again once that task ends.": "Un agent travaille sur l'une de ses missions. Réessayez une fois cette tâche terminée.",
+ "That epic still has missions. Merge it into another instead.": "Cette série a encore des missions. Fusionnez-la plutôt avec une autre."
 }
