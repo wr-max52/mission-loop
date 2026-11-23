@@ -1167,8 +1167,9 @@ def rename_epic(slug: str, title: str, now) -> None:
         raise ValueError(f"no epic {slug}")
     if not clean:
         raise ValueError("an epic title needs 1 to 4 words")
-    other = store.find_epic(clean)
-    if other and other.slug != slug:
+    # any other epic with this title or slug, ignoring case (find_epic stops at the first match, which can be this one)
+    other = next((e for e in store.all_epics() if e.slug != slug and clean.lower() in (e.slug, e.title.lower())), None)
+    if other:
         raise ValueError(f"there is already an epic called {other.title}")
     epic.title = clean
     store.save_epic(epic)

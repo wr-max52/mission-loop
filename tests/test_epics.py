@@ -65,6 +65,18 @@ def test_titles_are_cleaned_and_old_ones_tidied_at_start():
     assert store.get_epic("dupe").title == "tech_influence"                  # its clean title is taken
     assert orchestrator.tidy_epic_titles(T0) == []
 
+def test_tidy_and_rename_leave_a_title_that_only_differs_by_case_from_another_epic():
+    from contracts import Epic
+    store.save_epic(Epic(slug="ai-policy", title="ai policy", status="active"))     # saved before titles were cleaned
+    store.save_epic(Epic(slug="ai-policy-2", title="AI policy", status="active"))
+    assert orchestrator.tidy_epic_titles(T0) == []
+    assert store.get_epic("ai-policy").title == "ai policy"                  # left for a human to merge
+    with pytest.raises(ValueError):
+        orchestrator.rename_epic("ai-policy", "Ai Policy", T0)
+    lone = store.create_epic("Water Rights")
+    orchestrator.rename_epic(lone.slug, "water RIGHTS", T0)                  # its own title in another case is fine
+    assert store.get_epic(lone.slug).title == "water RIGHTS"
+
 def test_merge_moves_the_missions_and_removes_the_epic_and_its_board_note():
     import board
     a, b = store.create_epic("Dam Money"), store.create_epic("Water Rights")
