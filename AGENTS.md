@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 770 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 778 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
   server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -318,6 +318,16 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   repeating tokens ("token repeat limit reached"): a stuck search turn ends the search, and a stuck structured
   reply keeps whatever valid JSON it wrote before (checked as usual), else the attempt fails. `llm.ask` is the
   shared structured call: one repair round for malformed JSON, the Overrun salvage, and stop handling.
+- Models leave memory once nothing wants them (#107; `llm.IDLE_UNLOAD`, 5 minutes): the loop's own Ollama calls keep
+  their model for its rest plus a minute (`llm.KEEP_ALIVE`, set from `--every` by `run.py loop`), so a rest never
+  reloads one; a sweep after a full rest (not one a UI action cut short) that calls no model unloads them
+  (`run._unload_after_rest`, `llm.LAST_CALL`); a stopping `run`/`loop` sets them to unload 5 minutes on
+  (`llm.release`), so play within that keeps them. Researcher Chat and the avatar studio keep theirs 5 minutes. While
+  the UI is open, `ui.idle_unloader` looks every `ui.IDLE_CHECK` (30 s) and, once the loop has been off 5 minutes,
+  unloads any of ours still held longer than that (`llm.unload_pinned`: a loop that died). Only Mission Loop's models
+  (`llm.ours()`: the workers', the chat and embedding models, any this process called, none in stub runs) are touched,
+  and only ones `ps` shows loaded (`llm.loaded`), since an empty request would load one. Nothing here ever raises;
+  `llm.CLIENT` is the fake Ollama in tests.
 - Publishing has two parts: the local site, the foundation every article is written to first, and channels,
   everywhere else it goes, each posting from the local site's feed. Where each article went is recorded per
   mission in `Mission.channels` (key -> when and where):

@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
 import activity, agents, clock, doctor, notify, orchestrator, settings, store
+from agents import llm
 from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
@@ -212,6 +213,7 @@ def run():
         n = orchestrator.run_until_idle(clock.now)
         print(f"{n} task(s) ran")
     status()
+    llm.release()                          # its models unload IDLE_UNLOAD from now (#107)
     held.close()
 
 @app.command()
@@ -221,29 +223,43 @@ def loop(every: float = typer.Option(15, help="Minutes to rest when there is not
     orchestrator.STOP_FLAG.unlink(missing_ok=True)
     doctor.clear_waiting()                 # a reason left by a refused play or a killed loop: this loop logs its own
     seen: set[tuple[str, str]] = set()
+    llm.KEEP_ALIVE = max(llm.KEEP_ALIVE, every * 60 + 60)   # a rest never unloads a model; `rested` below unloads after one
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop started; it rests up to {every:g} min when nothing is left to do", flush=True)
 
     def announce():                        # after every model task, so a ready brief never waits on the others
         for line in notify.announce(store.all_missions(), seen):
             print(f"[{clock.now():%Y-%m-%d %H:%M}] notice: {line}", flush=True)
 
+    rested = False                         # the last rest ran its full length, not cut short by a human
     while not orchestrator.STOP_FLAG.exists():
         ready = _ready(quiet_repeat=True)
         if ready:
+            began = time.monotonic()
             n = orchestrator.run_until_idle(clock.now, after_task=announce)
             if n:
                 print(f"[{clock.now():%Y-%m-%d %H:%M}] {n} task(s) ran", flush=True)
                 status()
+            if gone := _unload_after_rest(rested, began):
+                print(f"[{clock.now():%Y-%m-%d %H:%M}] nothing for a model after a full rest: unloaded "
+                      f"{', '.join(gone)}", flush=True)
         announce()
         deadline = time.monotonic() + (every * 60 if ready else WAIT_RETRY)   # not ready: look again soon
+        rested = ready
         while time.monotonic() < deadline and not orchestrator.STOP_FLAG.exists():
             if orchestrator.WAKE_FLAG.exists():  # a human acted in the UI: look for work now
                 orchestrator.WAKE_FLAG.unlink(missing_ok=True)
+                rested = False
                 break
             time.sleep(2)
+    llm.release()                          # its models unload IDLE_UNLOAD from now, unless play is pressed again (#107)
     doctor.clear_waiting()
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop stopped", flush=True)
     held.close()
+
+def _unload_after_rest(rested: bool, began: float) -> list[str]:
+    """A sweep that followed a full rest and asked no model anything (code steps only) unloads the loop's models
+    (#107); they load again for the next model task. A rest cut short by a human keeps them."""
+    return llm.unload(llm.ours()) if rested and llm.LAST_CALL < began else []
 
 @app.command()
 def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
@@ -267,6 +283,7 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
         import mcp_share
         threading.Thread(target=lambda: print(f"MCP server: {mcp_share.start() or mcp_share.url()}", flush=True),
                          daemon=True).start()
+    threading.Thread(target=web.idle_unloader, name="idle-unload", daemon=True).start()
     if open_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
