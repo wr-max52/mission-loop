@@ -4,7 +4,7 @@ Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio, json, re, time
 from urllib.parse import unquote, urlparse
 import activity, checkpoint, related, search_status, stopping, trail, wayback
-from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
+from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick, VERDICTS
 from agents import llm
 from checks import validator
 from agents.toolbox import Toolbox
@@ -50,6 +50,15 @@ Rules:
   carry. Word it "It is possible that ..." unless the record directly shows it. It must be checkable:
   name who, what, when or how much, so a document, number or record could show it wrong. A thesis so
   broad that nothing could count against it is too vague; narrow it.
+- Ask what a document can answer. Has anyone testified to it under oath or before a legislature? Has a
+  court heard it? Is there a filing, a contract, an arrest or booking record, an inspection, a dataset,
+  a FOIA release, an official transcript? Name in the thesis or the claims the specific kinds of record
+  that would show it right or wrong, and go and look for them. A theory, framework or label (including
+  one from the desk's own past work) is not evidence: look for records of what happened, not
+  commentary about the idea.
+- A dead end is a finding. If a record you can cite shows the mission's claim is wrong, or you looked for
+  the records that could answer it and none exists, say so plainly; never stretch thin evidence to keep
+  a lead alive.
 - No claim may be an opinion, endorsement or moral judgement. Apply the same skepticism to every side.
 - Aim provocation at what the evidence leaves open: official accounts, institutions, incentives, numbers
   and gaps. Do not use a possibility to suggest that a named person committed a crime or acted in bad
@@ -84,7 +93,7 @@ Rules:
 - Test the thesis: search for the strongest case against it (often the official or mainstream account)
   and cite it with stance "contradicts" if you find one. If no source pushes back, do not invent one or
   mislabel a supporting source: write the counterpoint as the strongest objection a skeptic would raise,
-  and say what evidence would show the thesis wrong.
+  and name the record (a ruling, filing, dataset, testimony) that would show the thesis wrong.
 - Do not look for people to contact; the Outreach agent does that after the brief is approved.
 - When you have enough evidence, stop calling tools and reply with the word DONE.
 {notes}"""
@@ -105,7 +114,14 @@ PICK = ("The search is over. The brief is written in two steps; this is step 1 o
         "whose evidence bears on it, each with its stance and one sentence copied character for character from "
         "that page as its quote. Sources that passed verification last time count as fetched. Do not write claims "
         "yet. Code checks every quote against its page before step 2, and step 2 may cite only sources that pass. "
-        "Include at least 3 supporting sources on 3 different websites, and any page that contradicts the thesis. " + IDS)
+        "Include at least 3 supporting sources on 3 different websites, and any page that contradicts the thesis. " + IDS
+        + "Leave dead_lead empty unless the search showed the mission is a dead lead; then set it, still giving the "
+        "thesis you tested and the pages you fetched: \"refuted\" when a record you fetched (a ruling, a filing, official "
+        "data, a document) directly shows the mission's claim is wrong, included as a source with stance "
+        "\"contradicts\" (a denial or an opinion is not a refutation); \"no_record\" when you looked for the records that "
+        "could answer it (testimony, court filings, arrest records, filings, datasets) and none exists; \"untestable\" "
+        "when no document could answer the question as asked, because it rests on a framework or label rather than on "
+        "events. dead_lead_why: one or two sentences naming the record that sinks it, or the records you looked for.")
 CLAIMS = """Step 2 of 2: write the claims and the counterpoint. Code checked the quotes of the sources
 below against their pages, and these passed. Cite only these ids.
 Thesis: {thesis}
@@ -465,6 +481,13 @@ def _unique(claims: list) -> list:
             out.append(c)
     return out
 
+class DeadLeadFound(ResearchFailed):
+    """The search showed the mission can't go on (_dead_lead decided it counts): verdict is one of
+    contracts.VERDICTS, sources the verified records that sink a refuted one ("url: quote")."""
+    def __init__(self, verdict: str, why: str, sources: list[str]):
+        super().__init__(f"dead lead ({verdict}): {why}")
+        self.verdict, self.why, self.sources = verdict, why, sources
+
 class BriefFailed(ResearchFailed):
     """The brief can't pass: brief is the draft so far (kept for the next attempt and for humans), notes
     say why in the validator's words."""
@@ -485,13 +508,33 @@ def _source_feedback(passed: list, failed: list[str]) -> str:
             "sentence if it still shows what you need. Return only the fixed or replacement sources, as JSON "
             "matching the schema.")
 
-def _save_pick(m: Mission, thesis: str, sources: list) -> None:
+def _save_pick(m: Mission, pick: SourcePick, sources: list) -> None:
     """The source pick as it stands, saved before the (slow, network-bound) checks, so a stop or a killed loop
     resumes by checking it again instead of asking the model again."""
-    m.brief_pick = SourcePick(thesis=thesis, sources=sources)
+    m.brief_pick = pick.model_copy(update={"sources": sources})
     checkpoint.save(m)
 
-async def _pick_sources(m: Mission, messages: list) -> SourcePick:
+def _dead_lead(pick: SourcePick, passed: list, domains: set, search_down: str) -> DeadLeadFound | None:
+    """Whether the pick's dead-lead verdict counts. Refuted needs a contradicting source that passed the quote
+    check. No record and untestable count only when the sources would fail anyway (too few supporting sites) and
+    web search was up, so a thin search never kills a lead. A verdict that doesn't count is ignored: the attempt
+    goes on, or fails, as any other."""
+    if not pick.dead_lead:
+        return None
+    why = " ".join(pick.dead_lead_why.split())[:400] or VERDICTS[pick.dead_lead]
+    if pick.dead_lead == "refuted":
+        sinks = [s for s in passed if s.stance == "contradicts"]
+        if sinks:
+            return DeadLeadFound("refuted", why, [f'{s.url}: "{s.quote}"' for s in sinks[:3]])
+        trail.record("note", "dead lead (refuted) not kept: no contradicting source passed the check")
+        return None
+    if search_down or len(domains) >= validator.MIN_SUPPORT_DOMAINS:
+        trail.record("note", f"dead lead ({pick.dead_lead}) not kept: "
+                     + ("web search was down" if search_down else "the sources hold up, so there is a record"))
+        return None
+    return DeadLeadFound(pick.dead_lead, why, [])
+
+async def _pick_sources(m: Mission, messages: list, search_down: str = "") -> SourcePick:
     """Step 1: the thesis and its sources. Code checks every quote straight away; the failed ones go back
     with what the check found (the closest real sentence, an archived copy) for SOURCE_ROUNDS - 1 rounds of
     fixes, then the ones still failing are dropped. Too few left is a failed attempt: the search must find more.
@@ -503,7 +546,7 @@ async def _pick_sources(m: Mission, messages: list) -> SourcePick:
     else:
         trail.record("note", "brief step 1: choosing the sources")
         pick = await llm.ask(messages, SourcePick, "source picker", ResearchFailed)
-        _save_pick(m, pick.thesis, pick.sources)
+        _save_pick(m, pick, pick.sources)
     blocked, passed, failed = validator.blocked_domains(), list(m.kept_sources), []
     todo = _with_kept(m.kept_sources, pick.sources)   # kept ones passed on an earlier attempt: not checked again
     if m.kept_sources:
@@ -530,8 +573,11 @@ async def _pick_sources(m: Mission, messages: list) -> SourcePick:
         messages += [{"role": "assistant", "content": SourcePick(thesis=pick.thesis, sources=todo).model_dump_json()},
                      {"role": "user", "content": _source_feedback(passed, [p for _, p in failed])}]
         todo = (await llm.ask(messages, SourceFix, "source picker", ResearchFailed)).sources
-        _save_pick(m, pick.thesis, passed + todo)   # passed ones are checked again on a resume: cheap, and certain
+        _save_pick(m, pick, passed + todo)   # passed ones are checked again on a resume: cheap, and certain
     domains = validator.support_domains(passed)
+    dead = _dead_lead(pick, passed, domains, search_down)
+    if dead:
+        raise dead
     if len(domains) < validator.MIN_SUPPORT_DOMAINS:
         held = f" (held: {', '.join(sorted(domains))})" if domains else ""
         notes = [p for _, p in failed] + [
@@ -589,7 +635,7 @@ async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
     pick = m.brief_sources
     if pick is None:
         try:
-            pick = await _pick_sources(m, messages)
+            pick = await _pick_sources(m, messages, evidence.search_down)
         except stopping.Interrupted:
             raise stopping.Interrupted(None)   # the saved pick (if the model got one out) is checked next time
         m.brief_sources, m.brief_pick = pick, None

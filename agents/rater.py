@@ -11,7 +11,7 @@ import asyncio, json
 from urllib.parse import urlparse
 from contracts import Article, ArticleRating, Mission, RatingReply, ResearchBrief, RATING_SCALE, cited_ids
 from agents import llm
-import trail, wayback
+import claim_tags, store, trail, wayback
 
 SYSTEM = """You are a tough, fair editor deciding whether an article is good enough to show the publisher.
 Rate it on three things, each from 1 to {scale}:
@@ -31,14 +31,25 @@ sources: the credibility of the sources it cites. Primary records (filings, cour
 How to score: 1-3 weak, 4-6 passable with real problems, 7-8 strong, 9-10 rare and excellent. Most decent
 articles land between 5 and 8. Judge each factor on its own; don't let one pull the others up or down.
 For each, first write why in one to three plain sentences naming the specific sentence, claim or source that
-decided it and what would raise the score, then give the number. Output JSON matching the schema."""
+decided it and what would raise the score, then give the number.
+
+Last, check the writer's claim tag, which counts toward no score: "confirmed" means the claim at the top states
+the brief's claim as fact and the cited records show it; "unconfirmed" means it rests on a possibility or says less
+than the brief set out to show. Write claim_why in one sentence, then claim: the tag you would give.
+Output JSON matching the schema."""
 
 ASK = """THE ARTICLE
 {article}
 
 ITS SOURCES (the id it cites, the site, the page's title, the sentence quoted from it, and whether it supports or
 contradicts the thesis)
-{sources}"""
+{sources}
+
+THE BRIEF'S CLAIM (its thesis)
+{thesis}
+
+THE WRITER'S CLAIM TAG
+{tag}"""
 
 class RatingFailed(Exception):
     pass
@@ -61,13 +72,16 @@ def sources_text(brief: ResearchBrief, a: Article) -> str:
              for s in brief.sources if s.id in cited]
     return "\n".join(lines) or "(none cited)"
 
-def messages(brief: ResearchBrief, a: Article) -> list[dict]:
+def messages(brief: ResearchBrief, a: Article, tag: str = "") -> list[dict]:
     return [{"role": "system", "content": SYSTEM.format(scale=RATING_SCALE)},
-            {"role": "user", "content": ASK.format(article=article_markdown(a), sources=sources_text(brief, a))}]
+            {"role": "user", "content": ASK.format(article=article_markdown(a), sources=sources_text(brief, a),
+                                                   thesis=brief.thesis, tag=tag or "none given")}]
 
 async def run_rater(m: Mission, brief: ResearchBrief, a: Article) -> ArticleRating:
     trail.record("note", "rating the article")
-    reply = await llm.ask(messages(brief, a), RatingReply, "article rater", RatingFailed,
+    tag = store.get_claim_tag(m.slug)
+    reply = await llm.ask(messages(brief, a, claim_tags.line(tag) if tag else ""),
+                          RatingReply, "article rater", RatingFailed,
                           model=llm.model_for("assistant"))
     rating = ArticleRating(**reply.model_dump())
     trail.record("note", f"rated {rating.total}: " + json.dumps(reply.model_dump(include={"logic", "intrigue", "sources"})))

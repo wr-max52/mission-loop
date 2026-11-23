@@ -77,7 +77,8 @@ when nothing happens). search_library finds what the desk's briefs and articles 
 quotes, sections). Web tools: search, fetch, find_in_page, wayback_versions. Link every web page you rely on as
 [title](url); never invent a URL.
 Change things only when asked: add_mission (search_missions first), set_mission_epic, set_inspiration,
-propose_epic, propose_combine, link_missions, arrange_board, ask_theorist. Proposals and new briefs wait for the human.
+propose_epic, propose_combine, propose_dead_lead, set_claim_tag, link_missions, arrange_board, ask_theorist. Proposals
+and new briefs wait for the human. A new mission asks a question a document can answer and names the records that would.
 Approve, publish, start and stop are UI buttons, not your tools.
 Answer briefly; Markdown renders. Use topics, not slugs; say when you don't know."""
 
