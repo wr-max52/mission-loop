@@ -74,7 +74,8 @@ async def test_research_searches_once_then_reads_what_it_has(monkeypatch):
     Box.answers = [CREDIT]
     replies(monkeypatch, [call("brave_web_search", query="a"), call("brave_news_search", query="b"),
                           call("fetch", url="https://known.example.com/page"), DONE])
-    ev = await researcher.run_gather(Mission(slug="s", topic="t", attempts=1), toolbox_factory=Box)
+    ev = await researcher.run_gather(Mission(slug="s", topic="t", objective="start at https://known.example.com/page",
+                                             attempts=1), toolbox_factory=Box)
     assert Box.calls == ["brave_web_search", "fetch"]           # the news search was answered without running
     tool_answers = [m["content"] for m in ev.messages if m.get("role") == "tool"]
     assert tool_answers[0].startswith("Web search is down (Brave Search is out of prepaid credit)")
@@ -86,7 +87,8 @@ async def test_research_searches_once_then_reads_what_it_has(monkeypatch):
 async def test_a_rate_limit_gets_one_retry_before_it_counts(monkeypatch):
     Box.answers = ["ERROR: 429 Too Many Requests", "Title: x\nURL: https://ok.example.com/a"]
     replies(monkeypatch, [call("brave_web_search", query="a"), DONE])
-    ev = await researcher.run_gather(Mission(slug="s", topic="t", attempts=1), toolbox_factory=Box)
+    ev = await researcher.run_gather(Mission(slug="s", topic="t", objective="start at https://known.example.com/page",
+                                             attempts=1), toolbox_factory=Box)
     assert Box.calls == ["brave_web_search", "brave_web_search"] and not ev.search_down
     assert search_status.current() is None
 

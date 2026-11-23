@@ -439,7 +439,7 @@ async def test_the_agent_asks_through_the_tool_for_its_own_mission(mail, monkeyp
     FakeToolbox.opened = []
     m = store.get_mission("grid")
     brief = stubs.research(m)
-    replies = iter([tool_call("fetch", url="https://agency.gov/press"),
+    replies = iter([tool_call("fetch", url=brief.sources[0].url),   # an address the prompt shows
                     tool_call("send_outreach", channel="email", address="jane@agency.gov", name="Jane",
                               topic="the Texas grid outage", question=Q),
                     Message(role="assistant", content="DONE")])

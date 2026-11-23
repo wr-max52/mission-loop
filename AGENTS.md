@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 851 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 854 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -273,7 +273,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (`Mission.gathered`); a research attempt counts from here. `write_brief` (Principal Investigator) writes the
   brief from it, then the evidence is dropped. A stop during the search pauses it (see Stopping and progress). The search loop's
   `Guard` answers calls that can't help without running them, saying what to do instead: the call just made, a
-  search already run, a blocked site, a site that refused us earlier in the run; and a failed fetch says what it
+  search already run, a blocked site, a site that refused us earlier in the run, a fetch of an address nothing in
+  the run showed (`Guard.seen`: the prompt and every tool result; the same page written another way, a Wayback copy
+  of a shown page or a path on a shown site counts, #113); and a failed fetch says what it
   means (a 401/403 site is unreadable for the rest of the run; try its Wayback copy or another site). After
   `MAX_REFUSED` (3) refused calls in a row the search ends with what it found. In the last `LOW_BUDGET` (10)
   calls or third of the time, each result says what is left (the brief writer doesn't see that note).
@@ -469,7 +471,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   about another mission within `contacts.GAP` (a week), the mission's count reached, a Bluesky post over 300
   characters (it says by how much), a handle that doesn't resolve, a 1F916 handle that never commented on our posts,
   a mail server's refusal. The guard refuses, before the tool runs, an email address that wasn't in any page or search
-  result of the run. The mission comes from `MISSION_LOOP_MISSION`, which `Toolbox(env=...)` gives the server, never
+  result of the run (the search Guard's `seen` record). The mission comes from `MISSION_LOOP_MISSION`, which `Toolbox(env=...)` gives the server, never
   from the model. Channels: `email` (SMTP from `data/email.json`, saved on the Settings page after a login check,
   `contacts.check_email`; port 465 SSL, else STARTTLS; replies read over IMAP by `In-Reply-To`, the quoted message cut
   off), `bluesky` (a new post from the publishing login with a mention facet for the person's DID and a link facet on
