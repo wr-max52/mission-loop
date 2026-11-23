@@ -3,7 +3,7 @@ gather (the Research Assistant's model finds sources) and write_brief (the Princ
 Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio, json, re, time
 from urllib.parse import urlparse
-import activity, checkpoint, related, stopping, trail
+import activity, checkpoint, related, search_status, stopping, trail
 from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
 from agents import llm
 from checks import validator
@@ -162,6 +162,13 @@ class Guard:
         self.last = None
         self.in_a_row = 0                  # calls refused since the last one that ran
         self.paging_tip = True
+        self.search_tools: set[str] = set()   # the web search tools (from the "search" server); empty: told by name
+        self.search_down: search_status.Outage | None = None   # web search failed this run: no more searches
+        self.rate_retried = False          # a rate-limited search gets one retry per run
+
+    def is_search(self, name: str) -> bool:
+        """A web search tool (not find_in_page or the library's search)."""
+        return name in self.search_tools if self.search_tools else ("web_search" in name or "news_search" in name)
 
     def _instead(self) -> str:
         return ("its Wayback Machine copy (wayback_versions), or " if self.archive else "") + "another site"
@@ -180,6 +187,8 @@ class Guard:
             why = f"Not run: {site} is on the blocked list, so it can't be cited. Use {self._instead()}."
         elif site in self.refused:
             why = f"Not run: {site} {self.refused[site]} earlier in this search. Use {self._instead()}."
+        elif self.search_down and self.is_search(name):
+            why = "Not run: " + search_status.note(self.search_down)
         if why:
             self.in_a_row += 1
             return why
@@ -227,8 +236,30 @@ def _budget_note(left: int, time_limit: float | None, started: float) -> str:
 class SearchRun:
     """How far a search got: tool calls run, seconds spent, and whether the stop button ended it (so it
     carries on next time instead of counting as done)."""
-    def __init__(self, calls: int = 0, seconds: float = 0):
+    def __init__(self, calls: int = 0, seconds: float = 0, search_down: str = ""):
         self.calls, self.seconds, self.stopped = calls, seconds, False
+        self.search_down = search_down     # why web search failed during this search, if it did
+
+async def _search(guard: Guard, tb, name: str, args: dict, run: SearchRun) -> str:
+    """Run one web search. An outage (out of credit, key refused, rate limited after one retry, unreachable) is
+    recorded once and answered with a plain note instead of the raw error, and the run searches no more; a search
+    that works clears a recorded outage."""
+    result = await tb.call(name, args)
+    outage = search_status.classify(result)
+    if outage and outage.kind == "rate" and not guard.rate_retried:
+        guard.rate_retried = True
+        await asyncio.sleep(search_status.RATE_WAIT)
+        result = await tb.call(name, args)
+        outage = search_status.classify(result)
+    if outage:
+        guard.search_down, run.search_down = outage, outage.reason
+        if search_status.record(outage):
+            print(f"web search is down: {outage.reason}", flush=True)
+        trail.record("note", f"web search is down: {outage.reason}")
+        return search_status.note(outage)
+    if not result.startswith("ERROR") and search_status.clear():
+        print("web search works again", flush=True)
+    return result
 
 CARRY_ON = ("(The search was paused here and now carries on. Continue from where you were: you have the results "
             "above; don't repeat calls you already made.)")
@@ -253,6 +284,7 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
         messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
     calls, spent = run.calls, run.seconds
     guard = guard or Guard([t["function"]["name"] for t in tb.tools])
+    guard.search_tools = {t for t, server in (getattr(tb, "server", None) or {}).items() if server == "search"}
     model = llm.model_for(role)
     started = time.monotonic() - spent
     left = None if time_limit is None else max(time_limit - spent, 1)
@@ -292,7 +324,9 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                         messages.append({"role": "tool", "tool_name": tc.function.name, "content": why})
                         continue
                     calls += 1
-                    result = guard.explain(tc.function.name, args, await tb.call(tc.function.name, args))
+                    raw = (await _search(guard, tb, tc.function.name, args, run) if guard.is_search(tc.function.name)
+                           else await tb.call(tc.function.name, args))
+                    result = guard.explain(tc.function.name, args, raw)
                     trail.record("tool_result", f"{tc.function.name}: {result}")
                     messages.append({"role": "tool", "tool_name": tc.function.name,
                                      "content": result + _budget_note(budget - calls, time_limit, started)})
@@ -342,13 +376,14 @@ async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox, resume: Evid
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
                            past=related.reference_block(m))
     start = resume.messages if resume and resume.messages else None
-    run = SearchRun(_calls_made(start) if start else 0, resume.seconds if start else 0)
+    run = SearchRun(_calls_made(start) if start else 0, resume.seconds if start else 0,
+                    resume.search_down if start else "")
     if start:
         trail.record("note", f"search carries on after {run.calls} tool call(s)")
 
     def evidence(messages, finished: bool) -> Evidence:
         return Evidence(messages=[_plain(x) for x in messages], finished=finished,
-                        attempt=m.attempts, seconds=run.seconds)
+                        attempt=m.attempts, seconds=run.seconds, search_down=run.search_down)
 
     async with toolbox_factory(_tool_servers(m)) as tb:
         messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT, start=start, run=run,

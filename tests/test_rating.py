@@ -103,7 +103,7 @@ def test_a_crashed_rater_sends_the_article_to_review_unrated(monkeypatch):
     m = writing()
     orchestrator.step(m, T0)
     note = orchestrator.step(m, T0)
-    assert m.state == State.ARTICLE_READY and m.article_rating.error.endswith("RuntimeError: no model")
+    assert m.state == State.ARTICLE_READY and m.article_rating.error == "the rater crashed: no model"
     assert "not rated" in note
 
 def test_a_stop_mid_rating_keeps_the_article_for_the_next_start(monkeypatch):

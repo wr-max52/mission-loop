@@ -376,7 +376,7 @@ def test_writing_starts_once_everyone_has_answered(monkeypatch):
 
 @pytest.mark.usefixtures("stub_agents")
 @pytest.mark.parametrize("outcome, note", [([], "outreach asked nobody; writing next"),
-                                           (RuntimeError("model gone"), "outreach crashed (RuntimeError: model gone)")])
+                                           (RuntimeError("model gone"), "outreach crashed (model gone)")])
 def test_outreach_that_asks_nobody_or_crashes_never_blocks(monkeypatch, outcome, note):
     def run(m, brief, now):
         if isinstance(outcome, Exception):

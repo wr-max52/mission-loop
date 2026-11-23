@@ -39,7 +39,7 @@ def test_a_failure_or_stop_is_recorded_and_the_first_outcome_stands():
     activity.fail(stopping.Interrupted())
     activity.clear()
     brief, writer = logged()
-    assert (brief["outcome"], brief["why"]) == ("failed", "RuntimeError: model down")
+    assert (brief["outcome"], brief["why"]) == ("failed", "model down")
     assert writer["outcome"] == "stopped"
 
 def test_the_loop_logs_its_steps_and_a_failed_check(monkeypatch):

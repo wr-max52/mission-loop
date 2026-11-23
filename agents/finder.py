@@ -6,7 +6,7 @@ from pydantic import BaseModel, ValidationError
 from contracts import MissionIdea, words
 from agents import llm
 import stopping
-from agents.researcher import tool_loop
+from agents.researcher import SearchRun, tool_loop
 from agents.toolbox import Toolbox
 
 MAX_SEARCHES = 5                           # "just a few": this runs on every pass
@@ -83,6 +83,15 @@ person of wrongdoing or blames people for their race, religion or ethnicity."""
 class FinderFailed(Exception):
     pass
 
+class SearchDown(FinderFailed):
+    """Web search was down (out of credit, key refused, rate limited, unreachable), so there was nothing to pick
+    from. Said plainly: the reason is already a sentence."""
+    plain = True
+
+    def __init__(self, reason: str):
+        super().__init__(f"web search is down ({reason})")
+        self.reason = reason
+
 class MissionIdeas(BaseModel):
     missions: list[MissionIdea]
 
@@ -96,7 +105,8 @@ def too_similar(topic: str, others: list[str]) -> bool:
 
 def _search_results(messages: list) -> str:
     return "\n".join(m["content"] for m in messages
-                     if isinstance(m, dict) and m.get("role") == "tool" and not m["content"].startswith("ERROR"))
+                     if isinstance(m, dict) and m.get("role") == "tool"
+                     and not m["content"].startswith(("ERROR", "Not run:", "Web search is down")))
 
 def _keep(ideas: list[MissionIdea], results: str, topics: list[str]) -> list[MissionIdea]:
     """Only leads the searches really turned up, that the desk doesn't already have. At most MAX_IDEAS."""
@@ -123,8 +133,11 @@ async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[
     async with toolbox_factory(["search"]) as tb:
         if getattr(tb, "skipped", {}).get("search"):
             raise FinderFailed(f"web search is off on this machine: {tb.skipped['search']} (see Settings → Setup)")
-        messages = await tool_loop(system, tb, MAX_SEARCHES, TIME_LIMIT)
+        run = SearchRun()
+        messages = await tool_loop(system, tb, MAX_SEARCHES, TIME_LIMIT, run=run)
     results = _search_results(messages)
+    if not results and run.search_down:
+        raise SearchDown(run.search_down)
     if not results:
         raise FinderFailed("the searches returned nothing")
 

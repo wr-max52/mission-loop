@@ -11,7 +11,7 @@ import json, os, time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import httpx
-import settings, store
+import search_status, settings, store
 from i18n import _, _n
 from agents import llm, toolbox
 
@@ -22,7 +22,7 @@ BRAVE_KEYS = "https://brave.com/search/api/"
 
 @dataclass
 class Check:
-    key: str            # models, connection, search, npx, uvx, work, outreach
+    key: str            # models, connection, search, search_up, npx, uvx, work, outreach
     title: str          # what is being checked, in a few words
     ok: bool
     detail: str         # what was found
@@ -74,7 +74,7 @@ def _connection(conn: dict, deep: bool) -> list[Check]:
                           _("Add its key in Settings → Model providers."), "/settings#providers", True)]
     return [Check("connection", _("Models answer"), True, _("Every model's provider is connected."))]
 
-def _tools() -> list[Check]:
+def _tools(probe: bool = False) -> list[Check]:
     status = toolbox.server_status(["search", "fetch"])
     out = []
     key = settings.search_key()
@@ -82,6 +82,13 @@ def _tools() -> list[Check]:
                      _("Brave Search key set.") if key else _("No Brave Search key. Research can't search the web."),
                      "" if key else _("Get a free key from Brave and paste it under Web search."),
                      "" if key else BRAVE_KEYS))
+    if key and probe:
+        probe_search(key)
+    down = search_status.current() if key else None
+    if down:                               # the key is there but searches fail: one check says why and since when
+        out.append(Check("search_up", _("Web search works"), False,
+                         _("Web search is down: {reason}.").format(reason=down["reason"]),
+                         _(down.get("fix") or search_status.FIX["unreachable"]), "/settings#research"))
     for command, server, what in (("npx", "search", _("web search")), ("uvx", "fetch", _("reading pages"))):
         missing = "not installed" in status.get(server, "")
         out.append(Check(command, _("{command} for {what}").format(command=command, what=what), not missing,
@@ -115,13 +122,14 @@ def _outreach() -> list[Check]:
 def stubs() -> bool:
     return os.environ.get("MISSION_LOOP_STUBS") == "1"
 
-def checks(deep: bool = False, conn: dict | None = None) -> list[Check]:
-    """Everything, in setup order. Never raises."""
+def checks(deep: bool = False, conn: dict | None = None, probe: bool = False) -> list[Check]:
+    """Everything, in setup order. Never raises. probe (and deep) also runs one real test search, at most every
+    PROBE_EVERY seconds, so a saved key that ran out of credit shows up."""
     if stubs():                            # MISSION_LOOP_STUBS=1 needs no model, so play already works
         return [Check("models", _("A model for each worker"), True, _("Running on stubs (MISSION_LOOP_STUBS=1), no model needed"))] \
             + _tools() + _work()
     conn = conn or llm.connection()
-    return _models(conn) + _connection(conn, deep) + _tools() + _work() + _outreach()
+    return _models(conn) + _connection(conn, deep) + _tools(probe or deep) + _work() + _outreach()
 
 def problems(found: list[Check] | None = None) -> list[Check]:
     return [c for c in (found if found is not None else checks()) if not c.ok]
@@ -134,22 +142,50 @@ def as_dicts(found: list[Check]) -> list[dict]:
 
 # ---------- checking a Brave key before it is saved ----------
 
+def _brave(key: str) -> httpx.Response:
+    with httpx.Client(transport=TRANSPORT, timeout=10) as client:
+        return client.get(settings.SEARCH_API, params={"q": "test", "count": 1},
+                          headers={"X-Subscription-Token": key.strip(), "Accept": "application/json"})
+
 def check_search_key(key: str) -> tuple[bool, str]:
     """(True, "") if Brave takes the key; (False, why) if it refuses it. A network failure counts as unknown, not
     refused: (True, note), so a key can still be saved offline (warn, don't block)."""
     try:
-        with httpx.Client(transport=TRANSPORT, timeout=10) as client:
-            r = client.get(settings.SEARCH_API, params={"q": "test", "count": 1},
-                           headers={"X-Subscription-Token": key.strip(), "Accept": "application/json"})
+        r = _brave(key)
     except httpx.HTTPError as e:
         return True, f"Couldn't reach Brave to check it ({type(e).__name__}); saved anyway."
     if r.status_code in (401, 403, 422):
         return False, "Brave refused that key"
+    if r.status_code == 402:
+        return True, "Brave says the key is out of prepaid credit; saved anyway. Top up to search."
     if r.status_code == 429:
         return True, "Brave says the key is over its rate limit right now; saved anyway."
     if r.status_code >= 400:
         return True, f"Brave answered {r.status_code}; saved anyway."
+    search_status.clear()                  # a new key that works ends a recorded outage
     return True, ""
+
+PROBE_EVERY = 10 * 60                      # seconds between real test searches (each one costs a query)
+_probed = 0.0
+
+def probe_search(key: str) -> search_status.Outage | None:
+    """One real test search, at most every PROBE_EVERY seconds: records an outage or clears one. Returns the
+    outage it found (None when it works, or when it didn't ask this time)."""
+    global _probed
+    if time.monotonic() - _probed < PROBE_EVERY and _probed:
+        return None
+    _probed = time.monotonic()
+    try:
+        r = _brave(key)
+    except httpx.HTTPError:
+        outage = search_status.Outage("unreachable")
+    else:
+        outage = search_status.classify(f"ERROR: {r.status_code} {r.text[:300]}") if r.status_code >= 400 else None
+    if outage:
+        search_status.record(outage)
+    else:
+        search_status.clear()
+    return outage
 
 # ---------- why the loop is waiting ----------
 

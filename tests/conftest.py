@@ -1,5 +1,5 @@
 import httpx, pytest
-import agents, contacts, doctor, library, orchestrator, settings, store, wayback
+import agents, contacts, doctor, library, orchestrator, search_status, settings, store, wayback
 from agents import bluesky, custom, f916, github, llm, providers, stubs, toolbox
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
@@ -45,6 +45,8 @@ def fresh(tmp_path, monkeypatch):
                                                                     # agents/rater.py patch llm.ask instead)
     monkeypatch.setattr(toolbox, "WHICH", lambda command: f"/usr/bin/{command}")  # npx and uvx, whatever this machine has
     monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
+    monkeypatch.setattr(doctor, "_probed", float("inf"))   # Settings → Setup never runs a real test search
+    monkeypatch.setattr(search_status, "RATE_WAIT", 0)     # a rate-limited search retries at once
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
     for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL", "MISSION_LOOP_GITHUB_URL",
                 "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL", "MISSION_LOOP_OUTREACH"):
