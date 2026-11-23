@@ -145,6 +145,13 @@ big for the body, so the face has room. The skin is x -5 to 6, y 1 to 11. Eyes a
 rows y 4 to 6, with brows at y 8 or 9; the mouth is around x 2 to 5, y 1 to 3; the ear is at x -4 to -3, y 4 to 6.
 Hair reaches y 14 or 15; most hats reach y 14 to 18.
 The torso is about 12 wide (x -6 to 5) and 11 to 13 tall above the hips; the front of the body is +x.
+The body is seen three-quarters on, like the head: the near shoulder is toward the back (about x -3) and its arm
+hangs across the torso, so it covers a `body` map's back third; the far arm only shows past the chest's front edge;
+the chest's middle line (collar, tie, buttons) is at x 1. Every arm is one length (11 pixels), so a hand that can't
+reach where a pose points stops short: a prop is held close to the chest, never at arm's length.
+
+To look at a sprite or a bit outside the browser, `node tools/sprite-sheet.js out.png [bits] [sprites]` draws a
+contact sheet with the real renderer (`--cyborgs` for that crew).
 
 ## Props
 
