@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 862 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 864 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -115,7 +115,9 @@ The written issue is what Will approves; nothing after it waits on him until the
   fix); Settings → Setup and `run.py doctor` run one real test search at most every `doctor.PROBE_EVERY` (10 minutes,
   `doctor.probe_search`), so a spent key shows up; the top bar shows a small amber "Search down" link (the reason on
   hover); the first-run card doesn't come back for it. A step that raises records a short reason in History and the
-  step log (`activity.reason`: "couldn't reach api.example.com"), and the raw error goes to `data/loop.log`.
+  step log (`activity.reason`: "couldn't reach api.example.com"), and the raw error goes to `data/loop.log`. A failed
+  research or writing attempt (and parking) says why on its History line (`activity.short_notes`, #115: the check's
+  first problem, one about the whole brief ahead of one source's, cut to `SHORT` (160) characters, then "(+N more)").
 - Personalization: Settings → Publication sets the published site's name (`settings.publication_name`, default
   "Mission Loop"), a tagline (under the index's heading and as the feeds' description) and an About statement (its
   paragraphs open the About page, else the built-in line). Saving redraws every published page, the index, the About

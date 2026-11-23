@@ -183,3 +183,30 @@ def test_sources_that_held_up_are_kept_for_the_next_attempt_and_cleared_when_a_b
     assert calls[0] == [] and [s.id for s in calls[1]] == [s.id for s in first_brief.sources if s.id != "s2"]
     m = store.get_mission("kp")
     assert m.state == State.BRIEF_READY and m.kept_sources == []
+
+def test_history_says_why_each_attempt_failed(monkeypatch):
+    import agents
+    from agents.researcher import BriefFailed
+    from agents.stubs import research
+    notes = iter(["s1: could not fetch https://a.example.com\nOnly 2 verified supporting domain(s); need 3",
+                  "s3: quote not found on the page"])
+    def short(m, evidence, now):
+        raise BriefFailed(research(m), next(notes, "s9: still wrong"))
+    monkeypatch.setattr(agents, "write_brief", short)
+    store.save_mission(Mission(slug="why", topic="x", max_attempts=3))
+    orchestrator.run_until_idle(lambda: T0)
+    lines = [e["note"] for e in store.events("why")]
+    assert "attempt 1 failed validation: Only 2 verified supporting domain(s); need 3 (+1 more)" in lines
+    assert "attempt 2 failed validation: s3: quote not found on the page" in lines
+    assert "parked after 3 attempts: s9: still wrong" in lines
+
+def test_a_failed_writing_attempt_says_why():
+    import activity
+    long = "'Finding' paragraph 1 has no citation; end each sentence with the source ids it rests on, like [s1]. " * 3
+    assert activity.short_notes(long + "\n'The record' paragraph 2 contains a URL").endswith("... (+1 more)")
+    assert len(activity.short_notes(long)) <= activity.SHORT
+    m = Mission(slug="wr", topic="x", state=State.WRITING, write_attempts=1)
+    from agents.stubs import research, write
+    brief = research(m)
+    note = orchestrator._article_failed(m, brief, write(m, brief, []), "Article is 120 words; write at least 300")
+    assert note == "writing attempt 1 failed check: Article is 120 words; write at least 300"
