@@ -2,8 +2,8 @@
 gather (the Research Assistant's model finds sources) and write_brief (the Principal
 Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio, json, re, time
-from urllib.parse import urlparse
-import activity, checkpoint, related, search_status, stopping, trail
+from urllib.parse import unquote, urlparse
+import activity, checkpoint, related, search_status, stopping, trail, wayback
 from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
 from agents import llm
 from checks import validator
@@ -152,6 +152,17 @@ BUDGET_NOTE = re.compile(r"\n\[\d+ tool calls? left[^\]]*\]$")
 def _domain(url) -> str:
     return (urlparse(str(url or "")).hostname or "").removeprefix("www.")
 
+def _seen_form(text: str) -> str:
+    """Text as the Guard compares addresses in it: lower case, with HTML's &amp; and %-escapes undone."""
+    return unquote(str(text).replace("&amp;", "&")).lower()
+
+def _core(url: str) -> tuple[str, str]:
+    """An address as (site, path[?query]) with no scheme, www., #fragment or trailing slash, so the same page
+    written another way still matches."""
+    parts = urlparse(_seen_form(url).strip())
+    path = parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
+    return (parts.hostname or "").removeprefix("www."), path
+
 class Guard:
     """Code's side of the search loop. A small model learns little from a bare error and often repeats the
     call that failed, so calls that can't help are answered before they run (with what to do instead), and a
@@ -168,6 +179,20 @@ class Guard:
         self.search_tools: set[str] = set()   # the web search tools (from the "search" server); empty: told by name
         self.search_down: search_status.Outage | None = None   # web search failed this run: no more searches
         self.rate_retried = False          # a rate-limited search gets one retry per run
+        self.seen = ""                     # the prompt and every tool result so far (_seen_form): what the run has shown
+
+    def note(self, text: str) -> None:
+        """Add text the model was shown, so the addresses in it can be fetched."""
+        self.seen += "\n" + _seen_form(text)
+
+    def has_seen(self, url: str) -> bool:
+        """Whether the run has shown this address (or, for a Wayback snapshot, the page it copies): written whole,
+        or as a link on its own site (a path on a site that was shown, as a page's relative links are)."""
+        for address in filter(None, (url, wayback.original(str(url)))):
+            site, path = _core(address)
+            if site and (site + path in self.seen or (site in self.seen and (not path or path in self.seen))):
+                return True
+        return False
 
     def is_search(self, name: str) -> bool:
         """A web search tool (not wiki_search, find_in_page or the library's search): its outage stops searching."""
@@ -194,6 +219,9 @@ class Guard:
             why = f"Not run: {site} {self.refused[site]} earlier in this search. Use {self._instead()}."
         elif self.search_down and self.is_search(name):
             why = "Not run: " + search_status.note(self.search_down)
+        elif site and not self.has_seen(args.get("url")):
+            why = ("Not run: this address wasn't in any search result or page you read, so it may not exist. Search "
+                   "for it, or fetch a page that links to it.")
         if why:
             self.in_a_row += 1
             return why
@@ -204,6 +232,7 @@ class Guard:
 
     def explain(self, name: str, args: dict, result: str) -> str:
         """The result, with what a failure means and what to try next."""
+        self.note(result)
         if name != "fetch":
             return result
         if not result.startswith("ERROR"):
@@ -290,6 +319,8 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
     calls, spent = run.calls, run.seconds
     guard = guard or Guard([t["function"]["name"] for t in tb.tools])
     guard.search_tools = {t for t, server in (getattr(tb, "server", None) or {}).items() if server == "search"}
+    for m in messages:                     # addresses the prompt (or a carried-on transcript) gave can be fetched
+        guard.note(m.get("content") or "" if isinstance(m, dict) else getattr(m, "content", "") or "")
     model = llm.model_for(role)
     started = time.monotonic() - spent
     left = None if time_limit is None else max(time_limit - spent, 1)
