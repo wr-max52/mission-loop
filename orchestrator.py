@@ -5,6 +5,7 @@ from pathlib import Path
 import activity, board, checkpoint
 import agents                              # switchboard: see agents/__init__.py
 import search_status, settings, stopping, store
+from checks import validator
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
@@ -75,6 +76,8 @@ def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str
     m.validator_notes = notes
     if brief is not None:              # keep the failed brief for the next attempt and for humans
         m.rejected_brief = RejectedBrief(brief=brief, notes=notes)
+        failed = validator.failed_source_ids(notes)   # the sources that held up start the next attempt's pick
+        m.kept_sources = [s for s in brief.sources if s.id not in failed]
         path = Path("missions") / m.slug / "brief.rejected.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(brief_markdown(m.slug, brief) + f"\n## Validator notes\n{notes}\n")
@@ -152,7 +155,7 @@ def _write_brief(m: Mission, now) -> str:
         m.unchecked_brief = ""
         path = _write_brief_md(m, brief)
         m.validator_notes = ""
-        m.rejected_brief = None
+        m.rejected_brief, m.kept_sources = None, []
         m.state = State.BRIEF_READY
         return f"brief passed on attempt {m.attempts}; review {path}"
     if evidence.search_down:              # say why the sources were thin

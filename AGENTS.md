@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 845 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 849 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -275,7 +275,12 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   what the check found (the closest real sentence, an archived copy) for up to 2 rounds of fixes (`SourceFix`);
   the ones still failing are dropped, and fewer than 3 supporting websites left fails the attempt with its draft
   and notes (`BriefFailed`). The passed sources are saved on the mission (`Mission.brief_sources`) until the
-  attempt ends (the raw pick, `Mission.brief_pick`, is saved before its checks). Step 2 writes the claims and counterpoint (`ClaimSet`) citing only
+  attempt ends (the raw pick, `Mission.brief_pick`, is saved before its checks). A failed attempt's sources that
+  held up (all but the ones its notes name, `validator.failed_source_ids`) are kept on the mission
+  (`Mission.kept_sources`, #117): the next pick starts with them, unchanged and not checked again (the model's copy
+  of the same page, live or archived, is left out; a new source with a kept id gets the next free `s<n>`), the
+  next search is told which supporting sites are held and how many more it needs, and a pick still short names
+  them ("held: a.com, b.org"). `validate` still checks every source. They are cleared when a brief passes. Step 2 writes the claims and counterpoint (`ClaimSet`) citing only
   those sources; code fixes what it safely can (repeats dropped, a claim worded as a possibility labeled one),
   feeds back the rest with the claim numbers (`validator.claim_problems`, each problem once) for up to 2 rounds,
   then drops claims that still break a rule. `validate` is still the gate on the whole brief. `page_tools.py` adds `find_in_page` (exact sentences from the text

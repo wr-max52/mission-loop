@@ -164,3 +164,22 @@ def test_a_failed_article_keeps_its_saved_sections_and_a_passing_one_clears_them
     orchestrator.run_until_idle(lambda: T0)
     m = store.get_mission("ar")
     assert m.state == State.ARTICLE_READY and m.article_draft is None
+
+def test_sources_that_held_up_are_kept_for_the_next_attempt_and_cleared_when_a_brief_passes(monkeypatch):
+    import agents
+    from agents import stubs
+    from agents.researcher import BriefFailed
+    calls = []
+    def short_then_fine(m, evidence, now):
+        calls.append(list(m.kept_sources))
+        if len(calls) == 1:
+            raise BriefFailed(stubs.research(m), "s2: could not fetch https://b.example.com\n"
+                                                 "Only 2 verified supporting domain(s); need 3")
+        return stubs.research(m)
+    monkeypatch.setattr(agents, "write_brief", short_then_fine)
+    store.save_mission(Mission(slug="kp", topic="x"))
+    orchestrator.run_until_idle(lambda: T0)
+    first_brief = stubs.research(Mission(slug="kp", topic="x"))
+    assert calls[0] == [] and [s.id for s in calls[1]] == [s.id for s in first_brief.sources if s.id != "s2"]
+    m = store.get_mission("kp")
+    assert m.state == State.BRIEF_READY and m.kept_sources == []

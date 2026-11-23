@@ -46,6 +46,8 @@ class Mission(BaseModel):
     article_rating: "ArticleRating | None" = None   # the rating of the article now at review (or published)
     brief_pick: "SourcePick | None" = None      # the brief's first step as written, before its sources are checked
     brief_sources: "SourcePick | None" = None   # the brief's first step, checked: kept until the attempt ends
+    kept_sources: "list[Source]" = []      # sources that passed the check on a failed attempt: the next pick starts
+                                           # with them, unchanged and not checked again; cleared when a brief passes
     article_draft: "ArticleDraft | None" = None # the article's plan and the sections written so far
     unchecked_brief: str = ""              # set when a human pushed a failed brief through: what it failed
     unchecked_article: str = ""            # same for a failed article
