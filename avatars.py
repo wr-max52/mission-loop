@@ -12,6 +12,7 @@ import settings
 
 SPRITES_FILE = Path("data/sprites.json")
 CYBORGS_FILE = Path(__file__).parent / "assets" / "cyborgs.json"   # the built-ins as cyborgs, one spec each (SPRITES.md)
+BACKS_FILE = Path(__file__).parent / "assets" / "backs.json"       # what a sprite can wear on its back (SPRITES.md)
 BUILT_IN = ("aris", "aisha", "ben", "mei", "sam", "evelyn", "david", "javier", "hanna", "kenji", "quill", "pip")
 KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")    # the same rule as registerSprite
 MAX_SPEC = 24_000                                  # bytes of JSON one spec may take
@@ -64,6 +65,19 @@ def config() -> dict:
         if borgs:
             out["cyborgs"] = borgs
     return out
+
+def backs() -> dict[str, dict]:
+    """Every back piece by name (assets/backs.json); assets/researchers.js checks each one. {} if the file is gone."""
+    try:
+        data = json.loads(BACKS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if KEY.match(k) and isinstance(v, dict)} if isinstance(data, dict) else {}
+
+def backs_tag() -> str:
+    """window.RESEARCHER_BACKS for any page that draws researchers, set before assets/researchers.js loads."""
+    raw = json.dumps(backs(), separators=(",", ":")).replace("<", "\\u003c")
+    return f"<script>window.RESEARCHER_BACKS={raw};</script>"
 
 def script_tag() -> str:
     """window.RESEARCHER_SPRITES for the page head, or "" with nothing customised. The JSON can't close the tag."""

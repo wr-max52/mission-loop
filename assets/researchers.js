@@ -169,6 +169,9 @@ const BUILT_IN = new Set(CAST);
 // A page can add sprites and switch any off before loading this script:
 // window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec, ... }, off: ["pip", ...] }.
 const SPRITE_CONFIG = window.RESEARCHER_SPRITES || {};
+// What a sprite can wear on its back: assets/backs.json, which the page hands over as window.RESEARCHER_BACKS
+// before this script loads. Each piece is checked once, below; `back` in a spec names one, or null for none.
+const BACKS = {}, PACK = "#6b4a2e";               // PACK: a pack-coloured piece's colour when the sprite has none
 const OFF = new Set(Array.isArray(SPRITE_CONFIG.off) ? SPRITE_CONFIG.off : []);
 const enabled = () => CAST.filter(k => !OFF.has(k));
 const crewOf = worker => {                        // a crew never ends up empty: switching all of it off is ignored
@@ -212,6 +215,14 @@ function makeLook(kind, seed) {
   a.shoes = one(t.shoes) || "#2b2b30"; a.shoesD = shade(a.shoes, 0.75); a.sneaker = lum(a.shoes) > 170;
   a.legsStyle = t.legs || "pants"; a.skirt = one(t.skirt) || "#2f3640";
   a.pack = one(t.pack) || null;
+  // What's worn on the back (assets/backs.json): the spec's `back`, else a backpack for anyone with a pack colour.
+  a.back = "back" in t ? t.back : a.pack ? "backpack" : null;
+  if (!BACKS[a.back]) a.back = null;
+  if (a.back) {                                                  // the piece's own colours, and its pack-coloured letters
+    const piece = BACKS[a.back], c = a.pack || PACK;
+    a.backPal = Object.assign({}, piece.pal);
+    for (const [ch, f] of Object.entries(piece.tint || {})) a.backPal[ch] = f === 1 ? c : shade(c, f);
+  }
   a.tie = one(t.tie) || null; a.bow = one(t.bow) || null;
   a.hijab = one(t.hijab) || "#1f3a5f"; a.hijabD = shade(a.hijab, 0.72); a.hijabL = shade(a.hijab, 1.45);
   a.veilPal = { j: a.hijab, J: a.hijabD, L: a.hijabL, u: mix(a.hijab, "#ffffff", 0.72), g: "#e9c46a" };
@@ -382,7 +393,7 @@ function drawTorso(P, a, g) {
     }
   };
   const tie = (c, len) => { P(CX, sh - len, 1, len, c); P(CX - 1, sh - 1, 3, 1, c); P(CX, sh - 1, 1, 1, shade(c, 0.72)); P(CX, sh - 3, 1, 1, shade(c, 1.25)); };
-  const strap = () => { if (a.pack) { P(tr - 4, hip + 2, 2, T - 2, shade(a.pack, 0.9)); P(tr - 4, hip + 2, 1, T - 2, shade(a.pack, 0.68)); P(tr - 4, sh - 4, 2, 1, "#d8b36a"); } };
+  const strap = () => { if (a.back && BACKS[a.back].strap) { const c = a.pack || PACK; P(tr - 4, hip + 2, 2, T - 2, shade(c, 0.9)); P(tr - 4, hip + 2, 1, T - 2, shade(c, 0.68)); P(tr - 4, sh - 4, 2, 1, "#d8b36a"); } };
   switch (a.outfit) {
     case "labcoat": {
       const c = a.coat, cd = a.coatD, b = shell(c, 5, cd), line = soft(c);
@@ -524,16 +535,10 @@ function drawSkirt(P, a, g) {                                       // an A-line
   P(tl - 1, hip - 7, W + 2, 1, shade(c, 1.3));                      // a light band at the hem
 }
 
-function drawBack(P, a, g) {                                      // things worn behind the body
-  if (a.pack) {
-    const c = a.pack, cd = shade(c, 0.74), cl = shade(c, 1.25), x = g.tl - 5, y = g.hip + 1, h = g.sh - g.hip - 2;
-    pill(P, x, y, 5, h, c);
-    P(x, y, 1, h, cd); P(x, y, 5, 1, cd);
-    P(x, y + h - 3, 5, 1, cd); P(x + 1, y + h - 2, 3, 1, cl);     // the top flap catches the light
-    P(x + 1, y + 1, 3, 3, cd); P(x + 1, y + 3, 3, 1, cl);         // a front pocket
-    P(x + 2, y + h - 4, 1, 2, "#e0b64a");                          // a buckle
-    P(x + 2, y + h, 2, 1, cd);                                     // the grab loop
-  }
+function drawBack(P, a, g, t) {                                   // the piece worn on the back (assets/backs.json)
+  if (!a.back) return;
+  const piece = BACKS[a.back];
+  paintMap(P, a, mapRows(piece, t), piece.at[0], g.hip + piece.at[1], a.backPal);
 }
 
 // The head is a 14x13 rounded block (the silhouette outline included) on a short neck: big for the body, the
@@ -948,7 +953,7 @@ function drawBody(P, a, p, t) {
   g.top = g.head + 11;
   g.crown = g.head + crownOf(a);
   g.handB = drawArm(P, a, p.armB, g, true);
-  drawBack(P, a, g);
+  drawBack(P, a, g, t);
   drawMaps(P, a, g, "back", t);
   if (p.sit) {                                    // on the floor, knees up a little
     const kx = Math.round(a.legs * 0.55), fx = Math.round(a.legs * 0.85);
@@ -3680,7 +3685,7 @@ const PARTS = {
 };
 const COLOR_KEYS = ["hair", "top", "shirt", "pants", "shoes", "pack", "tie", "bow", "hijab", "cap", "beanie", "pom", "skirt", "frame", "metal", "glow"];
 const FLAG_KEYS = ["lash", "lids", "bushy", "ahoge", "grin", "freckles", "pencil", "rolled"];
-const ENUM_KEYS = ["worker", "style", "head", "outfit", "face", "facial", "legs", "brow", "mouth"];
+const ENUM_KEYS = ["worker", "style", "head", "outfit", "face", "facial", "legs", "brow", "mouth", "back"];
 const SPEC_KEYS = new Set(["base", "name", "skin", "prop", "fav", "maps", "propMap", "quirk", ...COLOR_KEYS, ...FLAG_KEYS, ...ENUM_KEYS]);
 const FAV_ACTIONS = () => Object.keys(ACTIONS).filter(k => !["spawn", "despawn", "farewell", "chase", "walk", "rest", "quirk"].includes(k));
 // Where a map may reach from its anchor, as [left, bottom, right, top] in pixels (x toward the face, y up).
@@ -3745,6 +3750,31 @@ function checkQuirk(q, errors) {
     if (k.crouch !== undefined && !(Number.isInteger(k.crouch) && k.crouch >= 0 && k.crouch <= 3)) errors.push(`${at}.crouch: 0 to 3`);
   });
 }
+
+// A back piece is a map on the `back` layer with a name, plus `tint` (letters that follow the sprite's pack colour,
+// each a shade of it: 1 is the colour itself) and `strap` (a strap across the chest in that colour).
+function checkBack(piece, where) {
+  const errors = [];
+  if (!piece || typeof piece !== "object" || Array.isArray(piece)) return [`${where}: should be an object`];
+  for (const f of Object.keys(piece)) if (!["name", "at", "rows", "frames", "fps", "pal", "tint", "strap"].includes(f)) errors.push(`${where}.${f}: unknown`);
+  if (typeof piece.name !== "string" || !piece.name.trim() || piece.name.length > 24) errors.push(`${where}.name: 1 to 24 characters`);
+  if (piece.strap !== undefined && typeof piece.strap !== "boolean") errors.push(`${where}.strap: true or false`);
+  const tint = piece.tint || {}, pal = Object.assign({}, piece.pal);
+  if (typeof tint !== "object" || Array.isArray(tint)) errors.push(`${where}.tint: letters to shades of the pack colour`);
+  else for (const [ch, f] of Object.entries(tint)) {
+    if (!/^[A-Za-z0-9]$/.test(ch) || ch in SLOTS || ch in pal) errors.push(`${where}.tint: "${ch}" can't be used (one letter or digit, not a color slot or a pal letter)`);
+    if (!(Number.isFinite(f) && f >= 0.3 && f <= 1.6)) errors.push(`${where}.tint.${ch}: a shade 0.3 to 1.6`);
+    pal[ch] = "#000000";                           // stands in for the pack colour while the picture is checked
+  }
+  checkMap(Object.assign({}, piece, { pal }), where, MAP_BOX.back, errors, false);
+  return errors;
+}
+for (const [key, piece] of Object.entries(window.RESEARCHER_BACKS || {})) {
+  const errors = SPRITE_KEY.test(key) ? checkBack(piece, `backs.${key}`) : [`backs.${key}: lowercase letters, digits and dashes`];
+  if (errors.length) console.warn(`researchers: back piece ${key} skipped:`, errors.join("; "));
+  else BACKS[key] = piece;
+}
+PARTS.back = [null, ...Object.keys(BACKS)];
 
 // Checks a spec against the rules and returns { ok, errors, sprite }: sprite is the spec laid over its starting
 // sprite, ready for registerSprite or renderSprite. Errors say what to change, so a model can fix its own spec.
@@ -3873,6 +3903,6 @@ function boot() {
   rescan();
 }
 window.Researchers = { reach, ARM: [ARM_UP, ARM_FORE], stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Tour, TOUR, TOUR_ACTS, BEATS, Crew, Researcher, rescan, tick, QUIPS,
-  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, CYBORGS, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
+  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, BACKS, checkBack, CAST, CYBORGS, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

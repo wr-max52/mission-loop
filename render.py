@@ -5,7 +5,7 @@ from email.utils import format_datetime
 from html import escape
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
-import flowchart, settings, wayback
+import avatars, flowchart, settings, wayback
 from icons import icon
 from contracts import ResearchBrief, Article, BOLD, CITATION, POSSIBILITY, cited_ids, unbold
 
@@ -493,7 +493,7 @@ def about_html() -> str:
             "search goes on while another's article is written.</p>"
             f'<div class="steps">{cards}</div>')
     head = (f"<style>{ABOUT_FLOW}</style>{ABOUT_PACE}"
-            '<script src="../assets/researchers.js" defer></script>'
+            f'{avatars.backs_tag()}<script src="../assets/researchers.js" defer></script>'
             '<script src="../assets/flow.js" defer></script>'
             '<script src="../assets/about.js" defer></script>')
     return _page(f"About · {name}", body, "../", head, nav="about")

@@ -88,6 +88,7 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 | `skin` | tones to pick from | list of 0 (lightest) to 7 (darkest) |
 | `metal` | a cyborg: this metal in place of skin (head, neck, hands) | `#rrggbb`, or a list of up to 8 (one per visit) |
 | `glow` | eyes lit in this color, with no white | `#rrggbb`, or a list of up to 8 |
+| `back` | worn on the back (`null` for none); without it, anyone with a `pack` color wears `backpack` | a piece in `assets/backs.json`: `backpack radio-pack boiler steam-pipes hazard-tank power-cell smokestack jetpack` |
 | `prop` | built-in signature prop (`null`, or a list) | `tablet laptop phone book briefcase camera magnifier mug` |
 | `fav` | how much they like an action | action name to weight 0 to 5, e.g. `{ "dig": 3 }` |
 | `maps` | up to 8 pinned pixel maps | see Maps |
@@ -116,6 +117,25 @@ The Cyborgs row under the avatar studio's Who visits has one switch for all 12: 
 beside everyone else (`RESEARCHER_SPRITES.cyborgs`).
 
 ![The cyborg crew: each original, then its cyborg resting, walking, cheering and doing its quirk](tools/cyborgs.png)
+
+## Back pieces
+
+What a sprite wears on its back is a piece from `assets/backs.json`, named by the spec's `back` (`null` takes it
+off). A piece is a map on the `back` layer (`at`, `rows` or `frames`, `fps`, `pal`, the same rules and box) with:
+
+- `name`: shown on its tile in the avatar studio (Prop → On the back), 1 to 24 characters.
+- `tint` (optional): letters that follow the sprite's `pack` color, each a shade of it from 0.3 to 1.6 (`1` is the
+  color itself), so one backpack comes in any color. A tint letter can't be a color slot or a `pal` letter.
+- `strap` (optional): `true` draws a strap across the chest in the pack color, over the outfits that show one.
+
+```json
+"backpack": { "name": "Backpack", "at": [-12, 0], "strap": true, "tint": { "a": 1, "A": 0.74, "L": 1.25 },
+              "pal": { "y": "#e0b64a" }, "rows": [".kkAAk.", "kAaaaak", "kALLLak", "..."] }
+```
+
+A new piece is one entry in the file, no code: every page that draws researchers gets the file as
+`window.RESEARCHER_BACKS`, and `researchers.js` checks each piece as it loads (one that breaks a rule is skipped with
+a console warning). The cyborgs' boiler, jet pack and the rest are pieces too.
 
 ## Maps
 
@@ -190,6 +210,7 @@ the key moves the front arm).
 
 ```js
 window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec }, off: ["pip"] };   // before researchers.js loads
+window.RESEARCHER_BACKS = { "backpack": piece, ... };                              // assets/backs.json, likewise
 ```
 
 - `cyborgs`: `{ "kenji-borg": spec, ... }` (the contents of `assets/cyborgs.json`). Each one joins its crew beside

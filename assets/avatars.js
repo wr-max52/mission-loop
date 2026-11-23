@@ -65,6 +65,7 @@ const NAMES = {
   prop: { null: tr("Nothing"), tablet: tr("Tablet"), laptop: tr("Laptop"), phone: tr("Phone"), book: tr("Book"), briefcase: tr("Briefcase"), camera: tr("Camera"),
           magnifier: tr("Magnifier"), mug: tr("Mug") },
   worker: { assistant: tr("Young crew"), pi: tr("Tenured crew") },
+  back: Object.assign({ null: tr("None") }, ...Object.entries(R.BACKS).map(([k, b]) => ({ [k]: tr(b.name) }))),   // assets/backs.json
 };
 const FLAGS = { ahoge: tr("Stray strand"), bushy: tr("Bushy brows"), lash: tr("Lashes"), lids: tr("Sleepy lids"), freckles: tr("Freckles"), grin: tr("Fang grin"),
                 rolled: tr("Rolled sleeves"), pencil: tr("Pencil on ear") };
@@ -98,7 +99,7 @@ const colorsFor = (tab, look) => ({
     .concat(look.outfit === "suit" || look.tie ? [["tie", tr("Tie"), CLOTH]] : [])
     .concat(look.outfit === "labcoat" ? [["bow", tr("Bow tie"), CLOTH]] : []),
   hat: ({ cap: [["cap", tr("Cap"), CLOTH]], beanie: [["beanie", tr("Beanie"), CLOTH], ["pom", tr("Pom-pom"), CLOTH]], hijab: [["hijab", tr("Hijab"), CLOTH]] })[look.head] || [],
-  prop: look.pack ? [["pack", tr("Backpack"), CLOTH]] : [],
+  prop: (R.BACKS[backOf(look)] || {}).tint ? [["pack", tr("Backpack"), CLOTH]] : [],
 }[tab] || []);
 
 const TABS = [
@@ -112,7 +113,8 @@ const TABS = [
   { id: "clothes", label: tr("Clothes"), groups: [{ title: tr("Outfit"), kind: "enum", field: "outfit", crop: "bust" }, { title: tr("Legs"), kind: "enum", field: "legs", crop: "full" },
       { title: tr("Details"), kind: "flags", fields: ["rolled", "pencil"] }] },
   { id: "hat", label: tr("Hat"), groups: [{ title: tr("Headwear"), kind: "enum", field: "head", crop: "head" }] },
-  { id: "prop", label: tr("Prop"), groups: [{ title: tr("Signature prop"), kind: "enum", field: "prop", crop: "full" }] },
+  { id: "prop", label: tr("Prop"), groups: [{ title: tr("Signature prop"), kind: "enum", field: "prop", crop: "full" },
+      { title: tr("On the back"), kind: "enum", field: "back", crop: "full" }] },
   { id: "vibe", label: tr("Vibe"), groups: [{ title: tr("Favourite things to do"), kind: "vibes" }, { title: tr("Their quirk"), kind: "quirk" }] },
   { id: "extras", label: tr("Drawn"), groups: [{ title: tr("Drawn by a model"), kind: "extras" }] },
 ];
@@ -136,7 +138,10 @@ const look = () => { const v = R.validateSprite(state.spec); return v.ok ? v.spr
 // How it looks now, for the model: one value per field (a built-in's per-visit color lists only invite copying).
 const lookNow = () => Object.fromEntries(Object.entries(look()).filter(([k]) => k !== "fav")
   .map(([k, v]) => [k, Array.isArray(v) && k !== "skin" && k !== "maps" ? v[0] : v]));
+// What's on the back: the spec's `back`, else a backpack for anyone with a pack colour (as researchers.js draws it).
+const backOf = lk => "back" in lk ? lk.back : lk.pack ? "backpack" : null;
 const valueOf = (spec, field) => {
+  if (field === "back") return backOf(Object.assign({}, R.ROSTER[spec.base] || {}, spec));
   const v = field in spec ? spec[field] : (R.ROSTER[spec.base] || {})[field];
   return Array.isArray(v) ? v[0] : v ?? null;
 };

@@ -55,6 +55,13 @@
     <div class="cast" id="cast"></div>
   </div>
 </div>
+<!--backs--><script>
+  // The back pieces (assets/backs.json) before the renderer loads; the app's /sprites puts them in the page instead.
+  if (!window.RESEARCHER_BACKS) try {
+    const x = new XMLHttpRequest(); x.open("GET", "../assets/backs.json", false); x.send();
+    window.RESEARCHER_BACKS = JSON.parse(x.responseText);
+  } catch (e) { window.RESEARCHER_BACKS = {}; }
+</script>
 <script src="../assets/researchers.js"></script>
 <script>
 (() => {

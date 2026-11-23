@@ -871,7 +871,7 @@ STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 def script_strings(name: str) -> list[str]:
     """Every string literal inside a page script's tr(...) calls (assets/board.js, assets/avatars.js), ternaries
-    included, in the order written."""
+    included, in the order written, and for the avatar studio the back pieces' names."""
     code, out, i = (ASSETS / name).read_text(), [], 0
     while (i := code.find("tr(", i)) != -1:
         if i and (code[i - 1].isalnum() or code[i - 1] in "_$."):
@@ -893,6 +893,8 @@ def script_strings(name: str) -> list[str]:
             j += 1
         out += [json.loads(f'"{m}"') for m in STRING.findall(code[i + 3:j])]
         i = j
+    if name == "avatars.js":               # the studio names each back piece by its name in assets/backs.json
+        out += [b["name"] for b in avatars.backs().values() if isinstance(b.get("name"), str)]
     return list(dict.fromkeys(x for x in out if x.strip()))
 
 def script_i18n(name: str) -> str:
@@ -1033,7 +1035,7 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{avatars.script_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
+            f"<title>{escape(title)}</title>{avatars.script_tag()}{avatars.backs_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
             f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
             f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
@@ -4651,7 +4653,8 @@ async def sprite_studio(request: Request) -> Response:
         html = (TOOLS / "sprites.html").read_text()
     except OSError:
         return PlainTextResponse(_("tools/sprites.html is missing."), status_code=404)
-    html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"')
+    html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"').replace("<!--backs-->", avatars.backs_tag())
+    html = html.replace('"../assets/backs.json"', '"/assets/backs.json"')
     html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")').replace('fetch("../assets/cyborgs.json")', 'fetch("/assets/cyborgs.json")')
     html = html.replace("<!--back-->", f'<p><a href="/settings">&larr; {_("Settings")}</a></p>')
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
