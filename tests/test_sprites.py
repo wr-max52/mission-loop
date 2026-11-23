@@ -159,3 +159,33 @@ def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
     assert lit == strip                                                # every box once, in the strip's order
     for k in reviews:                                                  # every review is approved after it lights
         assert any(b[:2] == ["approve", k] for beats in tour.values() for b in beats)
+
+
+def test_an_arm_keeps_its_length_wherever_the_hand_goes():
+    # #146: a raised, forward or lowered arm is one length; a hand out of reach is pulled in, never stretched to.
+    worst = js("""R => { let worst = 0; const [U, F] = R.ARM;
+        for (let x = -18; x <= 18; x++) for (let y = -18; y <= 18; y++) for (const fwd of [false, true]) {
+          const [e, h] = R.reach(0, 0, x, y, fwd);
+          worst = Math.max(worst, Math.abs(Math.hypot(e[0], e[1]) - U), Math.abs(Math.hypot(h[0] - e[0], h[1] - e[1]) - F));
+          if (Math.hypot(x, y) <= U + F - 1 && Math.hypot(x, y) >= 3) worst = Math.max(worst, Math.hypot(h[0] - x, h[1] - y));   // in reach: the hand gets there
+        }
+        return worst; }""")
+    assert worst <= 1.5, worst                                     # whole pixels: half a pixel of rounding at each end
+
+def test_every_bit_draws_for_every_researcher():
+    # The real renderer on the contact-sheet tool's canvas: every bit, every built-in and cyborg, a few moments each.
+    src = """
+const { load, Canvas } = require(%s);
+const R = load(%s, { cyborgs: JSON.parse(require("fs").readFileSync(%s, "utf8")) });
+const cast = [...Object.keys(R.ROSTER)], bits = Object.keys(R.ACTIONS).filter(a => !["spawn", "despawn", "farewell", "chase"].includes(a));
+let n = 0; const bad = [];
+for (const k of cast) for (const a of bits) for (const t of [0.3, 1.6]) {
+  try { const v = R.renderSprite(new Canvas(), k, { action: a, t, effects: true }); if (!v.ok) bad.push([k, a, v.errors]); n++; }
+  catch (e) { bad.push([k, a, String(e)]); }
+}
+console.log(JSON.stringify({ n, cast: cast.length, bits: bits.length, bad: bad.slice(0, 5) }));
+""" % tuple(json.dumps(str(p)) for p in (ROOT / "tools" / "sprite-sheet.js", SCRIPT, ROOT / "assets" / "cyborgs.json"))
+    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    r = json.loads(out.stdout.strip().splitlines()[-1])
+    assert r["bad"] == [] and r["cast"] == 24 and r["bits"] >= 43 and r["n"] == r["cast"] * r["bits"] * 2, r

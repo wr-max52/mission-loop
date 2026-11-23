@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 908 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 910 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -778,7 +778,7 @@ ends, moves to another mission or passes to the other worker it says a closing l
 come from a shuffled cast and their lines from a shuffled deck of 500+ academic quips and memes, so nothing
 repeats soon. Nobody is ever on the page twice at once (the chat's guide included), and the last three arrivals wait
 while anyone else can come. Each character has a habit of their own between bits (`QUIRKS`: Sam's bubblegum, Quill's
-giant eye through the magnifier, Pip's propeller hover, ...). A new sprite is a JSON spec, never code: `SPRITES.md` is
+giant eye through the magnifier, Pip's propeller hover, ...). The body faces the way the head does (#146: three-quarters on, the near arm from the back shoulder across the torso, the far arm past the chest, the near leg lit), every arm is one length (`reach`: a hand out of reach stops short, so nothing stretches), and a big prop (a book stack, a chart, the globe, a found page, the spyglass) is held out on the far hand, clear of the face (`gripB`); `node tools/sprite-sheet.js out.png [bits] [sprites]` draws a contact sheet of any bit with the real renderer, in node. A new sprite is a JSON spec, never code: `SPRITES.md` is
 the rulebook (parts, pinned pixel maps, keyframe quirks, one size, faces stay drawn by code), the sprite studio the place to try one (`/sprites` in the app,
 from Settings → Avatars; it is `tools/sprites.html`, which also opens from a served copy of the repo), and a page sets `window.RESEARCHER_SPRITES = {add, off}` to add sprites or switch any off. The avatar
 studio (`/avatars`, `assets/avatars.js`) builds them: pieces drawn as your own avatar wearing them, a live preview,
