@@ -204,7 +204,7 @@ TOOL_LABELS = {
     "link_missions": ("changes", "Linking missions"),
     "arrange_board": ("changes", "Arranging the board"),
     "propose_dead_lead": ("changes", "Proposing a dead lead"),
-    "set_claim_tag": ("changes", "Tagging a claim"),
+    "set_claim_tag": ("changes", "Setting a claim tag"),
 }
 WHAT_KEYS = ("url", "query", "topic", "title", "slug", "mission", "epic", "line")   # what a call is on, first found
 WHAT_CHARS = 60
