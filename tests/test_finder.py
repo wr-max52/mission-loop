@@ -152,7 +152,7 @@ def test_finder_failure_does_not_stop_the_pass(monkeypatch, capsys):
     monkeypatch.setattr(agents, "find_missions", boom)
     run_pass()
     assert store.get_mission("m").state == State.BRIEF_READY
-    assert "mission finder failed: RuntimeError: no search" in capsys.readouterr().out
+    assert "mission finder failed: no search" in capsys.readouterr().out
     assert activity.current() is None
 
 @pytest.mark.usefixtures("stub_agents")

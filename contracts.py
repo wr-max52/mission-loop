@@ -369,3 +369,4 @@ class Evidence(BaseModel):
     finished: bool = True                  # False: a stop (or a killed loop) cut the search short; it carries on
     attempt: int = 0                       # the research attempt it belongs to, so carrying on doesn't count anew
     seconds: float = 0                     # search time spent so far, out of the source finder's limit
+    search_down: str = ""                  # why web search failed during this search ("" if it worked)

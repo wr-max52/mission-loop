@@ -1091,5 +1091,12 @@
  "optional: to read replies": "可选：用于读取回复",
  "set up email below": "在下方设置邮箱",
  "waits for answers": "等待回答",
- "{n} asked": "已问 {n} 人"
+ "{n} asked": "已问 {n} 人",
+ "Web search works": "网页搜索可用",
+ "Web search is down: {reason}.": "网页搜索不可用：{reason}。",
+ "Search down": "搜索不可用",
+ "Top up the search provider's credit, or add another search source.": "为搜索服务充值，或添加其他搜索来源。",
+ "Paste a working key under Web search, or add another search source.": "在“网页搜索”下粘贴可用的密钥，或添加其他搜索来源。",
+ "Wait a little, or add another search source.": "稍等片刻，或添加其他搜索来源。",
+ "Check this machine's internet connection, or add another search source.": "检查本机的网络连接，或添加其他搜索来源。"
 }

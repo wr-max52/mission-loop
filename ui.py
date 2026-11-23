@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
@@ -377,6 +377,9 @@ form.loop-ctl button.play.off:hover { background:#2b8a3e; border-color:#2b8a3e; 
 .status { display:inline-flex; align-items:center; gap:.4rem;
           color:var(--muted); font-size:.9rem; font-weight:600; }
 .status.on { color:var(--fg); }
+a.status.search-down { color:#b26b00; text-decoration:none; margin-left:.35rem; }
+[data-theme="dark"] a.status.search-down { color:#e8a33d; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) a.status.search-down { color:#e8a33d; } }
 .status .dot.on { animation:blink 1.4s ease-in-out infinite; }
 .loop { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; padding:.8rem 1rem;
         border:1px solid var(--rule); border-radius:10px; margin-bottom:1.5rem; }
@@ -904,7 +907,18 @@ def loop_button() -> str:
     return (f'<form class="loop-ctl" method="post" action="/loop/{action or "stop"}">'
             f'<input type="hidden" name="back" value="/"><input type="hidden" name="every" value="{every:g}">'
             f'{button}'
-            f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span></form>')
+            f'<span class="status {dot}"><span class="dot {dot}" aria-hidden="true"></span>{text}</span>'
+            f'{search_down_note()}</form>')
+
+def search_down_note() -> str:
+    """A small amber "Search down" beside the loop's state while web search fails, the reason on hover and a link
+    to Settings → Setup. The one place outside Setup that shows it."""
+    down = search_status.current()
+    if not down:
+        return ""
+    title = _("Web search is down: {reason}.").format(reason=down["reason"]) + " " + _(down.get("fix") or "")
+    return (f'<a class="status search-down" href="/settings#setup" title="{escape(title.strip(), quote=True)}">'
+            f'<span class="dot stopping" aria-hidden="true"></span>{_("Search down")}</a>')
 
 def auto_switch() -> str:
     """Auto mode, in the top bar on every page: approves every brief and proposed epic, never publishing."""
@@ -2594,7 +2608,7 @@ def setup_card(found: list | None = None) -> str:
         return ""
     conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
     found = found if found is not None else doctor.checks(conn=conn)
-    if doctor.done(found):
+    if doctor.done([c for c in found if c.key != "search_up"]):   # an outage is the top bar's to say, not setup's
         return ""
     by = {c.key: c for c in found}
     model_checks = [c for c in found if c.key in ("models", "connection")]
@@ -2660,7 +2674,7 @@ document.addEventListener("click", e => {
 
 def setup_section(conn: dict) -> str:
     """Settings → Setup: every check with what to do, and the way back to the home page's setup card."""
-    found = doctor.checks(conn=conn)
+    found = doctor.checks(conn=conn, probe=True)
     rows = "".join(f'<li class="{"ok" if c.ok else "todo"}">{_mark(c.ok)}<span><strong>{escape(c.title)}</strong>: '
                    f'{escape(c.detail)}' + (f' <span class="hint">{escape(c.fix)}</span>' if c.fix else "")
                    + (_open_link(c.link) if not c.ok else "") + "</span></li>" for c in found)

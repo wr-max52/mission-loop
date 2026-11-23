@@ -1091,5 +1091,12 @@
  "optional: to read replies": "facultatif : pour lire les réponses",
  "set up email below": "configurez l'e-mail ci-dessous",
  "waits for answers": "attend les réponses",
- "{n} asked": "{n} interrogés"
+ "{n} asked": "{n} interrogés",
+ "Web search works": "La recherche web fonctionne",
+ "Web search is down: {reason}.": "La recherche web ne marche pas : {reason}.",
+ "Search down": "Recherche en panne",
+ "Top up the search provider's credit, or add another search source.": "Rechargez le crédit du fournisseur de recherche, ou ajoutez une autre source de recherche.",
+ "Paste a working key under Web search, or add another search source.": "Collez une clé valide sous Recherche web, ou ajoutez une autre source de recherche.",
+ "Wait a little, or add another search source.": "Attendez un peu, ou ajoutez une autre source de recherche.",
+ "Check this machine's internet connection, or add another search source.": "Vérifiez la connexion internet de cette machine, ou ajoutez une autre source de recherche."
 }

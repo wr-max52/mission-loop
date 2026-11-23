@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import activity, board, checkpoint
 import agents                              # switchboard: see agents/__init__.py
-import settings, stopping, store
+import search_status, settings, stopping, store
 from agents import bluesky, f916, github, publisher
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
@@ -103,7 +103,7 @@ def _gather(m: Mission, now) -> str:
         activity.fail(e)
         store.delete_artifact(m.slug, "evidence")   # the next attempt searches afresh
         m.search_paused = False
-        return _research_failed(m, None, f"research crashed: {type(e).__name__}: {e}")
+        return _research_failed(m, None, f"research crashed: {activity.reason(e)}")
     store.save_artifact(m.slug, "evidence", evidence)
     m.search_paused = not evidence.finished
     if not evidence.finished:          # the stop button cut the search short: it carries on next start
@@ -111,18 +111,21 @@ def _gather(m: Mission, now) -> str:
         calls = sum(1 for x in evidence.messages if x.get("role") == "tool")
         return f"stopped mid-search after {calls} tool result(s); the search carries on when the loop starts again"
     m.gathered = True
+    down = f" (web search was down: {evidence.search_down})" if evidence.search_down else ""
+    if down:
+        activity.outcome("done", f"search down: {evidence.search_down}; read pages it already had")
     if stopping.requested():
-        return "stopped after finding sources; the brief is written from them when the loop starts again"
-    return f"sources found on attempt {m.attempts}; the brief is next"
+        return f"stopped after finding sources{down}; the brief is written from them when the loop starts again"
+    return f"sources found on attempt {m.attempts}{down}; the brief is next"
 
 def _write_brief(m: Mission, now) -> str:
     """The Principal Investigator's half: write the brief from the gathered sources, then check it."""
     m.attempts = max(m.attempts, 1)    # a draft saved by a stop before attempts were counted this way
     brief, m.interrupted_brief = m.interrupted_brief, None   # a stop's draft: check it, don't redo it
+    evidence = Evidence(**(store.load_artifact(m.slug, "evidence") or {}))
     try:
         if brief is None:
             activity.begin(m.slug, "brief")
-            evidence = Evidence(**(store.load_artifact(m.slug, "evidence") or {}))
             brief = agents.write_brief(m, evidence, now)
             if stopping.requested():   # finished, but leave checking it for the next start
                 raise stopping.Interrupted(brief)
@@ -141,7 +144,7 @@ def _write_brief(m: Mission, now) -> str:
     except Exception as e:             # a crash is a failed attempt; the next one searches again
         activity.fail(e)
         ok = False                         # a brief that can't pass (too few sources held up) brings its draft
-        brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {type(e).__name__}: {e}"
+        brief, notes = getattr(e, "brief", None), getattr(e, "notes", "") or f"research crashed: {activity.reason(e)}"
     _drop_evidence(m)
     if ok:
         store.save_artifact(m.slug, "brief", brief)
@@ -152,8 +155,11 @@ def _write_brief(m: Mission, now) -> str:
         m.rejected_brief = None
         m.state = State.BRIEF_READY
         return f"brief passed on attempt {m.attempts}; review {path}"
+    if evidence.search_down:              # say why the sources were thin
+        notes = f"{notes}\n(Web search was down during this attempt: {evidence.search_down}.)"
     activity.outcome("failed", notes)
-    return _research_failed(m, brief, notes)
+    failed = _research_failed(m, brief, notes)
+    return f"{failed} (web search was down)" if evidence.search_down else failed
 
 def _drop_evidence(m: Mission) -> None:
     """The attempt is over: its search transcript and the brief's saved first step go."""
@@ -231,7 +237,7 @@ def step(m: Mission, now) -> str | None:
             return f"stopped mid-writing; {saved} when the loop starts again"
         except Exception as e:             # same rule as research: a crash is a failed attempt
             activity.fail(e)
-            article, ok, notes = None, False, f"writer crashed: {type(e).__name__}: {e}"
+            article, ok, notes = None, False, f"writer crashed: {activity.reason(e)}"
         if ok:
             m.checked_article = article    # the Research Assistant rates it next (_rate), then it goes to review
             return f"article passed check on attempt {m.write_attempts}; the rating is next"
@@ -263,7 +269,7 @@ def _reach_out(m: Mission, now) -> str:
     except Exception as e:                 # never blocks: whoever was asked is already recorded
         activity.fail(e)
         records = _outreach(m)
-        note = f"outreach crashed ({type(e).__name__}: {e}); "
+        note = f"outreach crashed ({activity.reason(e)}); "
     else:
         note = ""
     store.save_artifact(m.slug, "outreach", records)
@@ -309,7 +315,7 @@ def _rate(m: Mission) -> str:
         return "stopped mid-rating; the article is rated when the loop starts again"   # checked_article stays
     except Exception as e:
         activity.fail(e)
-        rating = ArticleRating(error=f"the rater crashed: {type(e).__name__}: {e}")
+        rating = ArticleRating(error=f"the rater crashed: {activity.reason(e)}")
     m.checked_article = None
     if not rating.passed:
         m.article_draft = None             # written again from a fresh plan: a weak claim or dull story is the plan's
@@ -626,13 +632,24 @@ def find_new_missions(now) -> int:
     inspiration = store.get_inspiration()
     if not inspiration or STOP_FLAG.exists():
         return 0
+    holding, line = search_status.finder_should_wait()
+    if holding:                               # web search is down: try again after a while, say so once
+        if line:
+            print(line, flush=True)
+        return 0
     missions = store.all_missions()
     try:
         activity.begin("", "finder")
         ideas = agents.find_missions(inspiration, [m.topic for m in missions], now, _finder_epics(missions))
     except Exception as e:
-        activity.fail(e)
-        print(f"mission finder failed: {type(e).__name__}: {e}", flush=True)
+        if getattr(e, "reason", None) and type(e).__name__ == "SearchDown":
+            activity.outcome("failed", f"search down: {e.reason}")
+            line = search_status.finder_should_wait()[1]
+            if line:
+                print(line, flush=True)
+        else:
+            activity.fail(e)
+            print(f"mission finder failed: {activity.reason(e)}", flush=True)
         return 0
     finally:
         activity.clear()

@@ -78,7 +78,7 @@ def test_new_epic_needs_two_missions_and_waits_for_the_human(monkeypatch):
 
 def test_finder_prompt_lists_the_epics(monkeypatch):
     seen = []
-    async def fake_tool_loop(system, tb, budget, limit):
+    async def fake_tool_loop(system, tb, budget, limit, **kw):
         return [{"role": "tool", "content": "Result: https://a.example.com/x"}]
     async def fake_chat(messages, tools=None, format=None, model=None):
         seen.append(messages[-1]["content"])

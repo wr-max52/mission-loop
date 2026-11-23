@@ -12,7 +12,7 @@ each: {"worker", "slug", "agent", "since", "ended", "outcome"} (outcome "done", 
 the last two). It is the whole history, kept on this machine; the UI shows the latest under the pipeline strip and
 all of it on /log. Like the rest of this file it is display-only.
 """
-import json, os, threading, time
+import json, os, re, threading, time
 from pathlib import Path
 import trail
 
@@ -102,11 +102,32 @@ def outcome(kind: str, why: str) -> None:
             _write(data)
 
 def fail(e: BaseException) -> None:
-    """The step at work on this seat raised: failed, or stopped for a stop."""
+    """The step at work on this seat raised: failed, or stopped for a stop. The step log gets a short reason;
+    the raw error goes to the loop log."""
     if type(e).__name__ == "Interrupted":
         outcome("stopped", "stopped by the stop button")
     else:
-        outcome("failed", f"{type(e).__name__}: {e}")
+        print(f"step failed: {type(e).__name__}: {e}", flush=True)
+        outcome("failed", reason(e))
+
+def reason(e: BaseException) -> str:
+    """A short, plain reason for a step that raised, for History and the step log; the raw text stays in the
+    loop log. Network trouble says what couldn't be reached instead of a library's exception dump."""
+    name, text = type(e).__name__, " ".join(str(e).split())
+    low = f"{name} {text}".lower()
+    host = re.search(r"https?://([^/\s'\"]+)", text)
+    where = host.group(1) if host else ""
+    if any(k in low for k in ("connecterror", "connectionerror", "connection refused", "connection reset",
+                              "enotfound", "getaddrinfo", "name or service not known", "network is unreachable")):
+        return f"couldn't reach {where}" if where else "couldn't reach a server it needs (network or server down)"
+    if "timeout" in low or "timed out" in low:
+        return f"{where} took too long to answer" if where else "a server took too long to answer"
+    if not text:
+        return name
+    if getattr(e, "plain", False):         # its message is already a plain sentence
+        return text
+    first = text if len(text) <= 160 else text[:157].rstrip() + "..."
+    return first if name in ("Exception", "RuntimeError") or name.endswith("Failed") else f"{name}: {first}"
 
 def clear() -> None:
     """This worker is done with its task."""
