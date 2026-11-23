@@ -366,6 +366,34 @@ def test_pixel_researchers_wander_in_progress_cards_and_the_working_pill(client,
     quiet = client.get("/m/b").text                                       # the mission page stays quiet:
     assert '<script src="/assets/researchers.js"' not in quiet and ' data-lab' not in quiet   # only the chat's guide, once opened
 
+def test_the_inspiration_box_lights_while_the_theorist_or_finder_works(client, monkeypatch):
+    store.set_inspiration("Who decides what the Fed does?")
+    store.save_mission(Mission(slug="b", topic="Outages", state=State.RESEARCHING))
+    idle = "The mission finder searches from this line. Empty turns the finder and Theorist off."
+    html = client.get("/").text
+    assert 'id="desk" data-desk class="actions desk" data-lab-ok>' in html     # nobody on it: unlit, no visitor
+    assert f'<span class="hint" data-idle="{idle}">{idle}</span>' in html
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    monkeypatch.setattr(activity._here, "worker", "pi", raising=False)       # the Theorist is the PI's first task
+    activity.begin("", "theorist")
+    html = client.get("/").text
+    assert 'id="desk" data-desk class="actions desk active" data-lab-ok data-lab="theorist" data-worker="pi">' in html
+    assert f'data-idle="{idle}">Theorist working now</span>' in html
+    assert '<a class="card" href="/m/b">' in html                            # a mission card stays as it is
+    activity.clear()                                                         # the Theorist is done
+    activity._here.worker = "assistant"
+    activity.begin("", "finder")                                             # the finder lights it too, with its crew
+    html = client.get("/").text
+    assert 'class="actions desk active" data-lab-ok data-lab="finder" data-worker="assistant">' in html
+    assert ">Mission finder working now</span>" in html
+    activity.clear()
+    monkeypatch.setattr(settings, "animations", lambda: False)
+    activity.begin("", "finder")
+    html = client.get("/").text                                              # animations off: lit, but no visitor
+    assert 'id="desk" data-desk class="actions desk active">' in html
+    js = client.get(ui.asset("flow.js").split("?")[0]).text
+    assert "relightDesk(working)" in js and "[data-desk]" in client.get("/assets/researchers.js").text
+
 def nav(html: str) -> str:
     return html.split('<nav class="top">')[1].split("</nav>")[0]
 
