@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 897 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 899 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -542,7 +542,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
   comment under it; `OutreachRecord.thanked_at`, `thanks_where`), once however many times they answer. A channel
   that can't be read or written is skipped and tried at the next check. Replies (untrusted text, kept up to
   `REPLY_MAX`) reach the writer as contacts' comments it may quote. The mission page lists who was asked, where, the
-  exact message and their replies; the flow strip shows Outreach, its check and Replies only while outreach is on;
+  exact message and their replies; the flow strip shows Outreach, its check and the reply wait (a code check counting the missions waiting for
+replies) only while outreach is on and a channel is ready;
   the setup check (`doctor`) flags outreach that is on with no channel ready.
 - Claims have a `kind`: `fact` or `possibility`. The prompts treat every source as part truth, part spin.
   Research explores widely, drops only what specific evidence contradicts, and leads with pointed
@@ -721,7 +722,7 @@ channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh c
 only records human decisions through the same store/orchestrator functions as the CLI; it never runs
 agents. It binds to 127.0.0.1 and refuses cross-site form posts. Every button is a form post the server redirects back from, so `ui.KEEP_SCROLL_JS` (on every page) scrolls back to where you were when it lands on the same page, and the done/error message is a toast over the page (`.flash`; a done fades, an error stays until clicked) whose `?done=`/`?error=` is taken out of the address. Every decision waiting on you (a brief, an article, a parked mission or a proposed epic) has one look (`ui.ask`, with the finger icon), In progress is grouped by stage (Publishing as one queue card, then Writing, Research, Queued), then come Inspiration and Epics. Adding a mission is one long slim card right under the pipeline strip (`ui.new_mission`: a plus and a pencil, "Add a mission") (grey) that opens a three-step wizard in a dialog (topic, objective, then epic and short name; green), which posts to
 `/missions` with Add mission, or Add and start loop (`go=start`): the mission is marked `rush`, so the Research Assistant
-takes it next, and the loop is started if it is off ("Add and research next" while it runs); the page's refresh holds off while it is open; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) and, below a readable size, wraps it between units. It is always drawn,
+takes it next, and the loop is started if it is off ("Add and research next" while it runs); the page's refresh holds off while it is open; every section heading has an icon (`icons.py`, inline SVG). The home page's pipeline strip (`flowchart.py`, shared with the published About page) never scrolls sideways: `assets/flow.js` shrinks it to the panel (`--s`) until the whole track and every lane fit (`tooWide`: a lane adds up its tiles and shortest arrows, so it can never run under the review beside it, #136) and, below a readable size, wraps it between units. Tiles size to their text in any language: a long line under an agent's name wraps to a second line, and a check widens to its label. It is always drawn,
 unlit while the loop is off, as a snake (`flowchart.track`, `flowchart.lanes`, which `ui.flow_strip` and the About page share): the steps in runtime order are cut into
 lanes at each human review. Lane 0 runs left to right from the top left (the Theorist) to the first review, a
 square end on the right; lane 1 comes back right to left one level lower to the next review on the left; and so on,
@@ -729,11 +730,14 @@ each review spanning the two lanes it joins, so the snake turns through it; the 
 whatever the channels) ends bottom left. Agents are tiles with an icon and a line saying what they do (`flowchart.TILES`),
 each code check a narrow shield tile right after the agent it checks (the article rating is an agent tile, Rating,
 on the Research Assistant, after the article check, with its own check for the 20-or-less rule) (with a red count of missions parked there),
-and each review shows how many missions wait on you. Researchers on the strip stand on their own step's row
+and each review shows how many missions wait on you. Each agent tile and the reply wait carry a calm count of the
+missions at that step now, worked on or waiting their turn (`flowchart.step_of`, served as `held` in `/api/flow`;
+Publish counts the articles still queued for the site or a channel; the Theorist and finder count nothing). Researchers on the strip stand on their own step's row
 (`FlowStage.row`). Every code check is on it (`flowchart.CHECKS`, whose
 titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
-the 2+ missions rule for an epic), which drop what fails and park nothing; the outreach check (with Outreach and
-Replies, only while outreach is on), which refuses a bad message and parks nothing; the source check and the article
+the 2+ missions rule for an epic), which drop what fails and park nothing; the outreach check, which refuses a bad message and parks nothing, and the reply wait after it, drawn
+as a check with a clock ("replies": code reads replies and thanks, no model), both with Outreach only while the loop
+runs outreach (`flowchart.outreach_shown`: switched on and a channel ready); the source check and the article
 check. So is every human review: the epics both the Theorist
 and the finder propose (after the finder's check; it also counts the Theorist's proposed combines), the brief and
 the article. In auto mode exactly two of them,

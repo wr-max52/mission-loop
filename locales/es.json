@@ -1217,5 +1217,8 @@
  "{n}s": "{n} s",
  "{m}m {s}s": "{m} min {s} s",
  "Proposing a dead lead": "Proponiendo una pista muerta",
- "Setting a claim tag": "Poniendo una etiqueta de la afirmación"
+ "Setting a claim tag": "Poniendo una etiqueta de la afirmación",
+ "replies": "respuestas",
+ "Missions at this step: {n}": "Misiones en este paso: {n}",
+ "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Revisión de respuestas (código): lee las respuestas cada 10 minutos, agradece una vez a cada persona que respondió y sigue cuando todos han respondido o termina la espera."
 }
