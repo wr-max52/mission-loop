@@ -383,57 +383,83 @@ TAGS_JS = """<script>
 # ---------- the About page: the pipeline, playing, and who does what ----------
 
 ABOUT_CSS = """
-.flow, .legend, .lab-floor { font-family: -apple-system, system-ui, sans-serif; }
+.flow, .legend, .steps { font-family: -apple-system, system-ui, sans-serif; }
 .flow { margin: 1.5rem 0 .5rem; width: min(56rem, 100vw - 2rem); margin-left: calc(50% - min(28rem, 50vw - 1rem)); }
-.flow .now { font-size: .85rem; line-height: 1.5; color: var(--muted); min-height: 4.6em; }
+#flow[data-tour] .flow-track[data-lab] { padding-top: 5.5rem; row-gap: max(4.4rem, calc(var(--u) * 1.3)); }
+.flow .now { font-size: .85rem; line-height: 1.5; color: var(--muted); min-height: 3em; }
 .flow .now strong { color: var(--fg); }
 .who { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .legend { font-size: .8rem; color: var(--muted); margin: 0 0 2rem; }
-dl.agents dt { font-weight: 700; margin-top: 1.1rem; }
-dl.agents dt small { font: 600 .72rem -apple-system, system-ui, sans-serif; text-transform: uppercase;
-                     letter-spacing: .05em; color: var(--muted); margin-left: .35rem; }
-dl.agents dd { margin: .2rem 0 0; }
-.lab-floor { display: flex; gap: 1rem; margin-top: 1.5rem; }
-.lab-floor .card { flex: 1; min-width: 0; position: relative; height: 150px;
-                   background: linear-gradient(var(--rule), var(--rule)) no-repeat 0 calc(100% - 8px) / 100% 2px; }
-.lab-floor canvas.lab-stage { bottom: 0; height: 150px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .75rem; margin: 1.2rem 0 0;
+         width: min(56rem, 100vw - 2rem); margin-left: calc(50% - min(28rem, 50vw - 1rem)); }
+.stepcard { position: relative; border: 1px solid var(--rule); border-radius: 10px; padding: .9rem 1rem 4.4rem;
+            background: linear-gradient(var(--rule), var(--rule)) no-repeat 1rem calc(100% - 8px) / calc(100% - 2rem) 2px; }
+.stepcard .head { display: flex; align-items: center; gap: .6rem; }
+.stepcard .badge { flex: none; display: flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem;
+                   border-radius: 8px; border: 1px solid var(--rule); background: var(--quote); color: var(--muted); }
+.stepcard .badge .ico { width: 1.15rem; height: 1.15rem; }
+.stepcard[data-kind="check"] .badge { background: repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
+.stepcard[data-kind="human"] .badge { border: 2px dashed var(--rule); background: var(--bg); }
+.stepcard .name { display: block; font-weight: 700; font-size: .98rem; line-height: 1.2; }
+.stepcard .who { display: block; font-size: .66rem; }
+.stepcard p { margin: .55rem 0 0; font-size: .88rem; line-height: 1.45; }
+.stepcard canvas.lab-stage { bottom: 0; height: 150px; }
 """
 ABOUT_FLOW = flowchart.CSS + ABOUT_CSS
 
-# (name, who runs it, what it does), in the order the strip shows them
-AGENT_NOTES = [
-    ("Theorist", "Principal Investigator",
+# One card per step on the strip, in its order: (step, name, who runs it, what it does). The Theorist's and the
+# finder's checks are told on their own cards, the rating check on the rater's.
+STEP_NOTES = [
+    ("theorist", "Theorist", "Principal Investigator",
      "Looks across every mission and published article for patterns inside each tag and themes emerging between "
      "them, then sharpens the desk's guiding questions and connects the dots: it links missions that bear on each "
      "other or on a published article, and proposes combining missions that are really one question. Now and then "
-     "it proposes a new tag or one new mission."),
-    ("Mission finder", "both models",
+     "it proposes a new tag or one new mission. Code drops anything that breaks its rules."),
+    ("finder", "Mission finder", "both models",
      "Searches around those guiding questions from a couple of unexpected angles and proposes up to three new "
-     "missions, each resting on a page it actually found."),
-    ("Source finder", "Research Assistant",
+     "missions. Code keeps only the ones resting on a page the search actually found."),
+    ("epic_review", "Epic review", "a human",
+     "A person approves, renames or turns down each new tag the agents propose, and each set of missions they want "
+     "to combine into one."),
+    ("sources", "Source finder", "Research Assistant",
      "A small, fast model that does the digging: it searches, reads pages, checks the Wayback Machine for pages "
      "that changed or vanished, and gathers evidence for and against the mission's thesis."),
-    ("Brief writer", "Principal Investigator",
+    ("brief", "Brief writer", "Principal Investigator",
      "A larger model turns that evidence into a brief: a checkable thesis, facts that quote their sources, "
      "possibilities clearly marked as unverified, and the strongest case against."),
-    ("Checks", "code, no model",
-     "The source check fetches every cited page and confirms each quote is really on it; the article check "
-     "confirms the article's quotes and citations match the brief. A failure goes back for another try, and "
-     "after three the mission is set aside for a human."),
-    ("Reviews", "a human",
-     "A person approves every brief or sends it back with notes, and reads every article before it is published."),
-    ("Article writer", "Principal Investigator",
+    ("source_check", "Source check", "code, no model",
+     "Fetches every cited page and confirms each quote is really on it, with at least three websites behind the "
+     "brief. A failure goes back for another try, and after three the mission is set aside for a human."),
+    ("brief_review", "Brief review", "a human",
+     "A person approves every brief or sends it back with notes."),
+    ("writer", "Article writer", "Principal Investigator",
      "Writes the article from the approved brief in plain words: the claim up top, a short story, the evidence, "
      "the other side, then the fine print, labeling each possibility \u201cPossibility, not verified\u201d."),
-    ("Article rater", "Research Assistant",
+    ("article_check", "Article check", "code, no model",
+     "Confirms every paragraph cites the brief's sources, every quote matches its source and the other side is "
+     "there. A failure goes back to the writer, and after three the mission is set aside for a human."),
+    ("article_rating", "Article rater", "Research Assistant",
      "Reads each article that passed its check and scores it 1 to 10 on the strength of its claim and logic, how "
      "gripping it is, and how credible its sources are. A total of 20 or less out of 30 sends it back to the writer "
      "with the reasons, before a person ever reads it."),
-    ("Publisher", "code, no model",
+    ("article_review", "Article review", "a human",
+     "A person reads every article before it is published, and publishes it or sends it back."),
+    ("publisher", "Publisher", "code, no model",
      "Writes the article to this site, updates the feeds and passes it on to the other places it appears."),
 ]
+CARD_CREW = {"Principal Investigator": "pi", "Research Assistant": "assistant"}   # whose crew mostly visits a card
 
-# Researchers on the About page drop by for a short visit and always say hello (assets/researchers.js).
+def step_card(step: str, name: str, who: str, text: str) -> str:
+    """A step's card under Who does what: the strip's icon for it, and room at the bottom for a visiting researcher
+    (assets/researchers.js), who does that step's kind of work (data-lab)."""
+    kind = "human" if step in flowchart.HUMAN_STEPS else "check" if step in flowchart.CHECKS else "agent"
+    ico = flowchart.TILES[step][0] if kind == "agent" else "person" if kind == "human" else "shield"
+    crew = f' data-worker="{CARD_CREW[who]}"' if who in CARD_CREW else ""
+    return (f'<div class="card stepcard" id="step-{step}" data-kind="{kind}" data-lab="{step}"{crew}>'
+            f'<div class="head"><span class="badge">{icon(ico)}</span><span><span class="name">{escape(name)}</span>'
+            f'<span class="who">{escape(who)}</span></span></div><p>{escape(text)}</p></div>')
+
+# Researchers visit the step cards for a short stay and always say hello (assets/researchers.js).
 ABOUT_PACE = '<script>window.RESEARCHERS_PACE = {life: [7, 13], gap: [4, 9], first: [1, 4], entry: [3, 7], greet: 1};</script>'
 
 def english_track() -> str:
@@ -443,13 +469,14 @@ def english_track() -> str:
         return flowchart.track({}, {}, {})
 
 def about_html() -> str:
-    """site/about/index.html: the pipeline strip playing a made-up run (assets/about.js drives it through
-    assets/flow.js), what each agent does, and a floor where a researcher or two drops by."""
-    strip = (f'<section id="flow" class="flow" data-demo data-working="[]" aria-label="The pipeline, playing an example run">'
-             f'<div class="flow-scroll"><div class="flow-track">{english_track()}</div></div>'
+    """site/about/index.html: the pipeline strip playing one made-up mission from start to finish, carried by
+    researchers (assets/about.js and the Tour in assets/researchers.js, #139), then a card for each step with a
+    researcher or two dropping in."""
+    strip = (f'<section id="flow" class="flow" data-demo data-tour data-working="[]" '
+             f'aria-label="The pipeline, playing an example run">'
+             f'<div class="flow-scroll"><div class="flow-track" data-lab>{english_track()}</div></div>'
              f'<div class="now"></div></section>')
-    agents = "".join(f"<dt>{escape(name)}<small>{escape(who)}</small></dt><dd>{escape(text)}</dd>"
-                     for name, who, text in AGENT_NOTES)
+    cards = "".join(step_card(*note) for note in STEP_NOTES)
     name = settings.publication_name()
     own = settings.about_statement()
     intro = ("".join(f"<p>{escape(p)}</p>" for p in own.split("\n\n")) if own else
@@ -464,9 +491,7 @@ def about_html() -> str:
             "<p>Two models share the work. The Research Assistant, a small model, searches and reads; the "
             "Principal Investigator, a larger one, writes and decides. They run side by side, so one mission's "
             "search goes on while another's article is written.</p>"
-            f'<dl class="agents">{agents}</dl>'
-            '<div class="lab-floor" aria-hidden="true">'
-            '<div class="card" id="lab-left" data-lab="busy"></div><div class="card" id="lab-right" data-lab="busy"></div></div>')
+            f'<div class="steps">{cards}</div>')
     head = (f"<style>{ABOUT_FLOW}</style>{ABOUT_PACE}"
             '<script src="../assets/researchers.js" defer></script>'
             '<script src="../assets/flow.js" defer></script>'

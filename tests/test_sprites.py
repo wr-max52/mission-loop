@@ -77,3 +77,48 @@ def test_a_bad_spec_says_what_to_fix(patch, says):
 def test_register_keeps_built_in_names_and_tidy_keys():
     r = js("""R => [R.registerSprite("pip", EX).errors, R.registerSprite("Custom Sprite!", EX).errors]""".replace("EX", json.dumps(EXAMPLE)))
     assert "built-in" in r[0][0] and "lowercase" in r[1][0]
+
+def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
+    """The About page's scene (#139): every beat is one the director knows, on a step the strip shows; played with
+    no clock (each actor until it waits on a signal), the work lights every step once, in strip order, and ends."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    import flowchart
+    r = js("R => ({ tour: R.TOUR, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS) })")
+    tour, strip = r["tour"], [k for k, kind, _ in flowchart.FLOW if k not in flowchart.OUTREACH_STEPS]
+    reviews = [k for k, kind, _ in flowchart.FLOW if kind == "human"]
+    for who, beats in tour.items():
+        for b in beats:
+            assert b[0] in r["beats"], (who, b)
+            if b[0] in ("enter", "go", "light", "approve"):
+                assert b[1] in strip, (who, b)
+            if b[0] == "do":
+                assert b[1] in r["bits"], (who, b)
+            if b[0] in ("cue", "face"):
+                assert b[1] in tour, (who, b)
+    lit, signals, queue, at = [], set(), [], {}
+    playing = {"P": list(tour["P"]), "R": list(tour["R"])}
+    while playing or queue:
+        if not playing:
+            who = queue.pop(0)
+            playing[who] = list(tour[who])
+        moved = False
+        for who, beats in list(playing.items()):
+            while beats:
+                op, *args = beats[0]
+                if op == "until" and args[0] not in signals:
+                    break
+                beats.pop(0)
+                moved = True
+                if op == "light":
+                    lit.append(args[0])
+                elif op == "signal":
+                    signals.add(args[0])
+                elif op == "cue":
+                    queue.append(args[0])
+            if not beats:
+                del playing[who]
+        assert moved or not playing, f"stuck: {playing}"
+    assert lit == strip                                                # every box once, in the strip's order
+    for k in reviews:                                                  # every review is approved after it lights
+        assert any(b[:2] == ["approve", k] for beats in tour.values() for b in beats)
