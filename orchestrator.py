@@ -238,9 +238,10 @@ def step(m: Mission, now) -> str | None:
         except Exception as e:             # same rule as research: a crash is a failed attempt
             activity.fail(e)
             article, ok, notes = None, False, f"writer crashed: {activity.reason(e)}"
+        fixed = f" (code {'; '.join(m.article_draft.fixes)})" if m.article_draft and m.article_draft.fixes else ""
         if ok:
             m.checked_article = article    # the Research Assistant rates it next (_rate), then it goes to review
-            return f"article passed check on attempt {m.write_attempts}; the rating is next"
+            return f"article passed check on attempt {m.write_attempts}{fixed}; the rating is next"
         return _article_failed(m, brief, article, notes)
 
     if m.state == State.ARTICLE_READY:

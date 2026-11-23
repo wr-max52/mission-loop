@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 854 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 858 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -309,7 +309,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (`article_check.plan_problems`, `section_problems`: citations, unknown ids, links, quotes not in a source
   quote, with the closest real one shown, possibilities it must carry, the counterpoint's citation) and sends back
   only that piece's problems: one round for the plan (then code places unplaced possibilities and adds a missing
-  counterpoint section), up to 2 for a section (then the version with the fewest problems is kept). The plan and
+  counterpoint section), up to 2 for a section (then the version with the fewest problems is kept, and code takes
+  out what it safely can, `article_check.settle_section`, #114: links in a cited paragraph, keeping their text, and
+  a paragraph with no citation while the section keeps another; what it did is `ArticleDraft.fixes`, named on the
+  History line, and the article check still has the last word). The plan and
   every finished section are saved on the mission (`Mission.article_draft`): a stop or crash resumes after the
   last saved section, and after a failed article check only the sections its notes name are rewritten (all of
   them for a problem not tied to one section), each shown its last version and its problems. A passed article,
