@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, doctor, library, mcp_share, orchestrator, settings, stopping, store
+import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
@@ -33,7 +33,7 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
 LABELS = {
     State.QUEUED: "Queued", State.RESEARCHING: "Researching", State.BRIEF_READY: "Brief ready",
-    State.AWAITING_COMMENTS: "Waiting for comments", State.WRITING: "Writing",
+    State.OUTREACH: "Outreach", State.AWAITING_COMMENTS: "Waiting for replies", State.WRITING: "Writing",
     State.ARTICLE_READY: "Article ready", State.DONE: "Published", State.PARKED: "Parked",
     State.COMBINED: "Combined",
 }
@@ -95,6 +95,9 @@ MESSAGES = {
     "custom_removed": "Channel removed.",
     "republish": "Publishing queued.",
     "republish_off": "Publishing now.",
+    "email_saved": "Email saved.",
+    "email_off": "Email removed.",
+    "outreach_saved": "Outreach saved.",
     "search_saved": "Web search key saved.",
     "search_unchecked": "Web search key saved, but Brave didn't answer. If search fails, check the key.",
     "search_off": "Web search key removed.",
@@ -107,6 +110,7 @@ MESSAGES = {
     "publication_saved": "Publication saved.",
 }
 ERRORS = {
+    "outreach": "Wait is 0 to 336 hours; 1 to 6 people per mission.",
     "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
     "mcp_port": "A port is a number from 1024 to 65535.",
     "combine": "Can't combine now: a mission is in use or has moved on.",
@@ -237,6 +241,14 @@ def next_step(m: Mission) -> str:
         try_ = m.attempts if same else m.attempts + 1
         attempt = _("attempt {n} of {total}").format(n=try_, total=m.max_attempts)
         return f"{doing} · {attempt}" if m.attempts and try_ > 1 else doing
+    if m.state == State.OUTREACH:
+        asked = len(contacts.records(m.slug))
+        return _("Finding people to ask") + (" · " + _("{n} asked").format(n=asked) if asked else "")
+    if m.state == State.AWAITING_COMMENTS:
+        found = contacts.records(m.slug)
+        if found and m.wait_until:
+            return _("Waiting for replies until {when} UTC · {n} of {total} answered").format(
+                when=f"{m.wait_until:%b %d, %H:%M}", n=sum(1 for r in found if r.replies), total=len(found))
     if m.state == State.WRITING:
         if m.checked_article:
             return _("Rating the article") + " · " + _("attempt {n} of {total}").format(n=m.write_attempts, total=m.max_attempts)
@@ -256,7 +268,7 @@ def in_progress(m: Mission) -> bool:
 
 def flow_rank(m: Mission) -> int:
     """Top to bottom on the Missions page, the flow chart read from its end: closest to published first."""
-    order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3,
+    order = {State.DONE: 0, State.ARTICLE_READY: 1, State.WRITING: 2, State.AWAITING_COMMENTS: 3, State.OUTREACH: 3,
              State.BRIEF_READY: 4, State.RESEARCHING: 5, State.QUEUED: 7, State.PARKED: 8, State.COMBINED: 9}
     return order[m.state] + (m.state == State.RESEARCHING and orchestrator.role(m) != "pi")   # a brief before a search
 
@@ -618,6 +630,12 @@ a.back { font-weight:600; text-decoration:none; }
 .card.pub .topic { color:var(--fg); }
 ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
 ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
+ul.outreach { margin:.5rem 0; padding-left:1.1rem; } ul.outreach li { margin:.6rem 0; overflow-wrap:anywhere; }
+ul.outreach .sent { margin:.25rem 0; font-size:.9rem; } ul.outreach blockquote.reply { margin:.3rem 0 .3rem .4rem; }
+fieldset.channels { border:1px solid var(--rule); border-radius:8px; margin:.8rem 0; padding:.4rem .8rem .6rem; }
+fieldset.channels legend { font-size:.85rem; font-weight:600; padding:0 .3rem; }
+label.tick.out-channel { display:flex; align-items:flex-start; margin:.45rem 0; font-weight:400; }
+label.tick.out-channel input { margin-top:.2rem; }
 li.link-row form.inline { display:inline-flex; margin:0 0 0 .4rem; vertical-align:middle; }
 p.objective { white-space:pre-line; }
 form.republish { display:flex; flex-wrap:wrap; gap:.3rem 1rem; align-items:center; margin:.6rem 0 0;
@@ -1294,10 +1312,10 @@ WORKER_BLURBS = {
 }
 ROLE_STEPS = {                             # where each worker's model is used; the rest of the pipeline is code
     "assistant": ["<strong>Source finder</strong>: searches and reads pages",
-                  "<strong>Mission finder</strong>: searches",
-                  "<strong>Contact finder</strong>: finds people (outreach only)"],
+                  "<strong>Mission finder</strong>: searches"],
     "pi": ["<strong>Theorist</strong>: refines the inspiration line",
            "<strong>Brief writer</strong>: writes the brief",
+           "<strong>Outreach agent</strong>: asks people (outreach only)",
            "<strong>Article writer</strong>: writes the article",
            "<strong>Mission finder</strong>: picks new missions"],
 }
@@ -1937,6 +1955,7 @@ SETTINGS_SECTIONS = [
     ("display", "monitor", "Display"),
     ("publication", "newspaper", "Publication"),
     ("publishing", "broadcast", "Publishing"),
+    ("outreach", "send", "Outreach"),
 ]
 
 # The nav down the Settings page's left: a click glides to its section, and scrolling lights the section in view.
@@ -2019,6 +2038,7 @@ def settings_body(request: Request, error: str = "") -> str:
         settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
         settings_section("publication", publication_section()),
         settings_section("publishing", publishing_section()),
+        settings_section("outreach", outreach_settings()),
     ])
     return f"""{err}<h1>{_("Settings")}</h1>
 <div class="settings">
@@ -2425,7 +2445,8 @@ def epic_list(missions: list[Mission]) -> str:
     return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{rows}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
-STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("research", "search", "Research"),
+STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("outreach", "people", "Outreach"),
+          ("research", "search", "Research"),
           ("queued", "clock", "Queued")]
 
 def stage_of(m: Mission) -> str:
@@ -2435,7 +2456,9 @@ def stage_of(m: Mission) -> str:
         return "research"
     if m.state in (State.ARTICLE_READY, State.DONE):  # a reviewed article, or one a human asked to publish again
         return "publishing"
-    return "writing"                       # an approved brief, the comment wait, writing
+    if m.state in (State.OUTREACH, State.AWAITING_COMMENTS):
+        return "outreach"
+    return "writing"                       # an approved brief, writing
 
 def card(m: Mission, now: list[dict] | None = None, epics: dict[str, Epic] | None = None, lab: bool = False) -> str:
     epics = {e.slug: e for e in store.all_epics()} if epics is None else epics
@@ -2784,6 +2807,108 @@ def publication_section() -> str:
             f'<textarea id="pub-about" name="about" rows="5" maxlength="{settings.ABOUT_MAX}">{escape(about_text)}</textarea>'
             f'<p><button>{_("Save publication")}</button></p></form>')
 
+OUTREACH_HOW = {"email": "an email to an address found on a page",
+                "bluesky": "a post that mentions them, from the Bluesky account under Publishing",
+                "1f916": "a reply to their comment on one of our posts"}
+OUTREACH_SETUP = {"email": "set up email below", "bluesky": "add Bluesky under Publishing",
+                  "1f916": "join 1F916 under Publishing"}
+
+def outreach_settings() -> str:
+    """Settings → Outreach: the switch, the reply wait, how many people a mission asks, which channels, and email."""
+    on = " checked" if settings.outreach_on() else ""
+    ticked = settings.outreach_channels()
+    boxes = []
+    for key, name in settings.OUTREACH_CHANNELS.items():
+        state = "" if contacts.set_up(key) else f' <span class="hint">({_("not set up")}: {_(OUTREACH_SETUP[key])})</span>'
+        boxes.append(f'<label class="tick out-channel"><input type="checkbox" name="channels" value="{key}"'
+                     f'{" checked" if key in ticked else ""}><span><strong>{name}</strong>: '
+                     f'{_(OUTREACH_HOW[key])}{state}</span></label>')
+    warn = ""
+    if settings.outreach_on() and not contacts.ready_channels():
+        warn = f'<p class="hint"><strong>{_("Outreach is on, but no ticked channel is set up. Missions skip it.")}</strong></p>'
+    elif settings.outreach_on() and not settings.site_url():
+        warn = f'<p class="hint">{_("No site address, so messages leave out the link to the site.")}</p>'
+    sample = escape(contacts.message("Jane", "the 2024 Texas grid outage",
+                                     "Did ERCOT order the shutdown before the freeze warning?"))
+    form = f"""<form method="post" action="/settings/outreach" class="actions">
+  <p class="hint">{_("After a brief is approved, the Outreach agent asks a few people one question each. It picks the person, channel and question; code writes the message:")}</p>
+  <blockquote lang="en">{sample}</blockquote>
+  <label class="switch"><input type="checkbox" role="switch" name="on" value="on"{on}> {_("Outreach")}</label>
+  <label for="out-wait">{_("Wait for replies")} <span class="hint">{_("hours; writing starts sooner if everyone answers")}</span></label>
+  <input type="number" id="out-wait" name="wait" min="0" max="{settings.OUTREACH_WAIT_MAX}" step="1"
+    value="{settings.outreach_wait_hours():g}" style="width:6rem">
+  <label for="out-n">{_("People per mission")}</label>
+  <input type="number" id="out-n" name="contacts" min="1" max="{settings.OUTREACH_CONTACTS_MAX}" step="1"
+    value="{settings.outreach_contacts()}" style="width:5rem">
+  <fieldset class="channels"><legend>{_("Channels")}</legend>{"".join(boxes)}</fieldset>
+  <p class="hint">{_("Nobody is asked twice about a mission, or more than once a week.")}</p>
+  <p><button>{_("Save outreach")}</button></p>
+</form>"""
+    return warn + form + email_settings()
+
+def email_settings() -> str:
+    cfg = settings.email_config()
+    if cfg:
+        sender = escape(f'{cfg["from_name"] or settings.publication_name()} <{cfg["from_address"]}>')
+        state = ("<p>" + _("Sending as {sender} through {server}.").format(
+                     sender=f"<strong>{sender}</strong>", server=escape(f'{cfg["smtp_host"]}:{cfg["smtp_port"]}')) + " "
+                 + (_("Replies are read from {server}.").format(server=escape(cfg["imap_host"])) if cfg["imap_host"]
+                    else _("Replies aren't read (no IMAP server).")) + "</p>"
+                 f'<form method="post" action="/settings/email" class="inline"><input type="hidden" name="forget" value="1">'
+                 f'<button>{_("Remove email")}</button></form>')
+    else:
+        state = f"<p>{_('Not set up.')}</p>"
+    val = lambda k, d="": escape(str(cfg.get(k) or d), quote=True)
+    keep = _("blank keeps the saved one") if cfg else ""
+    return f"""{part("message", _("Email"), "email")}<div class="actions">{state}
+<details{"" if cfg else " open"}><summary>{_("Change email") if cfg else _("Set up email")}</summary>
+<p class="hint">{_("Use an app password, not your account password. It is checked by logging in, then saved in {file}. Gmail: smtp.gmail.com, port 587, imap.gmail.com.").format(file="<code>data/email.json</code>")}</p>
+<form method="post" action="/settings/email">
+  <label for="em-smtp">{_("SMTP server")}</label><input type="text" id="em-smtp" name="smtp_host" required maxlength="253" value="{val("smtp_host")}" placeholder="smtp.gmail.com">
+  <label for="em-port">{_("SMTP port")} <span class="hint">587 (STARTTLS) / 465 (SSL)</span></label>
+  <input type="number" id="em-port" name="smtp_port" min="1" max="65535" value="{val("smtp_port", 587)}" style="width:6rem">
+  <label for="em-imap">{_("IMAP server")} <span class="hint">{_("optional: to read replies")}</span></label>
+  <input type="text" id="em-imap" name="imap_host" maxlength="253" value="{val("imap_host")}" placeholder="imap.gmail.com">
+  <label for="em-user">{_("Username")}</label><input type="text" id="em-user" name="username" required maxlength="253" autocomplete="username" value="{val("username")}">
+  <label for="em-pass">{_("App password")} <span class="hint">{keep}</span></label>
+  <input type="password" id="em-pass" name="password" maxlength="200" autocomplete="off"{"" if cfg else " required"}>
+  <label for="em-name">{_("From name")} <span class="hint">{_("optional: else the publication's name")}</span></label>
+  <input type="text" id="em-name" name="from_name" maxlength="60" value="{val("from_name")}" placeholder="{escape(settings.publication_name(), quote=True)}">
+  <label for="em-from">{_("From address")} <span class="hint">{_("optional: else the username")}</span></label>
+  <input type="email" id="em-from" name="from_address" maxlength="253" value="{val("from_address")}">
+  <p><button>{_("Check and save email")}</button></p>
+</form></details></div>"""
+
+async def save_outreach(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    try:
+        settings.set_outreach(form.get("on") == "on", float(str(form.get("wait") or settings.OUTREACH_WAIT)),
+                              int(str(form.get("contacts") or settings.OUTREACH_CONTACTS)),
+                              [str(c) for c in form.getlist("channels")])
+    except ValueError:
+        return go("/settings#outreach", error="outreach")
+    return go("/settings#outreach", done="outreach_saved")
+
+async def save_email(request: Request) -> Response:
+    """Log in first; only a login the mail server accepts is saved."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("forget"):
+        settings.forget_email_config()
+        return go("/settings#outreach", done="email_off")
+    f = lambda k, n=253: str(form.get(k) or "")[:n]
+    try:
+        cfg = settings.clean_email_config(f("smtp_host"), f("smtp_port", 6), f("imap_host"), f("username"),
+                                          f("password", 200), f("from_name", 60), f("from_address"))
+        await run_in_threadpool(contacts.check_email, cfg)
+    except ValueError as e:
+        return page(_("Settings"), settings_body(request, _("Email wasn't saved: {why}").format(why=e)))
+    settings.save_email_config(cfg)
+    return go("/settings#outreach", done="email_saved")
+
 async def save_search(request: Request) -> Response:
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
@@ -3043,6 +3168,29 @@ async def published_page(request: Request) -> HTMLResponse:
             f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
     return page(_("Published"), "\n".join(body), poll=True)
 
+def outreach_section(m: Mission) -> str:
+    """Who the Outreach agent asked, on which channel, the exact message, and what they answered (their words are
+    shown as text, escaped)."""
+    found = contacts.records(m.slug)
+    if not found:
+        return ""
+    items = []
+    for r in found:
+        where = (f' <a href="{escape(r.where, quote=True)}" target="_blank" rel="noopener">{_("open")}</a>'
+                 if r.where.startswith("https://") else "")
+        replies = "".join(f'<blockquote class="reply">{escape(x.get("text", ""))}'
+                          f'<span class="hint"> {escape(str(x.get("at", ""))[:16].replace("T", " "))}</span></blockquote>'
+                          for x in r.replies) or f'<p class="hint">{_("No reply yet.")}</p>'
+        if r.thanked_at:
+            replies += f'<p class="hint">{_("Thanked {when} UTC").format(when=f"{r.thanked_at:%Y-%m-%d %H:%M}")}</p>'
+        items.append(f'<li><strong>{escape(r.name)}</strong> <span class="muted">{escape(r.address)} · '
+                     f'{escape(settings.OUTREACH_CHANNELS.get(r.channel, r.channel))} · '
+                     f'{r.sent_at:%Y-%m-%d %H:%M}</span>{where}'
+                     f'<p class="sent" lang="en">{escape(r.message)}</p>{replies}</li>')
+    answered = sum(1 for r in found if r.replies)
+    title = _("Outreach: {n} of {total} answered").format(n=answered, total=len(found))
+    return heading("people", title, cls="sec") + f'<ul class="outreach">{"".join(items)}</ul>'
+
 async def mission(request: Request) -> Response:
     slug = request.path_params["slug"]
     m = store.get_mission(slug)
@@ -3069,6 +3217,7 @@ async def mission(request: Request) -> Response:
                 f'value="{escape(current.title if current else "", quote=True)}" placeholder="{_("none")}">'
                 f'<button>{_("Save")}</button></form>')
     body.append(connections(m))
+    body.append(outreach_section(m))
 
     if m.validator_notes:
         title = "Why it stopped" if m.state == State.PARKED else \
@@ -3473,6 +3622,7 @@ def board_link(slug: str, real: bool = False) -> str:
             f'title="{escape(_("Show on the board"), quote=True)}">{ICON_BOARD}{_("On the board")}</span>')
 
 PAPER = {State.QUEUED: "queued", State.RESEARCHING: "research", State.AWAITING_COMMENTS: "writing",
+         State.OUTREACH: "writing",
          State.WRITING: "writing", State.ARTICLE_READY: "publish", State.DONE: "done", State.PARKED: "parked",
          State.COMBINED: "queued"}
 
@@ -4462,6 +4612,8 @@ app = Starlette(routes=[
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/search", save_search, methods=["POST"]),
     Route("/settings/mcp", save_mcp, methods=["POST"]),
+    Route("/settings/outreach", save_outreach, methods=["POST"]),
+    Route("/settings/email", save_email, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),

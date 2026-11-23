@@ -22,11 +22,12 @@ FLOW = [
     ("finder_check", "check", "check"),    # finder._keep and the 2+ missions rule for a new epic
     ("epic_review", "human", "Review epics"),   # the epics both the Theorist and the finder propose, and its combines
     ("sources", "agent", "Sources"),
-    ("contacts", "agent", "Contacts"),
-    ("contact_check", "check", "check"),   # researcher.find_contacts' check, before the main model
     ("brief", "agent", "Brief"),
     ("source_check", "check", "check"),
     ("brief_review", "human", "Review brief"),
+    ("outreach", "agent", "Outreach"),     # only while outreach is on (OUTREACH_STEPS)
+    ("outreach_check", "check", "check"),  # contacts.send's checks on each message
+    ("replies", "agent", "Replies"),       # the reply wait
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
     ("article_rating", "agent", "Rating"), # the Research Assistant rates the checked article (agents/rater.py)
@@ -36,7 +37,8 @@ FLOW = [
 ]
 TILES = {   # key -> (icon, the line under its name on the strip)
     "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
-    "sources": ("book", "searches and reads"), "contacts": ("people", "finds people to ask"),
+    "sources": ("book", "searches and reads"), "outreach": ("send", "asks people"),
+    "replies": ("clock", "waits for answers"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
     "article_rating": ("scale", "rates the article"),
     "publisher": ("broadcast", "site and channels"),
@@ -56,20 +58,23 @@ CHECKS = {   # every code check on the strip: what it holds the step before it t
                       "needs an open mission, a reason and a new pair. Failures are dropped.",
     "finder_check": "Finder check (code): up to 3 missions, each backed by a found page and unlike existing topics; "
                     "new epic needs 2+ missions. Failures are dropped.",
-    "contact_check": "Contact check (code): names and emails must be on the pages read.",
     "source_check": "Source check (code): every claim cited, quotes on the page, 3 sites, 1+ fact, a counterpoint.",
+    "outreach_check": "Outreach check (code): a set-up channel, a real address, a first name, a short topic, one "
+                      "question; nobody asked twice or twice a week. Failures aren't sent; the agent is told why.",
     "article_check": "Article check (code): every paragraph cited to the brief's sources, exact quotes, no outside "
                      "links, opposing view cited.",
     "rating_check": "Rating check (code): the Research Assistant scores the claim and logic, intrigue and sources "
                     "1-10 each; 20 or less goes back to the writer with the reasons.",
 }
-PARKS = {"contact_check", "source_check", "article_check", "rating_check"}   # the checks that retry and then park; the rest drop
+PARKS = {"source_check", "article_check", "rating_check"}   # the checks that retry and then park; the rest drop
+
+OUTREACH_STEPS = ("outreach", "outreach_check", "replies")
 
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: contacts and their check only while outreach is on, and with auto (the
-    UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
+    """The strip's steps for this setup: outreach, its check and the reply wait only while outreach is on, and with
+    auto (the UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
     return [(k, "auto", _(AUTO_STEPS[k][0])) if auto and k in AUTO_STEPS else (k, kind, _(text))
-            for k, kind, text in FLOW if k not in ("contacts", "contact_check") or settings.OUTREACH]
+            for k, kind, text in FLOW if k not in OUTREACH_STEPS or settings.outreach_on()]
 
 def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
     """Cut the steps into lanes at each human review: lane 0, review 0, lane 1, review 1, ... Each review is the end

@@ -11,9 +11,9 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys, `data/search.json` the Brave Search key and
+`data/providers.json` the cloud model providers' API keys, `data/search.json` the Brave Search key,
 `data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
-copy): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+copy) and `data/email.json` the outreach email login (an app password): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
 ## How a task becomes a merged PR (coding agents, this repo only)
 
@@ -38,9 +38,11 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 729 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky, a
-  custom webhook, a cloud model provider, an embedding model or the Wayback Machine fails the test, and `BLUESKY_*`,
-  `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL` and every provider's key variable are cleared so a real `.env` never switches one on)
+- Tests: `pytest -q` (expects 770 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+  public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
+  server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
+  `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
+  `stub_agents` turns outreach on with a pretend channel and the stub Outreach agent; the `no_outreach` fixtures turn it off)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
   providers' keys, the 1F916 and Bluesky servers, the GitHub server and OAuth app, and the site address are looked
   up in `data/settings.json` (the
@@ -96,17 +98,18 @@ The written issue is what Will approves; nothing after it waits on him until the
 
 ```
 (Theorist: evolves the inspiration line, may propose epics, 1 mission and 1 combine, links missions; then the finder)
-QUEUED -> RESEARCHING -> BRIEF_READY -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
-          (validator,     (human:        (skipped while       (article check, (human:
-           3 attempts)     approve)       outreach is off)     then rating;    review)
-                                                               3 attempts)
+QUEUED -> RESEARCHING -> BRIEF_READY -> OUTREACH -> AWAITING_COMMENTS -> WRITING -> ARTICLE_READY -> DONE (published)
+          (validator,     (human:        (asks up to  (reply wait:        (article check, (human:
+           3 attempts)     approve)       N people)    timer or all        then rating;    review)
+                                                       answered)           3 attempts)
+          OUTREACH and the reply wait are skipped while outreach is off or no outreach channel is set up.
 QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mission; out of the flow)
 ```
 
 - Order of work (`orchestrator.work`): there are no fixed passes. The loop works until nothing is left it
   can do on its own, reading missions fresh every few seconds, always in this order:
   1. Every code step, farthest along first (`in_flow_order`): publish a reviewed article, move an approved
-     brief on, end the comment wait, start a queued mission. No model is called. Right after the first sweep,
+     brief on, check for replies and end the reply wait, start a queued mission. No model is called. Right after the first sweep,
      and whenever a sweep publishes something, the channels post.
   2. Each idle worker takes the farthest-along mission for its role that hasn't had a turn this round
      (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
@@ -214,7 +217,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 - Workers: two, set on the Settings page (`settings.WORKERS`, saved in `data/settings.json`). The
   Research Assistant (the small model: `assistant_model` in settings.json, else `MISSION_LOOP_SEARCH_MODEL`) does
   the "assistant" role: searching and reading. The Principal Investigator (the big model: `pi_model`, else
-  `MISSION_LOOP_MODEL`) does the "pi" role: the brief, the article and the finder's picks. The loop runs them on
+  `MISSION_LOOP_MODEL`) does the "pi" role: the brief, outreach, the article and the finder's picks. The loop runs them on
   two threads (`orchestrator.work`): each takes the next task for its role (`orchestrator.role`), so one
   mission's search runs while another's article is written; steps with no model run between tasks on the
   main thread. A worker switched off hands its role to the other (`settings.worker_for`), which then works one
@@ -258,8 +261,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   their date. `related.py` (code, no model) adds up to 3 published articles most like the mission by
   word overlap, any epic (its own epic ranks a little higher), with the possibilities they left open
   and the pages they cited. They are background only: the site never leaves this machine, so they
-  can't be cited, but their cited pages can be fetched again and cited fresh. With outreach on, a second small-model run
-  finds contacts, and code checks their names and emails before the main model is called.
+  can't be cited, but their cited pages can be fetched again and cited fresh. Research never looks for people to
+  contact: the Outreach agent does, after the brief is approved.
 - Writing: `agents/writer.py`, checked by `checks/article_check.py`, in steps: a plan (`ArticlePlan`: title,
   dek, the claim box, 3 to 5 sections, which claims each carries, which is the counterpoint), then each section
   on its own,
@@ -402,9 +405,42 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   pushed through while it is on is approved too. Articles are never touched: publishing always waits for
   `review`. No "brief ready" notification is sent while it is on. The flow chart draws the two reviews it takes over
   as green "Auto-approve epics" and "Auto-approve brief" steps; every code check and the article review stay as they are.
-- Outreach is OFF (milestone 4): `interview` emails nobody, so the comment wait is skipped, and
-  research doesn't look for points of contact (no POC email check). The switch is
-  `MISSION_LOOP_OUTREACH=1` in `settings.py`; turn it on only once real outreach exists.
+- Outreach (`agents/outreach_agent.py`, `contacts.py`, `outreach_tools.py`): off until switched on under Settings →
+  Outreach (`settings.outreach_on`: `outreach` in settings.json, else `MISSION_LOOP_OUTREACH=1`). While on and a ticked
+  channel is set up (`agents.outreach_channels()` = `contacts.ready_channels()`; stub runs have none), an approved brief
+  goes to `State.OUTREACH`, a Principal Investigator task (`orchestrator.role`): the agent reads the brief and, with
+  `search`, `fetch`, `pages` and the `outreach` MCP server, finds up to `settings.outreach_contacts()` (default 3, at
+  most 6) people who know first-hand and calls `send_outreach {channel, address, name, topic, question}` for each
+  (`MAX_CALLS` 30 in `TIME_LIMIT` 10 minutes; `researcher.tool_loop` with `role="pi"` and an `OutreachGuard`). It never
+  writes a message: code (`contacts.send`) fills `contacts.TEMPLATE` ("Hi {name}, I'm an AI Agent on a research mission
+  about {topic} and I need your help answering this: {question} You can learn about my missions here {site}", the site
+  part only while `settings.site_url()` has one), checks, sends and records it as an `OutreachRecord` in the mission's
+  `outreach` artifact the moment it goes, so a crash or stop loses nothing. A message that fails is not sent and the
+  agent is told why and what to fix, and tries again or picks someone else: a channel not ready, a malformed address,
+  our own address, a name that isn't a first name (or a title and surname), a topic over 12 words, a question that
+  isn't one short question ending in "?" (10 to 200 characters, no links), someone already asked on this mission or
+  about another mission within `contacts.GAP` (a week), the mission's count reached, a Bluesky post over 300
+  characters (it says by how much), a handle that doesn't resolve, a 1F916 handle that never commented on our posts,
+  a mail server's refusal. The guard refuses, before the tool runs, an email address that wasn't in any page or search
+  result of the run. The mission comes from `MISSION_LOOP_MISSION`, which `Toolbox(env=...)` gives the server, never
+  from the model. Channels: `email` (SMTP from `data/email.json`, saved on the Settings page after a login check,
+  `contacts.check_email`; port 465 SSL, else STARTTLS; replies read over IMAP by `In-Reply-To`, the quoted message cut
+  off), `bluesky` (a new post from the publishing login with a mention facet for the person's DID and a link facet on
+  the site's address, shown without its scheme; replies are the person's posts in its thread, read from
+  `settings.BLUESKY_APPVIEW`; `find_on_bluesky` searches people there) and `1f916` (a reply under the person's latest
+  comment on one of our posts, `@handle` first; `list_1f916_commenters` lists who can be asked; replies are their
+  comments under ours). Outreach never blocks: a run that asks nobody or crashes moves the mission straight to writing
+  (noted); only a stop keeps it in OUTREACH to carry on, told who was already asked. Then `AWAITING_COMMENTS` waits
+  `settings.outreach_wait_hours()` (default 48, at most 336), asking the channels for replies at most every
+  `orchestrator.REPLY_CHECK_EVERY` (10 minutes; `Mission.replies_checked_at`) and moving on early once every contact
+  answered, straight to the writer (farthest along goes first). The wait is code only, no model: each check reads the
+  replies and gives every contact who answered one canned reply (`contacts.thank`: `contacts.THANKS` plus the site
+  link, in their thread on the same channel: an email `In-Reply-To` their answer, a Bluesky reply to it, a 1F916
+  comment under it; `OutreachRecord.thanked_at`, `thanks_where`), once however many times they answer. A channel
+  that can't be read or written is skipped and tried at the next check. Replies (untrusted text, kept up to
+  `REPLY_MAX`) reach the writer as contacts' comments it may quote. The mission page lists who was asked, where, the
+  exact message and their replies; the flow strip shows Outreach, its check and Replies only while outreach is on;
+  the setup check (`doctor`) flags outreach that is on with no channel ready.
 - Claims have a `kind`: `fact` or `possibility`. The prompts treat every source as part truth, part spin.
   Research explores widely, drops only what specific evidence contradicts, and leads with pointed
   possibilities that each rest on a cited detail. A `fact` means only what the record directly shows (what
@@ -582,8 +618,9 @@ on the Research Assistant, after the article check, with its own check for the 2
 and each review shows how many missions wait on you. Researchers on the strip stand on their own step's row
 (`FlowStage.row`). Every code check is on it (`flowchart.CHECKS`, whose
 titles say what each holds its agent to): the Theorist's (`theorist.settle`) and the finder's (`finder._keep` and
-the 2+ missions rule for an epic), which drop what fails and park nothing; the contact check, with Contacts, only
-while outreach is on; the source check and the article check. So is every human review: the epics both the Theorist
+the 2+ missions rule for an epic), which drop what fails and park nothing; the outreach check (with Outreach and
+Replies, only while outreach is on), which refuses a bad message and parks nothing; the source check and the article
+check. So is every human review: the epics both the Theorist
 and the finder propose (after the finder's check; it also counts the Theorist's proposed combines), the brief and
 the article. In auto mode exactly two of them,
 the epic and brief reviews (`flowchart.AUTO_STEPS`), are drawn as automatic instead ("Auto-approve epics", "Auto-approve
@@ -670,6 +707,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Point at another Ollama | the Ollama address under Model providers on the Settings page, or `OLLAMA_HOST` in `.env` |
 | Start on a fresh clone with Ollama | Settings → Model providers → Connect Ollama (fills in each worker's model), then play |
 | Use Claude, GPT, Grok, DeepSeek, Gemini, ... | Settings → Model providers → Add a provider → paste its API key, then pick its models under Workers (or `ANTHROPIC_API_KEY` etc. in `.env` and `MISSION_LOOP_MODEL=anthropic/<model>`) |
+| Ask people about each approved brief (outreach) | Settings → Outreach: switch it on, set the reply wait and people per mission, tick channels, set up email (Bluesky and 1F916 come from Publishing) |
 | Block a source site | add the domain to `blocked_domains.txt` |
 
 Only one `run`/`loop` can work at a time (`data/loop.lock`). A UI action touches `data/WAKE`, so a

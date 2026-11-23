@@ -57,6 +57,8 @@ def role(m: Mission) -> str | None:
         return "pi" if m.gathered or m.interrupted_brief else "assistant"
     if m.state == State.WRITING:
         return "assistant" if m.checked_article else "pi"
+    if m.state == State.OUTREACH:
+        return "pi"
     return None
 
 def upcoming_role(m: Mission) -> str | None:
@@ -66,6 +68,8 @@ def upcoming_role(m: Mission) -> str | None:
     if m.state in (State.BRIEF_READY, State.AWAITING_COMMENTS):
         return "pi"
     return role(m)
+
+REPLY_CHECK_EVERY = timedelta(minutes=10)  # how often a mission waiting for replies asks the channels for them
 
 def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str:
     m.validator_notes = notes
@@ -170,19 +174,38 @@ def step(m: Mission, now) -> str | None:
     if m.state == State.BRIEF_READY:
         if not m.approved:
             return None                    # blocked on human
-        records = agents.interview(m, _brief(m), now)
-        store.save_artifact(m.slug, "outreach", records)
-        # The fixed wait only applies when someone was actually asked; no outreach, nothing to wait for.
-        m.wait_until = now + timedelta(hours=m.wait_hours) if records else now
-        m.state = State.AWAITING_COMMENTS
-        return f"asked {len(records)} POCs; waiting until {m.wait_until:%Y-%m-%d %H:%M} UTC"
+        if agents.outreach_channels() and settings.outreach_on():
+            m.state = State.OUTREACH
+            return "brief approved; outreach next"
+        store.save_artifact(m.slug, "outreach", _outreach(m))   # nobody asked: no reply wait
+        m.wait_until, m.state = now, State.AWAITING_COMMENTS
+        return "brief approved; no outreach, writing next"
+
+    if m.state == State.OUTREACH:
+        return _reach_out(m, now)
 
     if m.state == State.AWAITING_COMMENTS:
-        store.save_artifact(m.slug, "outreach", agents.check_inbox(m, _outreach(m), now))
-        if now < m.wait_until:
+        records = _outreach(m)
+        if records and (m.replies_checked_at is None or now - m.replies_checked_at >= REPLY_CHECK_EVERY):
+            m.replies_checked_at = now
+            before = sum(len(r.replies) for r in records)
+            thanked = sum(1 for r in records if r.thanked_at)
+            activity.begin(m.slug, "replies")
+            records = agents.check_replies(records, now)   # code only: reads replies and thanks whoever answered
+            store.save_artifact(m.slug, "outreach", records)
+            got = sum(len(r.replies) for r in records) - before
+            thanked = sum(1 for r in records if r.thanked_at) - thanked
+            said = f"; thanked {thanked}" if thanked else ""
+            if records and all(r.replies for r in records):
+                m.state = State.WRITING    # the next worker sweep gives it to the writer: farthest along goes first
+                return f"every contact answered ({len(records)}){said}; writing next"
+            if got:
+                return f"{got} new repl{'y' if got == 1 else 'ies'} from contacts{said}"
+        if m.wait_until and now < m.wait_until:
             return None                    # blocked on clock
         m.state = State.WRITING
-        return "wait over"
+        answered = sum(1 for r in records if r.replies)
+        return f"reply wait over ({answered} of {len(records)} answered)" if records else "wait over"
 
     if m.state == State.WRITING:
         if m.checked_article:
@@ -225,6 +248,33 @@ def step(m: Mission, now) -> str | None:
         return f"published to {location}"   # other channels pick it up right after
 
     return None
+
+def _reach_out(m: Mission, now) -> str:
+    """The Outreach agent's run. Best effort: whoever it asked is recorded as each message goes, and the mission
+    then waits for replies (settings.outreach_wait_hours) or, with nobody asked, goes straight to writing. A crash
+    moves it on too; only a stop keeps it here, to carry on with whoever is left."""
+    try:
+        activity.begin(m.slug, "outreach")
+        records = agents.outreach(m, _brief(m), now)
+    except stopping.Interrupted as e:
+        activity.fail(e)
+        asked = len(e.draft or [])
+        return f"stopped mid-outreach after asking {asked}; it carries on when the loop starts again"
+    except Exception as e:                 # never blocks: whoever was asked is already recorded
+        activity.fail(e)
+        records = _outreach(m)
+        note = f"outreach crashed ({type(e).__name__}: {e}); "
+    else:
+        note = ""
+    store.save_artifact(m.slug, "outreach", records)
+    m.state, m.replies_checked_at = State.AWAITING_COMMENTS, None
+    if not records:
+        activity.outcome("failed", "asked nobody")
+        m.wait_until = now
+        return note + "outreach asked nobody; writing next"
+    m.wait_until = now + timedelta(hours=settings.outreach_wait_hours())
+    who = ", ".join(f"{r.name} ({r.channel})" for r in records)
+    return note + f"asked {who}; waiting for replies until {m.wait_until:%Y-%m-%d %H:%M} UTC"
 
 def _article_failed(m: Mission, brief: ResearchBrief, article: Article | None, notes: str,
                     rating: ArticleRating | None = None) -> str:
@@ -379,7 +429,7 @@ def _broke(m: Mission, before: State, e: Exception, now, failed: set[str]) -> No
     store.log_event(m.slug, now, before.value, before.value, why)
 
 # Farthest along first: whatever is closest to being published goes before what has only just started.
-FLOW = [State.ARTICLE_READY, State.WRITING, State.AWAITING_COMMENTS, State.BRIEF_READY,
+FLOW = [State.ARTICLE_READY, State.WRITING, State.AWAITING_COMMENTS, State.OUTREACH, State.BRIEF_READY,
         State.RESEARCHING, State.QUEUED]
 
 def in_flow_order(missions: list[Mission]) -> list[Mission]:
@@ -388,7 +438,8 @@ def in_flow_order(missions: list[Mission]) -> list[Mission]:
                   key=lambda m: (FLOW.index(m.state), role(m) != "pi"))
 
 def _quick_steps(m: Mission, now_fn, failed: set[str]) -> int:
-    """Steps that need no model (start, outreach, the comment wait, publishing) run right away, in order."""
+    """Steps that need no model (start, moving an approved brief on, the reply wait, publishing) run right away, in
+    order."""
     changed = 0
     while role(m) is None and m.state not in (State.DONE, State.PARKED, State.COMBINED) and not STOP_FLAG.exists():
         before = m.state

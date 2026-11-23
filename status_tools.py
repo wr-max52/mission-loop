@@ -26,7 +26,8 @@ MAX_NOTES = 300
 
 LABELS = {
     State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_READY: "brief ready for human review",
-    State.AWAITING_COMMENTS: "waiting for comments", State.WRITING: "writing",
+    State.OUTREACH: "asking people (outreach)", State.AWAITING_COMMENTS: "waiting for replies",
+    State.WRITING: "writing",
     State.ARTICLE_READY: "article ready for human review", State.DONE: "published", State.PARKED: "parked (gave up)",
     State.COMBINED: "combined into a bigger mission",
 }

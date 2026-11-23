@@ -247,6 +247,7 @@ def test_status_colors_on_cards_and_pills(client):
 
 def test_flow_strip_is_always_shown_and_follows_the_runtime_flow(client, monkeypatch):
     """Agents on the track, code checks as blocks right after what they check, human reviews as sidesteps."""
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
     html = client.get("/").text
     assert 'id="flow" class="flow off"' in html and "Loop off" in html
     assert f'<script src="{ui.asset("flow.js")}" defer></script>' in html

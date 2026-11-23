@@ -8,7 +8,8 @@ class State(str, Enum):
     QUEUED = "QUEUED"
     RESEARCHING = "RESEARCHING"
     BRIEF_READY = "BRIEF_READY"            # waits for human approval
-    AWAITING_COMMENTS = "AWAITING_COMMENTS"
+    OUTREACH = "OUTREACH"                  # the Outreach agent asks people a question (only while outreach is on)
+    AWAITING_COMMENTS = "AWAITING_COMMENTS"  # waits for replies, up to the outreach timer
     WRITING = "WRITING"
     ARTICLE_READY = "ARTICLE_READY"        # waits for human review
     DONE = "DONE"
@@ -29,8 +30,9 @@ class Mission(BaseModel):
     attempts: int = 0                      # research attempts
     write_attempts: int = 0                # writer attempts
     max_attempts: int = 3
-    wait_hours: float = 48                 # fixed; comments never end it early
-    wait_until: datetime | None = None
+    wait_hours: float = 48                 # unused: the reply wait is settings.outreach_wait_hours()
+    wait_until: datetime | None = None     # the reply wait ends then (or once every contact has answered)
+    replies_checked_at: datetime | None = None   # when the channels were last asked for replies
     approved: bool = False
     reviewed: bool = False
     validator_notes: str = ""              # validator failures or human feedback
@@ -146,13 +148,6 @@ class Source(BaseModel):
     quote: str                             # exact sentence copied from the page
     stance: Literal["supports", "contradicts"]
 
-class POC(BaseModel):
-    name: str
-    role: str
-    email: str
-    contact_source_url: str                # public page where the email appears
-    why_them: str
-
 class ResearchBrief(BaseModel):
     # The model writes fields in this order. Claims come last: a model stuck repeating claims hits the reply
     # cap there, and a cut-off draft still has the sources and counterpoint its claims rely on.
@@ -160,8 +155,6 @@ class ResearchBrief(BaseModel):
     sources: list[Source]
     counterpoint: str
     claims: list[Claim]
-    pocs: list[POC] = []                   # validator requires 3+ only when outreach is on
-    question_for_pocs: str = ""
 
     @model_validator(mode="after")
     def _short_ids(self):
@@ -216,10 +209,19 @@ class RejectedBrief(BaseModel):
     notes: str                             # the validator's verdict on this exact brief
 
 class OutreachRecord(BaseModel):
-    poc_email: str
-    gmail_thread_id: str
+    """One person the Outreach agent asked (contacts.send writes it the moment the message is sent)."""
+    channel: str                           # "email", "bluesky" or "1f916"
+    address: str                           # their email address, Bluesky handle or 1F916 handle
+    name: str
+    topic: str
+    question: str
+    message: str                           # exactly what was sent
     sent_at: datetime
-    replies: list[dict] = []
+    where: str = ""                        # where it can be read: the Bluesky post, the 1F916 comment, "email"
+    ref: str = ""                          # how replies are found: the post's at:// uri, "post:comment", Message-ID
+    replies: list[dict] = []               # {"id", "from", "text", "at", "is_comment": True}: the contact's answers
+    thanked_at: datetime | None = None     # when contacts.thank sent them THANKS, once, after their first answer
+    thanks_where: str = ""                 # where that thank-you can be read: a Bluesky post, a 1F916 comment, "email"
 
 class Section(BaseModel):
     heading: str
@@ -361,10 +363,9 @@ def cited_ids(text: str) -> list[str]:
 
 class Evidence(BaseModel):
     """What the Research Assistant gathered for one research attempt: its whole search-and-read transcript
-    (system prompt, tool calls, fetched pages) and, with outreach on, its code-checked contacts. The Principal
-    Investigator writes the brief from it, possibly in a later pass."""
+    (system prompt, tool calls, fetched pages). The Principal Investigator writes the brief from it, possibly in a
+    later pass."""
     messages: list[dict] = []
-    pocs: list[POC] | None = None
     finished: bool = True                  # False: a stop (or a killed loop) cut the search short; it carries on
     attempt: int = 0                       # the research attempt it belongs to, so carrying on doesn't count anew
     seconds: float = 0                     # search time spent so far, out of the source finder's limit

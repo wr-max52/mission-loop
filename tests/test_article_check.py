@@ -1,5 +1,5 @@
 from checks.article_check import check_article, MIN_WORDS
-from contracts import Mission, ResearchBrief, Source, POC, Claim, Article, Section, OutreachRecord
+from contracts import Mission, ResearchBrief, Source, Claim, Article, Section, OutreachRecord
 
 M = Mission(slug="a", topic="t")
 Q1 = "The committee advanced the bill by a vote of 14 to 9 on March 3."
@@ -11,10 +11,7 @@ BRIEF = ResearchBrief(
     counterpoint="Critics say it duplicates rules",
     sources=[Source(id="gov", url="https://congress.gov/x", title="G", quote=Q1, stance="supports"),
              Source(id="news", url="https://news.example/y", title="N", quote=Q1, stance="supports"),
-             Source(id="op", url="https://op.example/z", title="O", quote=Q2, stance="contradicts")],
-    pocs=[POC(name=f"P{i}", role="r", email=f"p{i}@x.org", contact_source_url="https://x.org", why_them="w")
-          for i in range(3)],
-    question_for_pocs="?")
+             Source(id="op", url="https://op.example/z", title="O", quote=Q2, stance="contradicts")])
 
 def article(**sections) -> Article:
     secs = sections or {
@@ -58,10 +55,11 @@ def test_short_scare_quotes_are_allowed():
     ok, notes = check_article(M, BRIEF, a)
     assert ok, notes
 
-def test_poc_comment_can_be_quoted():
+def test_contact_reply_can_be_quoted():
     said = "We expect a floor vote before the August recess begins."
-    rec = OutreachRecord(poc_email="p0@x.org", gmail_thread_id="t", sent_at="2026-11-02T09:00:00Z",
-                         replies=[{"is_comment": True, "from": "P0", "text": said}])
+    rec = OutreachRecord(channel="email", address="p0@x.org", name="Pat", topic="the bill", question="Will it pass?",
+                         message="Hi Pat", sent_at="2026-11-02T09:00:00Z",
+                         replies=[{"is_comment": True, "from": "Pat", "text": said}])
     a = article()
     a.sections[0].paragraphs[1] = f'One aide said "{said}" [gov]. {FILL}'
     assert not check_article(M, BRIEF, a)[0]

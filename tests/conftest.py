@@ -1,5 +1,5 @@
 import httpx, pytest
-import agents, doctor, library, orchestrator, settings, store, wayback
+import agents, contacts, doctor, library, orchestrator, settings, store, wayback
 from agents import bluesky, custom, f916, github, llm, providers, stubs, toolbox
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
@@ -10,6 +10,9 @@ FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
 
 def _no_network(request):
     raise AssertionError(f"a test tried to reach the network: {request.method} {request.url}")
+
+def _no_mail(*args, **kwargs):
+    raise AssertionError(f"a test tried to reach a mail server: {args}")
 
 @pytest.fixture(autouse=True)
 def fresh(tmp_path, monkeypatch):
@@ -24,6 +27,9 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(github, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(providers, "TRANSPORT", httpx.MockTransport(_no_network))
     monkeypatch.setattr(library, "TRANSPORT", httpx.MockTransport(_no_network))
+    monkeypatch.setattr(contacts, "TRANSPORT", httpx.MockTransport(_no_network))   # Bluesky's public read API
+    for name in ("SMTP", "SMTP_SSL", "IMAP"):                     # outreach email: never a real mail server
+        monkeypatch.setattr(contacts, name, _no_mail)
     providers.forget_models()                                     # no model list carries over between tests
     for spec in settings.PROVIDERS.values():                      # a real .env must never connect a cloud provider
         for var in (spec.get("key_env"), spec.get("url_env")):
@@ -41,7 +47,7 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
     monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
     for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL", "MISSION_LOOP_GITHUB_URL",
-                "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL"):
+                "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL", "MISSION_LOOP_OUTREACH"):
         monkeypatch.delenv(var, raising=False)           # nor may a real .env point tests at another server
     monkeypatch.setenv("MISSION_LOOP_SEARCH_MODEL", "small-test:1b")   # this test machine's config: the code has
     monkeypatch.setenv("MISSION_LOOP_MODEL", "big-test:30b")           # no models of its own
@@ -50,7 +56,11 @@ def fresh(tmp_path, monkeypatch):
 @pytest.fixture
 def stub_agents(monkeypatch):
     """Route every model-backed agent to stubs so loop tests never touch Ollama or the network.
-    publish stays real: it only writes files into the test's own folder."""
-    for name in ("theorize", "find_missions", "gather", "write_brief", "validate", "interview", "write", "check_article",
-                 "rate_article"):
+    publish stays real: it only writes files into the test's own folder. Outreach is on with a pretend channel, so
+    an approved brief goes through the stub Outreach agent (three pretend contacts) and the reply wait; the
+    no_outreach fixtures turn it off."""
+    for name in ("theorize", "find_missions", "gather", "write_brief", "validate", "outreach", "check_replies",
+                 "write", "check_article", "rate_article"):
         monkeypatch.setattr(agents, name, getattr(stubs, name))
+    monkeypatch.setattr(agents, "outreach_channels", lambda: ["email"])
+    monkeypatch.setattr(settings, "outreach_on", lambda: True)

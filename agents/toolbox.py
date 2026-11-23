@@ -50,9 +50,10 @@ def server_status(names: list[str], config_path: Path | None = None) -> dict[str
     return {name: unavailable(cfg[name]) if name in cfg else "not defined in mcp.json" for name in names}
 
 class Toolbox:
-    def __init__(self, enabled: list[str], config_path: Path | None = None):
+    def __init__(self, enabled: list[str], config_path: Path | None = None, env: dict | None = None):
         self.enabled = enabled
         self.config_path = config_path or CONFIG
+        self.extra_env = env or {}         # given to every server it starts (the outreach server's mission)
         self.tools: list[dict] = []        # Ollama tool schemas
         self._owner: dict[str, ClientSession] = {}
         self.server: dict[str, str] = {}   # tool name -> the mcp.json server it came from
@@ -69,7 +70,7 @@ class Toolbox:
             if why:
                 self.skipped[name] = why
                 continue
-            env = {**os.environ, **{k: _expand(v) for k, v in spec.get("env", {}).items()}}
+            env = {**os.environ, **self.extra_env, **{k: _expand(v) for k, v in spec.get("env", {}).items()}}
             # "python" means this interpreter: launchd's PATH doesn't include the venv
             command = sys.executable if spec["command"] == "python" else spec["command"]
             params = StdioServerParameters(command=command, args=[self._local(_expand(a)) for a in spec.get("args", [])],

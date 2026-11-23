@@ -23,5 +23,9 @@
   "library": {
     "command": "python",
     "args": ["library_tools.py"]
+  },
+  "outreach": {
+    "command": "python",
+    "args": ["outreach_tools.py"]
   }
 }

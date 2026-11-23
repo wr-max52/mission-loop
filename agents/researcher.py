@@ -1,17 +1,15 @@
 """Research agent, in two steps that can run in different passes and side by side with other missions:
-gather (the Research Assistant's model finds sources, and contacts) and write_brief (the Principal
+gather (the Research Assistant's model finds sources) and write_brief (the Principal
 Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio, json, re, time
 from urllib.parse import urlparse
-from pydantic import BaseModel, ValidationError
-import activity, checkpoint, related, settings, stopping, trail
-from contracts import ClaimSet, Evidence, Mission, POC, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
+import activity, checkpoint, related, stopping, trail
+from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick
 from agents import llm
 from checks import validator
 from agents.toolbox import Toolbox
 
 MAX_TOOL_CALLS = 40                        # sources run
-MAX_CONTACT_CALLS = 20                     # contacts run (outreach only)
 MAX_REFUSED = 3                            # calls refused in a row (repeats, unreadable sites) before the run ends
 LOW_BUDGET = 10                            # from here on every result says how many calls are left
 SOURCE_TIME_LIMIT = 15 * 60                # seconds the source finder may run before it must stop
@@ -84,32 +82,9 @@ Rules:
   and cite it with stance "contradicts" if you find one. If no source pushes back, do not invent one or
   mislabel a supporting source: write the counterpoint as the strongest objection a skeptic would raise,
   and say what evidence would show the thesis wrong.
-{pocs}- When you have enough evidence, stop calling tools and reply with the word DONE.
+- Do not look for people to contact; the Outreach agent does that after the brief is approved.
+- When you have enough evidence, stop calling tools and reply with the word DONE.
 {notes}"""
-
-POCS_LATER = "- Do not look for points of contact; a separate run finds them.\n"
-NO_POC_RULE = "- Do not look for points of contact; leave pocs as an empty list.\n"
-
-CONTACTS = """You are finding people to interview.
-Topic: {topic}
-Mission: {objective}
-
-Find at least 3 points of contact (experts, researchers, press offices, spokespeople) on this topic.
-Work in this order for each person:
-1. Search for the person or their organisation.
-2. Fetch a public HTML page that should show their email: a staff, faculty, author or press contact
-   page (not a PDF or contact form).
-3. Read the fetched text. Keep the person only if their name AND their email address are both
-   in the text of that fetched page. Record that page as contact_source_url.
-Rules:
-- Search results are not proof. An email seen only in a search result does not count.
-- Never guess or build an email address from a name.
-- If a page has no email, fetch a different page or move on to another person.
-- When you have 3 contacts whose emails you saw on fetched pages, stop calling tools and reply DONE.
-{notes}"""
-
-LIST_CONTACTS = ("Now list the contacts as JSON matching the schema. Include only people whose name "
-                 "and email you saw on a page you fetched, with that page as contact_source_url.")
 
 # The small model gathers the evidence; the main model makes these calls when it writes the brief.
 KIND_RULE = ("Treat every source above as part truth, part spin. Drop only what specific evidence contradicts "
@@ -141,9 +116,6 @@ REVISE_CLAIMS = (" The last brief failed its check: its claims and the problems 
 class ResearchFailed(Exception):
     pass
 
-class Contacts(BaseModel):
-    contacts: list[POC]
-
 def _failed_source_ids(notes: str) -> set[str]:
     """The validator starts every per-source problem with "<source id>: "."""
     return {line.split(":", 1)[0] for line in notes.splitlines()}
@@ -166,10 +138,6 @@ update any claim that cites a source you replace:
     if not m.validator_notes:
         return ""
     return f"\nYour previous brief was rejected. Fix every problem below:\n{m.validator_notes}\n"
-
-def _contact_notes(m: Mission) -> str:
-    lines = [l for l in m.validator_notes.splitlines() if l.startswith("POC ")]
-    return "\nLast time these contacts failed the check. Do not repeat them:\n" + "\n".join(lines) + "\n" if lines else ""
 
 def _tool_servers(m: Mission) -> list[str]:
     """Saved missions list only search and fetch, so anything that can fetch also gets the page tools."""
@@ -270,19 +238,22 @@ def _calls_made(messages: list) -> int:
     return sum(1 for m in messages if m.get("role") == "tool" and not (m.get("content") or "").startswith("Not run:"))
 
 async def tool_loop(system: str, tb, budget: int, time_limit: float | None = None, *, start: list | None = None,
-                    run: SearchRun | None = None, saved=None) -> list:
+                    run: SearchRun | None = None, saved=None, role: str = "assistant", guard: Guard | None = None) -> list:
     """One run of the small model: search and fetch until it stops or the budget or time runs out.
     Running out of time works like running out of budget: the run keeps what it found so far.
     So does the stop button: the turn in flight may finish, then the run ends without its tool calls, and
     run.stopped says so. start carries on a saved transcript, with the budget and time it has left (run.calls,
-    run.seconds); saved(messages), if given, is called after every tool result, so a killed loop loses nothing."""
+    run.seconds); saved(messages), if given, is called after every tool result, so a killed loop loses nothing.
+    role picks the worker whose model runs it (the Outreach agent runs on the Principal Investigator's); guard
+    replaces the search's Guard."""
     run = run or SearchRun()
     if start:
         messages = list(start) + [{"role": "user", "content": CARRY_ON}]
     else:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": "Begin."}]
     calls, spent = run.calls, run.seconds
-    guard = Guard([t["function"]["name"] for t in tb.tools])
+    guard = guard or Guard([t["function"]["name"] for t in tb.tools])
+    model = llm.model_for(role)
     started = time.monotonic() - spent
     left = None if time_limit is None else max(time_limit - spent, 1)
     try:
@@ -295,9 +266,9 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
                     print("search stopped: it kept making calls that can't help; continuing with what it found", flush=True)
                     trail.record("note", "search stopped: it kept making calls that can't help")
                     break
-                messages = llm.compact(messages, llm.TURN_TOKENS, llm.model_for("assistant"))   # kept cut: the next turns reuse the prompt cache
+                messages = llm.compact(messages, llm.TURN_TOKENS, model)   # kept cut: the next turns reuse the prompt cache
                 try:
-                    msg = await llm.chat(messages, tools=tb.tools, model=llm.model_for("assistant"))
+                    msg = await llm.chat(messages, tools=tb.tools, model=model)
                 except llm.Cut:
                     run.stopped = True
                     break
@@ -336,23 +307,6 @@ async def tool_loop(system: str, tb, budget: int, time_limit: float | None = Non
     run.calls, run.seconds = calls, time.monotonic() - started
     return messages
 
-async def find_contacts(m: Mission, tb) -> list[POC]:
-    """Contacts run, then a code check: names and emails must really be on the cited pages."""
-    messages = await tool_loop(CONTACTS.format(topic=m.topic, objective=m.objective or m.topic,
-                                               notes=_contact_notes(m)), tb, MAX_CONTACT_CALLS)
-    messages.append({"role": "user", "content": LIST_CONTACTS})
-    msg = await llm.chat(messages, format=Contacts.model_json_schema(), model=llm.model_for("assistant"))
-    try:
-        found = Contacts.model_validate_json(msg.content).contacts
-    except ValidationError as e:
-        raise ResearchFailed(f"contacts run returned invalid JSON: {e}")
-    problems = [validator.poc_problems([p]) for p in found]
-    good = [p for p, bad in zip(found, problems) if not bad]
-    if len(good) < validator.MIN_POCS:
-        notes = "\n".join(n for bad in problems for n in bad)
-        raise ResearchFailed(f"only {len(good)} verified contact(s); need {validator.MIN_POCS}\n{notes}")
-    return good
-
 def _plain(msg) -> dict:
     """A transcript message as plain JSON, so it can be saved between the two steps. The small model's
     thinking is left out: the brief writer only needs what it did and what it found."""
@@ -386,27 +340,22 @@ async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox, resume: Evid
     back unfinished and carries on from it next time (resume), with the budget and time it has left."""
     today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
     system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
-                           past=related.reference_block(m),
-                           pocs=POCS_LATER if settings.OUTREACH else NO_POC_RULE)
+                           past=related.reference_block(m))
     start = resume.messages if resume and resume.messages else None
     run = SearchRun(_calls_made(start) if start else 0, resume.seconds if start else 0)
     if start:
         trail.record("note", f"search carries on after {run.calls} tool call(s)")
 
-    def evidence(messages, finished: bool, pocs=None) -> Evidence:
-        return Evidence(messages=[_plain(x) for x in messages], pocs=pocs, finished=finished,
+    def evidence(messages, finished: bool) -> Evidence:
+        return Evidence(messages=[_plain(x) for x in messages], finished=finished,
                         attempt=m.attempts, seconds=run.seconds)
 
-    pocs = None
     async with toolbox_factory(_tool_servers(m)) as tb:
         messages = await tool_loop(system, tb, MAX_TOOL_CALLS, SOURCE_TIME_LIMIT, start=start, run=run,
                                    saved=lambda msgs: checkpoint.save(m, evidence=evidence(msgs, False)))
         if run.stopped:
             return evidence(messages, False)
-        if settings.OUTREACH and not stopping.requested():   # separate run; a failed check stops here, before the main model
-            activity.begin(m.slug, "contacts")
-            pocs = await find_contacts(m, tb)
-    return evidence(messages, True, pocs)
+    return evidence(messages, True)
 
 def _unique(claims: list) -> list:
     """Claims with repeats left out, first copy kept."""
@@ -553,11 +502,8 @@ async def run_write_brief(m: Mission, evidence: Evidence) -> ResearchBrief:
     return _brief(pick, claims, evidence)
 
 def _brief(pick: SourcePick, claims: ClaimSet, evidence: Evidence) -> ResearchBrief:
-    brief = ResearchBrief(thesis=pick.thesis, sources=pick.sources, counterpoint=claims.counterpoint,
-                          claims=_unique(claims.claims))
-    if evidence.pocs is not None:
-        brief.pocs = evidence.pocs         # code-checked contacts; the model can't swap them
-    return brief
+    return ResearchBrief(thesis=pick.thesis, sources=pick.sources, counterpoint=claims.counterpoint,
+                         claims=_unique(claims.claims))
 
 async def run_research(m: Mission, now=None, toolbox_factory=Toolbox) -> ResearchBrief:
     """Both steps back to back."""

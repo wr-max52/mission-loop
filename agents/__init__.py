@@ -1,13 +1,14 @@
 """Switchboard: the ONLY place that decides which implementation each agent uses.
 
-The orchestrator calls agents.theorize / tidy_board / find_missions / gather / write_brief / validate / interview / check_inbox / write /
-check_article / rate_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
+The orchestrator calls agents.theorize / tidy_board / find_missions / gather / write_brief / validate / outreach /
+check_replies / write / check_article / rate_article / publish, and posts to every module in CHANNELS. Swapping a stub for a real agent means editing this file and nothing else.
 The UI and CLI call agents.chat, Researcher Chat, which reads the loop and the web through MCP, and the avatar
 studio calls agents.edit_avatar, which edits a sprite spec (SPRITES.md) from what a person asks.
 Set MISSION_LOOP_STUBS=1 to run the whole loop on stubs (no Ollama, no network).
 
-Outreach is OFF for now (milestone 4): the real path uses no_interview, which emails nobody,
-so missions skip the comment wait and go straight to writing.
+Outreach runs only while it is switched on (Settings → Outreach) and a channel for it is set up
+(outreach_channels()); otherwise missions skip it and the reply wait and go straight to writing. Stub runs never
+contact anyone.
 
 Publishing: `publish` writes the local site and its feed (always on): the foundation every channel posts from.
 channels() is everything else, in order: the built-in CHANNELS, then the custom ones set up on the Settings page
@@ -17,15 +18,17 @@ data/github.json holds a token and a linked repo.
 """
 import os
 
-from agents.stubs import check_inbox
 from agents.publisher import publish       # local files only, so stubs and real mode share it
 from agents import bluesky, custom, f916, github
 
 if os.environ.get("MISSION_LOOP_STUBS") == "1":
-    from agents.stubs import theorize, tidy_board, find_missions, gather, write_brief, validate, interview, write, check_article, rate_article, chat, chat_models, chat_catalog, chat_web, edit_avatar, avatar_models
+    from agents.stubs import theorize, tidy_board, find_missions, gather, write_brief, validate, outreach, check_replies, write, check_article, rate_article, chat, chat_models, chat_catalog, chat_web, edit_avatar, avatar_models
 
     def ready() -> tuple[bool, str]:
         return True, "stubs"
+
+    def outreach_channels() -> list[str]:
+        return []                          # stubs never contact anyone
 
     CHANNELS = []
 
@@ -45,7 +48,8 @@ else:
     from agents.finder import find_missions
     from agents.researcher import gather, write_brief
     from checks.validator import validate
-    from agents.stubs import no_interview as interview
+    from agents.outreach_agent import reach_out as outreach
+    from contacts import check_replies, ready_channels as outreach_channels
     from agents.writer import write
     from checks.article_check import check_article
     from agents.rater import rate as rate_article   # the Research Assistant's rating of a checked article
@@ -61,6 +65,6 @@ else:
         """Every channel beyond the local site: the built-in ones, then the custom ones."""
         return list(CHANNELS) + custom.channels()
 
-__all__ = ["theorize", "tidy_board", "find_missions", "gather", "write_brief", "validate", "interview", "check_inbox", "write", "check_article",
+__all__ = ["theorize", "tidy_board", "find_missions", "gather", "write_brief", "validate", "outreach", "check_replies", "outreach_channels", "write", "check_article",
            "rate_article", "publish", "CHANNELS", "channels", "f916_enabled", "bluesky_enabled", "github_enabled", "ready", "chat",
            "chat_models", "chat_catalog", "chat_web", "edit_avatar", "avatar_models"]

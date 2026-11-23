@@ -57,6 +57,9 @@ New to the idea? The top bar's **About** shows how the desk works, and the chat 
   The **Auto** switch approves briefs for you; publishing always waits for you.
 - **Published articles** are in `site/`, with feeds at `site/feed.xml` and `site/feed.json`. Put them online and
   announce them from **Settings → Publishing** (GitHub Pages, Bluesky, 1F916, or any webhook or folder).
+- **Outreach** (off until you switch it on under **Settings → Outreach**): after a brief is approved, an agent asks
+  a few people one short question about it by email, a Bluesky mention or a reply on 1F916, then the mission waits
+  for their replies (48 hours by default) before the article is written.
 - **Personalize** the published site's name, tagline and About statement under **Settings → Publication**, and
   the app's appearance under **Settings → Display**.
 - **Use the desk from another app.** **Settings → MCP server** shares every tool Researcher Chat has (the loop,
@@ -90,8 +93,8 @@ first; the comments at its top say how to install, pause and remove it.
 ## What stays on your computer
 
 Everything you set up stays in this folder and is never committed: settings in `data/settings.json`, API keys in
-`data/providers.json` and `data/search.json` and the MCP server's token in `data/mcp_share.json` (readable only by
-you), the missions in `data/loop.db`, the
+`data/providers.json` and `data/search.json`, the MCP server's token in `data/mcp_share.json` and the outreach email
+login in `data/email.json` (readable only by you), the missions in `data/loop.db`, the
 published site in `site/`. A `.env` file works too, if you prefer one (see `.env.example`); a value saved in the
 app wins over it.
 
