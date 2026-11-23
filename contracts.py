@@ -251,6 +251,7 @@ class ArticleDraft(BaseModel):
     """What the writer has so far: its plan, and the sections written and checked, in plan order."""
     plan: ArticlePlan
     sections: list[Section] = []
+    fixes: list[str] = []                  # what code cleaned up in the sections as they stand ("'Heading': ...")
 
 RATING_FACTORS = {                         # ArticleRating field -> what it rates, as shown to people
     "logic": "Strength of the claim and its logic",
