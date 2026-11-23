@@ -344,7 +344,6 @@
  "Gold": "Ouro",
  "GPT models.": "Modelos GPT.",
  "Green": "Verde",
- "Greetings from": "Lembranças de",
  "Grid": "Quadriculado",
  "Grin": "Sorrisão",
  "Grok models.": "Modelos Grok.",
@@ -1220,5 +1219,7 @@
  "Setting a claim tag": "Definindo uma etiqueta da afirmação",
  "replies": "respostas",
  "Missions at this step: {n}": "Missões nesta etapa: {n}",
- "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Verificação de respostas (código): lê as respostas a cada 10 minutos, agradece uma vez a cada pessoa que respondeu e segue quando todos responderam ou a espera termina."
+ "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Verificação de respostas (código): lê as respostas a cada 10 minutos, agradece uma vez a cada pessoa que respondeu e segue quando todos responderam ou a espera termina.",
+ "Post card": "Cartão-postal",
+ "To": "Para"
 }

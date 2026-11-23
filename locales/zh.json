@@ -344,7 +344,6 @@
  "Gold": "金",
  "GPT models.": "GPT 模型。",
  "Green": "绿",
- "Greetings from": "来自",
  "Grid": "网格",
  "Grin": "咧嘴笑",
  "Grok models.": "Grok 模型。",
@@ -1220,5 +1219,7 @@
  "Setting a claim tag": "正在设置论断标签",
  "replies": "回复",
  "Missions at this step: {n}": "此步骤的任务：{n}",
- "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "回复检查（代码）：每 10 分钟读取一次回复，向每位回答的人致谢一次，所有人都回答或等待结束后继续。"
+ "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "回复检查（代码）：每 10 分钟读取一次回复，向每位回答的人致谢一次，所有人都回答或等待结束后继续。",
+ "Post card": "明信片",
+ "To": "致"
 }

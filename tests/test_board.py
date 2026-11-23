@@ -167,6 +167,18 @@ def test_a_queued_mission_shows_its_objective(client):
     m = note(client.get("/api/board").json(), "m:q")
     assert (m["thesis"], m["thesis_label"], m["open"], m["stage"]) == ("Find the money.", "Objective", "Open mission", "Queued")
 
+def test_a_published_postcard_carries_its_date_and_draws_from_thirty_stamps(client):
+    from datetime import datetime, timezone
+    store.save_mission(Mission(slug="p", topic="Published topic", state=State.DONE,
+                               published_at=datetime(2026, 11, 20, 12, tzinfo=timezone.utc)))
+    store.save_mission(Mission(slug="q", topic="Queued topic"))
+    data = client.get("/api/board").json()
+    assert (note(data, "m:p")["paper"], note(data, "m:p")["posted"]) == ("done", "2026-11-20")   # the postmark's date
+    assert note(data, "m:q")["posted"] == ""
+    js = (Path(ui.__file__).parent / "assets" / "board.js").read_text()
+    stamps = js.split("const STAMPS = [", 1)[1].split("];", 1)[0]
+    assert stamps.count('["') >= 30                                     # (#143) enough that the fridge rarely repeats
+
 def test_dragging_a_note_is_saved(client):
     store.save_mission(Mission(slug="q", topic="Queued topic"))
     r = client.post("/board/move", json={"id": "m:q", "x": 123.4, "y": -50, "size": 1.2})

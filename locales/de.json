@@ -344,7 +344,6 @@
  "Gold": "Gold",
  "GPT models.": "GPT-Modelle.",
  "Green": "Grün",
- "Greetings from": "Grüße aus",
  "Grid": "Raster",
  "Grin": "Grinsen",
  "Grok models.": "Grok-Modelle.",
@@ -1220,5 +1219,7 @@
  "Setting a claim tag": "Setzt ein Aussage-Etikett",
  "replies": "Antworten",
  "Missions at this step: {n}": "Missionen bei diesem Schritt: {n}",
- "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Antwortprüfung (Code): liest alle 10 Minuten die Antworten, dankt jeder Person, die geantwortet hat, einmal und geht weiter, sobald alle geantwortet haben oder die Wartezeit endet."
+ "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Antwortprüfung (Code): liest alle 10 Minuten die Antworten, dankt jeder Person, die geantwortet hat, einmal und geht weiter, sobald alle geantwortet haben oder die Wartezeit endet.",
+ "Post card": "Postkarte",
+ "To": "An"
 }
