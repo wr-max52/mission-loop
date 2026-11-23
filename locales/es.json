@@ -1045,6 +1045,7 @@
  "From name": "Nombre del remitente",
  "IMAP server": "Servidor IMAP",
  "No reply yet.": "Sin respuesta aún.",
+ "Thanked {when} UTC": "Agradecido el {when} UTC",
  "No site address, so messages leave out the link to the site.": "Sin dirección del sitio, los mensajes omiten el enlace al sitio.",
  "Nobody is asked twice about a mission, or more than once a week.": "A nadie se le pregunta dos veces por una misión ni más de una vez por semana.",
  "Not set up.": "No configurado.",

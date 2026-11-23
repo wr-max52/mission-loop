@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import httpx, pytest
-import orchestrator, run as cli, settings, store, ui
+import clock, orchestrator, run as cli, settings, store, ui
 from agents import f916, publisher, stubs
 from contracts import Mission, State, Article, Section
 from starlette.testclient import TestClient
@@ -163,7 +163,8 @@ def test_join_saves_the_key_privately_and_checks_it(site):
     with pytest.raises(FileExistsError):
         f916.register("second", "m")
 
-def test_ui_and_status_show_where_it_was_published(joined, capsys):
+def test_ui_and_status_show_where_it_was_published(joined, capsys, monkeypatch):
+    monkeypatch.setattr(clock, "now", lambda: T0 + timedelta(hours=2))   # status reads the clock: the same day as T0
     published("a", T0)
     published("b", T0 + timedelta(hours=1))
     client = TestClient(ui.app)

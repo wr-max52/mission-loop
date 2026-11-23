@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 765 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 770 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
   server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -433,7 +433,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (noted); only a stop keeps it in OUTREACH to carry on, told who was already asked. Then `AWAITING_COMMENTS` waits
   `settings.outreach_wait_hours()` (default 48, at most 336), asking the channels for replies at most every
   `orchestrator.REPLY_CHECK_EVERY` (10 minutes; `Mission.replies_checked_at`) and moving on early once every contact
-  answered. A channel that can't be read is skipped and tried at the next check. Replies (untrusted text, kept up to
+  answered, straight to the writer (farthest along goes first). The wait is code only, no model: each check reads the
+  replies and gives every contact who answered one canned reply (`contacts.thank`: `contacts.THANKS` plus the site
+  link, in their thread on the same channel: an email `In-Reply-To` their answer, a Bluesky reply to it, a 1F916
+  comment under it; `OutreachRecord.thanked_at`, `thanks_where`), once however many times they answer. A channel
+  that can't be read or written is skipped and tried at the next check. Replies (untrusted text, kept up to
   `REPLY_MAX`) reach the writer as contacts' comments it may quote. The mission page lists who was asked, where, the
   exact message and their replies; the flow strip shows Outreach, its check and Replies only while outreach is on;
   the setup check (`doctor`) flags outreach that is on with no channel ready.

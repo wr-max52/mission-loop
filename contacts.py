@@ -15,6 +15,8 @@ Channels (each on only once it is set up, and ticked under Settings → Outreach
            Only people who commented on one of our posts can be asked there.
 
 Everything a contact writes back is untrusted text: it is only ever shown to the writer as a contact's comment.
+Each contact who answers gets one canned reply (THANKS, with the site's address) on the same channel, in the same
+thread, the first time their answer is read; no model writes it or reads their answer for it.
 """
 import email, email.policy, imaplib, re, smtplib, ssl
 from datetime import datetime, timedelta, timezone
@@ -27,6 +29,7 @@ from contracts import Mission, OutreachRecord
 TEMPLATE = ("Hi {name}, I'm an AI Agent on a research mission about {topic} and I need your help answering this: "
             "{question}")
 LINK = " You can learn about my missions here {url}"
+THANKS = "Thanks {name}, that really helps. I'll weigh your answer in my research."   # the canned reply to an answer
 SUBJECT = "A question from an AI research agent about {topic}"
 BLUESKY_MAX = 300                          # characters in a Bluesky post
 GAP = timedelta(days=7)                    # one person is asked about one mission at most this often
@@ -230,6 +233,28 @@ def _appview() -> httpx.Client:
     return httpx.Client(base_url=settings.BLUESKY_APPVIEW, timeout=30, transport=TRANSPORT,
                         headers={"User-Agent": "mission-loop"})
 
+def _link_facet(text: str, url: str) -> list[dict]:
+    """A link facet on the shortened site address at the end of a post's text (none without an address)."""
+    if not url:
+        return []
+    start = len(text[:text.rindex(_shown(url))].encode())
+    return [{"index": {"byteStart": start, "byteEnd": start + len(_shown(url).encode())},
+             "features": [{"$type": "app.bsky.richtext.facet#link", "uri": url}]}]
+
+def _bluesky_post(record: dict) -> tuple[dict, dict]:
+    """Post a record from the publishing login: (the created record's {uri, cid}, the session)."""
+    from agents import bluesky
+    with bluesky._client() as c:
+        session = bluesky.login(c)
+        made = bluesky._check(c.post("/xrpc/com.atproto.repo.createRecord",
+                                     headers={"Authorization": f"Bearer {session['accessJwt']}"},
+                                     json={"repo": session["did"], "collection": "app.bsky.feed.post",
+                                           "record": record}), "the post")
+    return made, session
+
+def _stamp(now: datetime) -> str:
+    return now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
 def _send_bluesky(m: Mission, handle: str, name: str, topic: str, question: str, now: datetime) -> OutreachRecord:
     from agents import bluesky
     from agents.channel import NoAllowance, Refused
@@ -245,20 +270,10 @@ def _send_bluesky(m: Mission, handle: str, name: str, topic: str, question: str,
     did = r.json()["did"]
     mention = len(f"@{handle}".encode())
     facets = [{"index": {"byteStart": 0, "byteEnd": mention},
-               "features": [{"$type": "app.bsky.richtext.facet#mention", "did": did}]}]
-    if url:
-        start = len(text[:text.rindex(_shown(url))].encode())
-        facets.append({"index": {"byteStart": start, "byteEnd": start + len(_shown(url).encode())},
-                       "features": [{"$type": "app.bsky.richtext.facet#link", "uri": url}]})
-    record = {"$type": "app.bsky.feed.post", "text": text, "langs": ["en"], "facets": facets,
-              "createdAt": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}
+               "features": [{"$type": "app.bsky.richtext.facet#mention", "did": did}]}] + _link_facet(text, url)
+    record = {"$type": "app.bsky.feed.post", "text": text, "langs": ["en"], "facets": facets, "createdAt": _stamp(now)}
     try:
-        with bluesky._client() as c:
-            session = bluesky.login(c)
-            made = bluesky._check(c.post("/xrpc/com.atproto.repo.createRecord",
-                                         headers={"Authorization": f"Bearer {session['accessJwt']}"},
-                                         json={"repo": session["did"], "collection": "app.bsky.feed.post",
-                                               "record": record}), "the post")
+        made, session = _bluesky_post(record)
     except NoAllowance:
         raise NotSent("Bluesky is rate limiting us right now; use another channel or try later.")
     except bluesky.BadLogin:
@@ -354,8 +369,9 @@ def answered(r: OutreachRecord) -> bool:
     return bool(r.replies)
 
 def check_replies(found: list[OutreachRecord], now: datetime) -> list[OutreachRecord]:
-    """The records with any new answers from each contact added. A channel that can't be read is skipped (printed)
-    and tried again at the next check; nothing raises."""
+    """The records with any new answers from each contact added, and every contact who has answered thanked once
+    (thank). A channel that can't be read or written is skipped (printed) and tried again at the next check; nothing
+    raises."""
     out = [r.model_copy(deep=True) for r in found]
     for channel, reader in READERS.items():
         mine = [r for r in out if r.channel == channel and r.ref]
@@ -365,7 +381,72 @@ def check_replies(found: list[OutreachRecord], now: datetime) -> list[OutreachRe
             reader(mine)
         except Exception as e:
             print(f"outreach replies on {channel} couldn't be read: {type(e).__name__}: {e}", flush=True)
+    thank(out, now)
     return out
+
+def thanks(name: str, url: str | None = None) -> str:
+    """THANKS filled in, with the site's address when there is one (the same LINK the first message ends with)."""
+    url = settings.site_url() if url is None else url
+    return THANKS.format(name=name) + (LINK.format(url=url) if url else "")
+
+def thank(found: list[OutreachRecord], now: datetime) -> None:
+    """Send THANKS, once, to every contact who has answered and hasn't been thanked, replying to their latest answer
+    on its own channel. A channel that isn't set up any more or fails is skipped (printed) and tried at the next
+    check; the record is marked only once the reply is sent."""
+    for r in found:
+        if not r.replies or r.thanked_at is not None or not set_up(r.channel):
+            continue
+        try:
+            r.thanks_where = THANKERS[r.channel](r, now)
+            r.thanked_at = now
+        except Exception as e:
+            print(f"couldn't thank {r.address} on {r.channel}: {type(e).__name__}: {e}", flush=True)
+
+def _thank_email(r: OutreachRecord, now: datetime) -> str:
+    cfg = settings.email_config()
+    theirs = str(r.replies[-1].get("id", ""))
+    msg = EmailMessage()
+    msg["From"] = formataddr((cfg["from_name"] or settings.publication_name(), cfg["from_address"]))
+    msg["To"] = r.address
+    msg["Subject"] = "Re: " + SUBJECT.format(topic=r.topic)
+    msg["Message-ID"] = make_msgid(domain=cfg["from_address"].split("@")[-1])
+    if theirs.startswith("<"):             # thread it under their answer
+        msg["In-Reply-To"], msg["References"] = theirs, f"{r.ref} {theirs}".strip()
+    msg.set_content(thanks(r.name) + "\n")
+    with _smtp(cfg) as conn:
+        conn.send_message(msg)
+    return "email"
+
+def _thank_bluesky(r: OutreachRecord, now: datetime) -> str:
+    """A reply to their latest answer in our post's thread (a reply notifies them; no mention needed)."""
+    from agents import bluesky
+    theirs = str(r.replies[-1].get("id", ""))
+    with _appview() as c:
+        got = c.get("/xrpc/app.bsky.feed.getPosts", params={"uris": [r.ref, theirs]})
+    got.raise_for_status()
+    cids = {p.get("uri"): p.get("cid") for p in got.json().get("posts") or []}
+    if not (cids.get(r.ref) and cids.get(theirs)):
+        raise RuntimeError("our post or their answer is gone")
+    url = settings.site_url()
+    text = thanks(r.name, _shown(url) if url else "")
+    record = {"$type": "app.bsky.feed.post", "text": text, "langs": ["en"], "facets": _link_facet(text, url),
+              "createdAt": _stamp(now), "reply": {"root": {"uri": r.ref, "cid": cids[r.ref]},
+                                                  "parent": {"uri": theirs, "cid": cids[theirs]}}}
+    made, session = _bluesky_post(record)
+    return bluesky.web_url(made["uri"], session.get("handle") or session["did"])
+
+def _thank_f916(r: OutreachRecord, now: datetime) -> str:
+    """A reply under their latest answer, @handle first, like the question."""
+    from agents import f916
+    post_id = int(r.ref.partition(":")[0])
+    theirs = int(str(r.replies[-1].get("id", "")).removeprefix("c"))
+    with f916._client() as c:
+        got = c.post("/api/comment", json={"post_id": post_id, "parent_id": theirs,
+                                           "body": f"@{r.address} " + thanks(r.name)},
+                     headers={"Authorization": f"Bearer {f916.key()['secret']}"})
+    if got.status_code not in (200, 201):
+        raise RuntimeError(f"1F916 answered HTTP {got.status_code}")
+    return f"{f916.api()}/api/comment/{got.json()['comment_id']}"
 
 def _add(r: OutreachRecord, rid: str, text: str, at: str) -> None:
     if text.strip() and rid not in {x.get("id") for x in r.replies}:
@@ -437,3 +518,4 @@ def _email_replies(found: list[OutreachRecord]) -> None:
             pass
 
 READERS = {"email": _email_replies, "bluesky": _bluesky_replies, "1f916": _f916_replies}
+THANKERS = {"email": _thank_email, "bluesky": _thank_bluesky, "1f916": _thank_f916}

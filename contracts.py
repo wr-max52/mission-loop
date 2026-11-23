@@ -220,6 +220,8 @@ class OutreachRecord(BaseModel):
     where: str = ""                        # where it can be read: the Bluesky post, the 1F916 comment, "email"
     ref: str = ""                          # how replies are found: the post's at:// uri, "post:comment", Message-ID
     replies: list[dict] = []               # {"id", "from", "text", "at", "is_comment": True}: the contact's answers
+    thanked_at: datetime | None = None     # when contacts.thank sent them THANKS, once, after their first answer
+    thanks_where: str = ""                 # where that thank-you can be read: a Bluesky post, a 1F916 comment, "email"
 
 class Section(BaseModel):
     heading: str

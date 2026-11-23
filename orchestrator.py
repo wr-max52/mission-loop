@@ -189,15 +189,18 @@ def step(m: Mission, now) -> str | None:
         if records and (m.replies_checked_at is None or now - m.replies_checked_at >= REPLY_CHECK_EVERY):
             m.replies_checked_at = now
             before = sum(len(r.replies) for r in records)
+            thanked = sum(1 for r in records if r.thanked_at)
             activity.begin(m.slug, "replies")
-            records = agents.check_replies(records, now)
+            records = agents.check_replies(records, now)   # code only: reads replies and thanks whoever answered
             store.save_artifact(m.slug, "outreach", records)
             got = sum(len(r.replies) for r in records) - before
+            thanked = sum(1 for r in records if r.thanked_at) - thanked
+            said = f"; thanked {thanked}" if thanked else ""
             if records and all(r.replies for r in records):
-                m.state = State.WRITING
-                return f"every contact answered ({len(records)}); writing next"
+                m.state = State.WRITING    # the next worker sweep gives it to the writer: farthest along goes first
+                return f"every contact answered ({len(records)}){said}; writing next"
             if got:
-                return f"{got} new repl{'y' if got == 1 else 'ies'} from contacts"
+                return f"{got} new repl{'y' if got == 1 else 'ies'} from contacts{said}"
         if m.wait_until and now < m.wait_until:
             return None                    # blocked on clock
         m.state = State.WRITING

@@ -1045,6 +1045,7 @@
  "From name": "发件人名称",
  "IMAP server": "IMAP 服务器",
  "No reply yet.": "尚无回复。",
+ "Thanked {when} UTC": "已于 {when} UTC 致谢",
  "No site address, so messages leave out the link to the site.": "没有网站地址，消息中不含网站链接。",
  "Nobody is asked twice about a mission, or more than once a week.": "同一任务不会重复询问同一个人，每人每周最多一次。",
  "Not set up.": "未设置。",

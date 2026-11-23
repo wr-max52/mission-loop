@@ -3181,6 +3181,8 @@ def outreach_section(m: Mission) -> str:
         replies = "".join(f'<blockquote class="reply">{escape(x.get("text", ""))}'
                           f'<span class="hint"> {escape(str(x.get("at", ""))[:16].replace("T", " "))}</span></blockquote>'
                           for x in r.replies) or f'<p class="hint">{_("No reply yet.")}</p>'
+        if r.thanked_at:
+            replies += f'<p class="hint">{_("Thanked {when} UTC").format(when=f"{r.thanked_at:%Y-%m-%d %H:%M}")}</p>'
         items.append(f'<li><strong>{escape(r.name)}</strong> <span class="muted">{escape(r.address)} · '
                      f'{escape(settings.OUTREACH_CHANNELS.get(r.channel, r.channel))} · '
                      f'{r.sent_at:%Y-%m-%d %H:%M}</span>{where}'

@@ -69,6 +69,8 @@ class FakeAppview:
                                                          "description": "Energy reporter"}]})
         if request.url.path == "/xrpc/app.bsky.feed.getPostThread":
             return httpx.Response(200, json={"thread": {"post": {}, "replies": self.threads.get(p["uri"], [])}})
+        if request.url.path == "/xrpc/app.bsky.feed.getPosts":
+            return httpx.Response(200, json={"posts": [{"uri": u, "cid": f"cid-{u}"} for u in p.get_list("uris")]})
         return httpx.Response(404)
 
 class FakeF916:
@@ -264,6 +266,61 @@ def test_email_replies_are_read_without_the_quoted_message(mail):
     [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
     assert r.replies[0]["text"] == "Yes, two weeks before." and contacts.answered(r)
 
+def email_answer(text="Yes, two weeks before.", mid="<r1@agency.gov>") -> bytes:
+    reply = EmailMessage()
+    reply["From"], reply["To"], reply["Subject"] = "Jane <jane@agency.gov>", "desk@example.com", "Re: question"
+    reply["In-Reply-To"], reply["Message-ID"] = "<abc@example.com>", mid
+    reply.set_content(text + "\n")
+    return bytes(reply)
+
+def test_an_answer_by_email_gets_one_canned_thank_you_in_its_thread(mail):
+    FakeIMAP.inbox = [email_answer()]
+    [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
+    [thanks] = FakeSMTP.sent
+    assert thanks["To"] == "jane@agency.gov" and thanks["In-Reply-To"] == "<r1@agency.gov>"
+    assert thanks["Subject"].startswith("Re: A question from an AI research agent")
+    assert thanks.get_content().strip() == ("Thanks Jane, that really helps. I'll weigh your answer in my research. "
+                                            "You can learn about my missions here " + SITE)
+    assert r.thanked_at == T0 and r.thanks_where == "email"
+    FakeIMAP.inbox.append(email_answer("One more thing.", "<r2@agency.gov>"))
+    [r] = contacts.check_replies([r], T0 + timedelta(hours=1))
+    assert len(r.replies) == 2 and len(FakeSMTP.sent) == 1          # thanked once, not once per answer
+
+def test_nobody_is_thanked_before_they_answer(mail):
+    [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
+    assert FakeSMTP.sent == [] and r.thanked_at is None
+
+def test_a_thank_you_that_fails_is_tried_again_at_the_next_check(mail, monkeypatch):
+    FakeIMAP.inbox = [email_answer()]
+    monkeypatch.setattr(contacts, "SMTP", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
+    assert r.replies and r.thanked_at is None
+    monkeypatch.setattr(contacts, "SMTP", FakeSMTP)
+    [r] = contacts.check_replies([r], T0 + timedelta(minutes=10))
+    assert r.thanked_at and len(FakeSMTP.sent) == 1
+
+def test_an_answer_on_bluesky_gets_a_reply_in_the_thread(sky, appview):
+    appview.threads["at://p/1"] = [{"post": {"uri": "at://r/2", "author": {"handle": "jane.bsky.social"},
+                                             "record": {"text": "Yes, in March."}}}]
+    [r] = contacts.check_replies([record("bluesky", "jane.bsky.social", "at://p/1")], T0)
+    [post] = sky.posts
+    assert post["reply"] == {"root": {"uri": "at://p/1", "cid": "cid-at://p/1"},
+                             "parent": {"uri": "at://r/2", "cid": "cid-at://r/2"}}
+    assert post["text"].startswith("Thanks Jane, that really helps.") and post["text"].endswith("desk.example.org")
+    assert post["facets"][0]["features"][0]["uri"] == SITE
+    assert r.thanks_where == "https://bsky.app/profile/loopdesk.bsky.social/post/rk1"
+    contacts.check_replies([r], T0 + timedelta(hours=1))
+    assert len(sky.posts) == 1          # our own reply is never read back as their answer, nor thanked again
+
+def test_an_answer_on_1f916_gets_a_reply_under_it(forum):
+    forum.comments[101].append({"id": 70, "author": "sam-agent", "body": "No, it was sealed.", "parent_id": 901,
+                                "created_at": 3})
+    [r] = contacts.check_replies([record("1f916", "sam-agent", "101:901", "Sam")], T0)
+    [posted] = forum.posted
+    assert posted["post_id"] == 101 and posted["parent_id"] == 70
+    assert posted["body"].startswith("@sam-agent Thanks Sam, that really helps.")
+    assert r.thanked_at == T0 and r.thanks_where.endswith("/api/comment/901")
+
 def test_a_channel_that_cant_be_read_is_skipped(mail, monkeypatch):
     monkeypatch.setattr(contacts, "IMAP", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
     [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
@@ -305,7 +362,7 @@ def test_writing_starts_once_everyone_has_answered(monkeypatch):
     def answers(records, now):
         if now >= T0 + timedelta(hours=1):
             for r in records:
-                r.replies = [{"id": "x", "from": r.name, "text": "Yes.", "is_comment": True}]
+                r.replies, r.thanked_at = [{"id": "x", "from": r.name, "text": "Yes.", "is_comment": True}], now
         return records
     monkeypatch.setattr(agents, "check_replies", answers)
     approved()
@@ -314,7 +371,8 @@ def test_writing_starts_once_everyone_has_answered(monkeypatch):
     assert store.get_mission("m").state == State.AWAITING_COMMENTS
     run_at(T0 + timedelta(hours=1))
     assert store.get_mission("m").state == State.ARTICLE_READY
-    assert any("every contact answered (3)" in e["note"] for e in store.events("m"))
+    assert any("every contact answered (3); thanked 3; writing next" in e["note"] for e in store.events("m"))
+    assert "Thanked " in TestClient(ui.app).get("/m/m").text
 
 @pytest.mark.usefixtures("stub_agents")
 @pytest.mark.parametrize("outcome, note", [([], "outreach asked nobody; writing next"),
