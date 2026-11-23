@@ -1220,15 +1220,16 @@
  "replies": "回复",
  "Missions at this step: {n}": "此步骤的任务：{n}",
  "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "回复检查（代码）：每 10 分钟读取一次回复，向每位回答的人致谢一次，所有人都回答或等待结束后继续。",
- "Cyborg sprites": "赛博格角色",
- "Cyborg sprites on.": "赛博格角色已开启。",
- "Cyborg sprites off.": "赛博格角色已关闭。",
- "Every researcher visits as a cyborg: metal, lights and pipes.": "每位研究员都以赛博格形象出现：金属、灯光和管道。",
  "Metal": "金属",
  "Glowing eyes": "发光的眼睛",
  "Start from a cyborg": "从赛博格开始",
  "Post card": "明信片",
  "To": "致",
  "Greetings from": "来自",
- "Proposed": "提议中"
+ "Proposed": "提议中",
+ "Cyborgs": "赛博格",
+ "Cyborgs visit": "赛博格来访",
+ "Visit": "会来访",
+ "Stay home": "留在家",
+ "cyborgs visiting": "赛博格来访中"
 }

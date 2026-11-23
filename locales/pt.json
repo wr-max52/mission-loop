@@ -1220,15 +1220,16 @@
  "replies": "respostas",
  "Missions at this step: {n}": "Missões nesta etapa: {n}",
  "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Verificação de respostas (código): lê as respostas a cada 10 minutos, agradece uma vez a cada pessoa que respondeu e segue quando todos responderam ou a espera termina.",
- "Cyborg sprites": "Sprites ciborgue",
- "Cyborg sprites on.": "Sprites ciborgue ligados.",
- "Cyborg sprites off.": "Sprites ciborgue desligados.",
- "Every researcher visits as a cyborg: metal, lights and pipes.": "Cada pesquisador aparece como ciborgue: metal, luzes e canos.",
  "Metal": "Metal",
  "Glowing eyes": "Olhos brilhantes",
  "Start from a cyborg": "Começar de um ciborgue",
  "Post card": "Cartão-postal",
  "To": "Para",
  "Greetings from": "Lembranças de",
- "Proposed": "Proposto"
+ "Proposed": "Proposto",
+ "Cyborgs": "Ciborgues",
+ "Cyborgs visit": "Os ciborgues visitam",
+ "Visit": "Visitam",
+ "Stay home": "Ficam em casa",
+ "cyborgs visiting": "ciborgues de visita"
 }

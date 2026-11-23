@@ -112,7 +112,8 @@ and copper, a smokestack and boiler, a wind-up key, goggles, an exhaust pipe, ga
 machines (steel, ceramic and graphite, antennae, headphones, status lights, a jet pack). Kenji-borg is black all
 through, in grey armor, with red eyes and red buttons. They are the worked examples for this section: open one from
 the sprite studio's Cyborgs list, or start an avatar from one in the avatar studio (Body → Start from a cyborg).
-The Settings page's Cyborg sprites switch sends each cyborg in place of its original (`RESEARCHER_SPRITES.cyborgs`).
+The Cyborgs row under the avatar studio's Who visits has one switch for all 12: on, they join their originals' crews
+beside everyone else (`RESEARCHER_SPRITES.cyborgs`).
 
 ![The cyborg crew: each original, then its cyborg resting, walking, cheering and doing its quirk](tools/cyborgs.png)
 
@@ -191,8 +192,8 @@ the key moves the front arm).
 window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec }, off: ["pip"] };   // before researchers.js loads
 ```
 
-- `cyborgs`: `{ "kenji-borg": spec, ... }` (the contents of `assets/cyborgs.json`). Each one joins in place of the
-  built-in it starts from, which stays home; one whose original is in `off` stays home too. `Researchers.CYBORGS`
+- `cyborgs`: `{ "kenji-borg": spec, ... }` (the contents of `assets/cyborgs.json`). Each one joins its crew beside
+  everyone else; nobody stays home for them, and a key a custom sprite already has is skipped. `Researchers.CYBORGS`
   lists the ones that joined.
 
 - `add`: sprites to register, by key (lowercase letters, digits, dashes, up to 32; built-in names are taken).
