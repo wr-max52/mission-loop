@@ -103,7 +103,8 @@
   const draw = (id, salt, list) => list[seed(id, salt) % list.length];   // the same mission always draws the same
   function stampHtml(slug) {
     const i = seed(slug, 3) % STAMPS.length, [pic, caption, price] = STAMPS[i];
-    return `<span class="stamp" style="--sh:${(i * 47) % 360}"><i>${pic}</i><b>${esc(caption)}</b><em>${esc(price)}</em></span>`;
+    return `<span class="stampw"><span class="stamp"><span class="art" style="--sh:${(i * 47) % 360}"><i>${pic}</i><b>${esc(caption)}</b>`   // perforated paper, its picture inset
+      + `<em>${esc(price)}</em></span></span></span>`;
   }
   function magnetHtml(n) {                         // missions go from notebook paper to word tiles to a postcard
     if (n.kind === "epic")
@@ -116,11 +117,11 @@
     const s = n.slug, hand = `hand-${seed(s, 5) % HANDS}`;
     if (n.paper === "done") {                      // published: the back of a postcard, stamped and franked
       const [a1, a2] = draw(s, 1, AIRMAIL);
-      const waves = `<svg class="waves" viewBox="0 0 44 18" aria-hidden="true"><path d="M0 3q5.5-3 11 0t11 0 11 0 11 0M0 9q5.5-3 11 0t11 0 11 0 11 0M0 15q5.5-3 11 0t11 0 11 0 11 0"/></svg>`;
+      const waves = `<svg class="waves" viewBox="0 0 44 30" aria-hidden="true"><path d="M0 3q5.5-3 11 0t11 0 11 0 11 0M0 9q5.5-3 11 0t11 0 11 0 11 0M0 15q5.5-3 11 0t11 0 11 0 11 0M0 21q5.5-3 11 0t11 0 11 0 11 0M0 27q5.5-3 11 0t11 0 11 0 11 0"/></svg>`;
       return `<div class="postcard" style="--a1:${a1};--a2:${a2};--card:${draw(s, 2, CARD)};--ink:${draw(s, 4, INK)}">`
         + `<div class="pc"><div class="pc-head">${tr("Post card")}</div><div class="msg ${hand}">${esc(n.short)}</div>`
-        + `<div class="addr">${stampHtml(s)}<span class="postmark">${waves}<span class="ring"><b>${tr("Published")}</b>`
-        + `<small>${esc(n.posted || "")}</small></span></span>`
+        + `<div class="addr">${stampHtml(s)}<span class="postmark"><span class="ring"><b>${tr("Published")}</b>`
+        + `<small>${esc(n.posted || "")}</small></span>${waves}</span>`
         + `<div class="to ${hand}"><span>${tr("To")}</span> ${esc(n.epic || tr("the desk"))}</div><div class="line"></div><div class="line"></div></div>`
         + `</div></div>${live}${grip}`;
     }
