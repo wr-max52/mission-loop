@@ -1239,5 +1239,22 @@
  "Hazard tank": "Gefahrgutbehälter",
  "Power cell": "Energiezelle",
  "Smokestack": "Schornstein",
- "Jet pack": "Jetpack"
+ "Jet pack": "Jetpack",
+ "A backup folder must be a full path outside the Mission Loop folder.": "Ein Sicherungsordner muss ein vollständiger Pfad außerhalb des Mission-Loop-Ordners sein.",
+ "A recent backup": "Eine aktuelle Sicherung",
+ "Back up now": "Jetzt sichern",
+ "Backed up. The zip holds your keys: keep it private.": "Gesichert. Das Zip enthält deine Schlüssel: halte es privat.",
+ "Backup": "Sicherung",
+ "Backup failed. Check the folder exists and can be written to.": "Sicherung fehlgeschlagen. Prüfe, ob der Ordner existiert und beschreibbar ist.",
+ "Backup folder saved.": "Sicherungsordner gespeichert.",
+ "Folder": "Ordner",
+ "Last backup {n} days ago; the 1F916 key has no recovery.": "Letzte Sicherung vor {n} Tagen; der 1F916-Schlüssel lässt sich nicht wiederherstellen.",
+ "Last backup: {when}, {path}.": "Letzte Sicherung: {when}, {path}.",
+ "Last backup: {when}.": "Letzte Sicherung: {when}.",
+ "No backup yet, and the 1F916 key has no recovery.": "Noch keine Sicherung, und der 1F916-Schlüssel lässt sich nicht wiederherstellen.",
+ "No backup yet.": "Noch keine Sicherung.",
+ "One zip of the database, settings, keys, missions and the published site. It holds your keys: keep it private.": "Ein Zip mit Datenbank, Einstellungen, Schlüsseln, Missionen und der veröffentlichten Seite. Es enthält deine Schlüssel: halte es privat.",
+ "Press Back up now in Settings → Setup, or run python run.py backup.": "Drück Jetzt sichern unter Einstellungen → Einrichtung, oder führe python run.py backup aus.",
+ "Restore with {command} while the loop is stopped.": "Wiederherstellen mit {command}, während die Schleife gestoppt ist.",
+ "or {command}": "oder {command}"
 }

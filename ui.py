@@ -18,7 +18,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, claim_tags, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
+import activity, agents, avatars, backup, board, claim_tags, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
@@ -114,11 +114,15 @@ MESSAGES = {
     "mcp_off": "Sharing off. Nothing on the network can reach the tools.",
     "mcp_token": "New token made. Apps with the old one are refused.",
     "mcp_port": "Port saved.",
+    "backup_saved": "Backed up. The zip holds your keys: keep it private.",
+    "backup_folder": "Backup folder saved.",
     "setup_hidden": "Setup hidden. Settings → Setup brings it back.",
     "setup_shown": "Setup shown on the Missions page.",
     "publication_saved": "Publication saved.",
 }
 ERRORS = {
+    "backup_folder": "A backup folder must be a full path outside the Mission Loop folder.",
+    "backup_failed": "Backup failed. Check the folder exists and can be written to.",
     "outreach": "Wait is 0 to 336 hours; 1 to 6 people per mission.",
     "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
     "mcp_port": "A port is a number from 1024 to 65535.",
@@ -2782,8 +2786,8 @@ def setup_card(found: list | None = None) -> str:
         return ""
     conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
     found = found if found is not None else doctor.checks(conn=conn)
-    if doctor.done([c for c in found if c.key != "search_up"]):   # an outage is the top bar's to say, not setup's
-        return ""
+    if doctor.done([c for c in found if c.key not in ("search_up", "backup")]):   # an outage is the top bar's to say,
+        return ""                          # not setup's; an old backup is Settings → Setup's
     by = {c.key: c for c in found}
     model_checks = [c for c in found if c.key in ("models", "connection")]
     models_ok = all(c.ok for c in model_checks)
@@ -2858,7 +2862,24 @@ def setup_section(conn: dict) -> str:
                _("The loop can't start until a model is connected."))
     cli = _("Same checks: {command}.").format(command="<code>python run.py doctor</code>")
     return (f'<div class="actions"><p>{summary} {cli}</p>'
-            f'{note}<ul class="checks">{rows}</ul>{again}</div>')
+            f'{note}<ul class="checks">{rows}</ul>{again}</div>{backup_box()}')
+
+def backup_box() -> str:
+    """Settings → Setup's backup (#120): Back up now, the last backup's time and path, and the folder it goes to."""
+    last = backup.last()
+    when = (_("Last backup: {when}, {path}.").format(when=_when(last["at"]), path=f'<code>{escape(last.get("path", ""))}</code>')
+            if last else _("No backup yet."))
+    folder = settings.backup_dir()
+    return f"""<div class="pubbox channel" id="backup"><div class="head"><h3>{icon("shield")}{_("Backup")}</h3><span class="badge">{_("On this machine")}</span></div>
+<p>{_("One zip of the database, settings, keys, missions and the published site. It holds your keys: keep it private.")}</p>
+<p>{when}</p>
+<form method="post" action="/settings/backup" class="inline"><input type="hidden" name="do" value="now">
+  <button>{_("Back up now")}</button><span class="hint">{_("or {command}").format(command="<code>python run.py backup</code>")}</span></form>
+<form method="post" action="/settings/backup" class="inline setup-form"><input type="hidden" name="do" value="folder">
+  <label for="backup_dir" style="margin:0">{_("Folder")}</label>
+  <input type="text" id="backup_dir" name="folder" value="{escape(folder, quote=True)}" maxlength="1000">
+  <button>{_("Save")}</button></form>
+<p class="hint">{_("Restore with {command} while the loop is stopped.").format(command="<code>python run.py restore &lt;zip&gt;</code>")}</p></div>"""
 
 def search_section() -> str:
     """Settings → Web search: every source in the order searches try them, each with on/off, up/down, its key and how
@@ -3212,6 +3233,28 @@ async def save_publication(request: Request) -> Response:
         return go("/settings#publication", error="publication")
     await run_in_threadpool(orchestrator.refresh_site)
     return go("/settings#publication", done="publication_saved")
+
+async def save_backup(request: Request) -> Response:
+    """Settings → Setup: Back up now, or the folder backups go to (#120)."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "folder":
+        folder = str(form.get("folder") or "").strip()[:1000]
+        try:
+            if folder:                     # checked before it is saved: a full path, not inside this folder
+                backup.check_folder(Path(folder).expanduser())
+            settings.set_backup_dir(folder)
+        except ValueError:
+            return go("/settings#backup", error="backup_folder")
+        return go("/settings#backup", done="backup_folder")
+    try:
+        await run_in_threadpool(backup.make)
+    except ValueError:
+        return go("/settings#backup", error="backup_folder")
+    except OSError:
+        return go("/settings#backup", error="backup_failed")
+    return go("/settings#backup", done="backup_saved")
 
 async def setup_action(request: Request) -> Response:
     if not same_origin(request):
@@ -5129,6 +5172,7 @@ app = Starlette(routes=[
     Route("/settings/outreach", save_outreach, methods=["POST"]),
     Route("/settings/email", save_email, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
+    Route("/settings/backup", save_backup, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),

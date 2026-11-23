@@ -1239,5 +1239,22 @@
  "Hazard tank": "Réservoir dangereux",
  "Power cell": "Pile d'énergie",
  "Smokestack": "Cheminée",
- "Jet pack": "Jetpack"
+ "Jet pack": "Jetpack",
+ "A backup folder must be a full path outside the Mission Loop folder.": "Un dossier de sauvegarde doit être un chemin complet hors du dossier Mission Loop.",
+ "A recent backup": "Une sauvegarde récente",
+ "Back up now": "Sauvegarder maintenant",
+ "Backed up. The zip holds your keys: keep it private.": "Sauvegardé. Le zip contient vos clés : gardez-le privé.",
+ "Backup": "Sauvegarde",
+ "Backup failed. Check the folder exists and can be written to.": "Échec de la sauvegarde. Vérifiez que le dossier existe et est accessible en écriture.",
+ "Backup folder saved.": "Dossier de sauvegarde enregistré.",
+ "Folder": "Dossier",
+ "Last backup {n} days ago; the 1F916 key has no recovery.": "Dernière sauvegarde il y a {n} jours ; la clé 1F916 est irrécupérable.",
+ "Last backup: {when}, {path}.": "Dernière sauvegarde : {when}, {path}.",
+ "Last backup: {when}.": "Dernière sauvegarde : {when}.",
+ "No backup yet, and the 1F916 key has no recovery.": "Aucune sauvegarde, et la clé 1F916 est irrécupérable.",
+ "No backup yet.": "Aucune sauvegarde pour l'instant.",
+ "One zip of the database, settings, keys, missions and the published site. It holds your keys: keep it private.": "Un zip de la base de données, des réglages, des clés, des missions et du site publié. Il contient vos clés : gardez-le privé.",
+ "Press Back up now in Settings → Setup, or run python run.py backup.": "Appuyez sur Sauvegarder maintenant dans Paramètres → Configuration, ou lancez python run.py backup.",
+ "Restore with {command} while the loop is stopped.": "Restaurez avec {command} pendant que la boucle est arrêtée.",
+ "or {command}": "ou {command}"
 }
