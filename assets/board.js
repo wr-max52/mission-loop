@@ -93,6 +93,9 @@
     ["🧂", "Grain of Salt", "1 pinch"], ["🦗", "Crickets: Official Response", "0¢"], ["📠", "Sent from My Fax", "1997"],
     ["🌚", "Leaked at Midnight", "3am"],
   ];
+  // An epic postcard's picture: assets/postcards/<name>.svg, minimalist 1920s Art Deco travel scenes drawn in code
+  // (flat shapes, sun rays, no outlines). A new scene is one file there and its name here; epics share them past ten.
+  const SCENES = ["beach", "biplane", "map", "capitol", "skyline", "mountains", "lighthouse", "liner", "desert", "bridge"];
   const AIRMAIL = [["#d8343a", "#2f78c8"], ["#2c9b52", "#d8343a"], ["#e0a91e", "#1f3b7a"], ["#7b4bc4", "#ee7a2c"],
     ["#1d9a9a", "#e05a8a"], ["#d8343a", "#1f3b7a"]];                     // a postcard's border stripes
   const CARD = ["#fffdf6", "#fbf5e6", "#f6f1e7", "#fff8ee"];              // postcard stock
@@ -103,24 +106,41 @@
   const draw = (id, salt, list) => list[seed(id, salt) % list.length];   // the same mission always draws the same
   function stampHtml(slug) {
     const i = seed(slug, 3) % STAMPS.length, [pic, caption, price] = STAMPS[i];
-    return `<span class="stamp" style="--sh:${(i * 47) % 360}"><i>${pic}</i><b>${esc(caption)}</b><em>${esc(price)}</em></span>`;
+    return `<span class="stampw"><span class="stamp"><span class="art" style="--sh:${(i * 47) % 360}"><i>${pic}</i><b>${esc(caption)}</b>`   // perforated paper, its picture inset
+      + `<em>${esc(price)}</em></span></span></span>`;
   }
-  function magnetHtml(n) {                         // missions go from notebook paper to word tiles to a postcard
-    if (n.kind === "epic")
-      return `<div class="souvenir" style="--h:${hue(n.slug)}"><svg class="horseshoe" viewBox="0 0 40 30" aria-hidden="true">`
-        + `<path d="M6 2v12a14 14 0 0 0 28 0V2h-8v12a6 6 0 0 1-12 0V2z"/><path class="tip" d="M6 2h8v5H6zM26 2h8v5h-8z"/></svg>`
-        + `<div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div><div class="t">${esc(n.title)}</div>`
-        + `<div class="n">${esc(n.count_text)}</div></div>`;
+  let sceneCache = null;
+  function sceneOf(slug) {                         // an epic's scene: its hashed one, else the next least used, so ten
+    if (!sceneCache || sceneCache.data !== data) { // epics get ten different scenes; epics come oldest first
+      const uses = SCENES.map(() => 0), map = {};
+      for (const n of data.notes) if (n.kind === "epic") {
+        const start = seed(n.slug, 6) % SCENES.length;
+        let best = start;
+        for (let k = 1; k < SCENES.length; k++) { const j = (start + k) % SCENES.length; if (uses[j] < uses[best]) best = j; }
+        uses[best]++; map[n.slug] = SCENES[best];
+      }
+      sceneCache = { data, map };
+    }
+    return sceneCache.map[slug] || SCENES[seed(slug, 6) % SCENES.length];
+  }
+  function magnetHtml(n) {                         // missions go from notebook paper to word tiles to a postcard's back
+    if (n.kind === "epic") {                       // the postcard's front: greetings from the epic, over an Art Deco scene
+      const words = String(n.title).split(/\s+/), long = Math.max(...words.map(w => w.length)), all = String(n.title).length;
+      const fit = Math.min(1, 10 / long, all > 28 ? .62 : all > 18 ? .8 : 1);   // the big letters shrink to stay whole
+      return `<div class="front" style="--fit:${fit.toFixed(2)};background-image:url('/assets/postcards/${sceneOf(n.slug)}.svg')">`
+        + `<span class="greet">${tr("Greetings from")}</span><span class="place">${esc(n.title)}</span>`
+        + `<span class="n">${esc(n.count_text)}</span>${n.proposed ? `<span class="proposed">${tr("Proposed")}</span>` : ""}</div>`;
+    }
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
     const live = n.live ? `<span class="now">${tr("working now")}</span>` : "", grip = `<span class="grip" title="${tr("Resize")}"></span>`;
     const s = n.slug, hand = `hand-${seed(s, 5) % HANDS}`;
     if (n.paper === "done") {                      // published: the back of a postcard, stamped and franked
       const [a1, a2] = draw(s, 1, AIRMAIL);
-      const waves = `<svg class="waves" viewBox="0 0 44 18" aria-hidden="true"><path d="M0 3q5.5-3 11 0t11 0 11 0 11 0M0 9q5.5-3 11 0t11 0 11 0 11 0M0 15q5.5-3 11 0t11 0 11 0 11 0"/></svg>`;
+      const waves = `<svg class="waves" viewBox="0 0 44 30" aria-hidden="true"><path d="M0 3q5.5-3 11 0t11 0 11 0 11 0M0 9q5.5-3 11 0t11 0 11 0 11 0M0 15q5.5-3 11 0t11 0 11 0 11 0M0 21q5.5-3 11 0t11 0 11 0 11 0M0 27q5.5-3 11 0t11 0 11 0 11 0"/></svg>`;
       return `<div class="postcard" style="--a1:${a1};--a2:${a2};--card:${draw(s, 2, CARD)};--ink:${draw(s, 4, INK)}">`
         + `<div class="pc"><div class="pc-head">${tr("Post card")}</div><div class="msg ${hand}">${esc(n.short)}</div>`
-        + `<div class="addr">${stampHtml(s)}<span class="postmark">${waves}<span class="ring"><b>${tr("Published")}</b>`
-        + `<small>${esc(n.posted || "")}</small></span></span>`
+        + `<div class="addr">${stampHtml(s)}<span class="postmark"><span class="ring"><b>${tr("Published")}</b>`
+        + `<small>${esc(n.posted || "")}</small></span>${waves}</span>`
         + `<div class="to ${hand}"><span>${tr("To")}</span> ${esc(n.epic || tr("the desk"))}</div><div class="line"></div><div class="line"></div></div>`
         + `</div></div>${live}${grip}`;
     }
