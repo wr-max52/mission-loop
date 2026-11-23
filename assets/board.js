@@ -102,7 +102,7 @@
     }
     const words = String(n.short).split(/\s+/).slice(0, 10);
     const tiles = words.map((w, i) => `<i style="--r:${((i * 53) % 7) - 3}deg">${esc(w)}</i>`).join("");
-    const tag = n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;
+    const tag = n.dead ? tr("Dead lead") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;
     return `<div class="tiles">${tiles}<i class="tag">${esc(tag)}</i></div>${live}${grip}`;
   }
   function noteHtml(n) {
@@ -111,7 +111,7 @@
       return `<span class="pin"></span><div class="k">${n.proposed ? tr("Proposed epic") : tr("Epic")}</div>`
         + `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
-    const stamp = n.paper === "done" ? tr("Published") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : "";
+    const stamp = n.paper === "done" ? tr("Published") : n.dead ? tr("Dead lead") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : "";
     return `<span class="pin"></span><div class="t">${esc(n.short)}</div>`
       + (stamp ? `<span class="stamp">${stamp}</span>` : `<div class="stage">${esc(n.stage)}</div>`)
       + (n.live ? `<span class="now">${tr("working now")}</span>` : "") + `<span class="grip" title="${tr("Resize")}"></span>`;

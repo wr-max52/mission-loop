@@ -23,8 +23,9 @@ MAX_NEW_MISSIONS new ones, MIN_EPIC_MISSIONS in all, and only while no other pro
 import asyncio, math, re
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
-import board, library, settings, store, trail
-from contracts import Mission, State, ResearchBrief, Article, COMBINABLE, epic_title, is_open, words
+import board, claim_tags, library, settings, store, trail
+from contracts import (Mission, State, ResearchBrief, Article, CLAIM_TAGS, COMBINABLE, VERDICTS, epic_title, is_open,
+                       words)
 from agents import llm
 from agents.finder import too_similar
 from agents.toolbox import Toolbox
@@ -46,6 +47,8 @@ MAX_HISTORY = 6                            # past versions of the line shown
 MAX_MEMBERS = 4                            # missions one combine folds together
 MAX_LINKS = 3                              # links a turn
 MAX_WHY = 300                              # characters of a link's or a combine's reason
+MAX_DEAD = 2                               # dead leads proposed a turn
+MAX_TAGS = 3                               # claim tags changed a turn
 LOOKUPS = 4                                # library searches the Theorist may run itself, after code's first
 LOOKUP_TIME = 4 * 60                       # seconds for the whole lookup phase
 FINDINGS_CHARS = 14_000                    # what it found, as it goes with the request (about 4.5k tokens)
@@ -55,7 +58,7 @@ CONFIG = Path(__file__).resolve().parent.parent / "mcp.json"
 
 STAGES = {State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_READY: "brief in review",
           State.AWAITING_COMMENTS: "writing next", State.WRITING: "writing", State.ARTICLE_READY: "article in review",
-          State.DONE: "published", State.PARKED: "parked", State.COMBINED: "combined"}
+          State.DONE: "published", State.PARKED: "parked", State.COMBINED: "combined", State.DEAD_LEAD: "dead lead"}
 
 SYSTEM = """You are the Theorist of an independent investigative desk: its mastermind. You do not research or
 write stories. You step back, look across everything the desk has done and is doing, and see what nobody
@@ -73,9 +76,15 @@ A pattern is a lead, not a finding. Say what it rests on and what would test it.
 found: link missions that bear on each other, combine missions that are really one question, and propose a new
 mission only for the question nobody is asking yet.
 
+Test the desk against the world, never against itself. A pattern, framework or label the desk made up (a name
+you or a past article gave it) is not evidence and is never a mission's premise. Each mission with a brief shows
+"claim: confirmed" (the record shows its claim as fact) or "claim: unconfirmed" (it rests on a possibility). An
+unconfirmed claim is an open question, not a foundation: build only on confirmed ones, and send unconfirmed ones
+back to the record with a question a document can answer. A dead lead is settled: don't revisit it.
+
 Reply with JSON matching the schema:
 - patterns: 1 to {patterns} short notes. Each names the epic or epics and the mission slugs it draws on.
-- inspiration: the editor's line, evolved by what you saw.
+- inspiration: the editor's line, evolved by what you saw. Prefer questions a document could answer.
   - Evolve it, never replace it. Keep the editor's own words and focus: at least half of the words of the
     line as it is now must stay. Sharpen, extend or redirect only the part a pattern calls for. If nothing new
     emerged, return it unchanged.
@@ -84,9 +93,12 @@ Reply with JSON matching the schema:
   - At most {max_line} characters.
 - why: one or two sentences: what you changed in the line and which pattern led there, or why you kept it.
 - new_mission: at most one, or null. The single question that best tests a pattern you named. It must connect
-  missions, not repeat one. topic: one specific line, as a question. objective: two or three sentences naming
-  the missions and the pattern it draws on and what evidence would support or sink it. epic: the title of an
-  existing epic, or "". You don't make new epics this turn.
+  missions, not repeat one, and be a question about the outside world that a document can answer: has anyone
+  testified that..., is there a court filing on..., do the records show.... Never a term the desk coined.
+  topic: one specific line, as a question. objective: two or three sentences naming the missions it draws on and
+  the kinds of record that would support or sink it (testimony, court filings, arrest or booking records,
+  regulatory or campaign-finance filings, contracts, datasets, FOIA responses). epic: the title of an existing
+  epic, or "". You don't make new epics this turn.
 - combine: usually null. Only when 2 to {members} open missions are really one investigation, so researching
   them apart would duplicate the work or miss the connection. Only missions that are queued, researching, brief
   in review or parked can be combined; never published ones or ones being written. missions: their slugs.
@@ -98,6 +110,14 @@ Reply with JSON matching the schema:
   each one's research sees the other. mission: an open mission's slug (not published). to: the slug of another
   open mission, or of a published article it builds on, answers or tests. why: one sentence naming the shared
   thread (actor, mechanism, number, date, money trail). Never a pair already linked.
+- dead_leads: usually empty, at most {dead}. A mission not yet being written (queued, researching, brief in review
+  or parked) that should stop. verdict: "refuted" (a brief or article on the desk shows its claim is wrong),
+  "no_record" (nothing on the record could answer it) or "untestable" (it rests on a framework or label the desk
+  made up, so no document could answer it as asked). mission: its slug. why: one sentence. The editor approves it;
+  the mission then stops. Never one the editor has kept going.
+- claim_tags: usually empty, at most {tags}. Change the claim tag of a mission with a brief or article when the
+  desk shows it is wrong. mission: its slug. tag: "confirmed" (only when the record it cites shows its claim as
+  fact) or "unconfirmed". why: one sentence. The tag is for the editor and you only.
 
 The desk's library holds the work behind each one-line summary below: every brief's claims with the exact quotes
 they cite, counterpoints, sources and article sections. What you found there comes with the request. A pattern may
@@ -146,6 +166,16 @@ class NewLink(BaseModel):
     to: str                                # another open mission, or a published article
     why: str = ""
 
+class NewDeadLead(BaseModel):
+    mission: str                           # a mission not yet being written
+    verdict: str = ""                      # one of contracts.VERDICTS
+    why: str = ""
+
+class NewClaimTag(BaseModel):
+    mission: str                           # a mission with a brief
+    tag: str = ""                          # "confirmed" or "unconfirmed"
+    why: str = ""
+
 class TheoryReply(BaseModel):
     """What the model writes."""
     patterns: list[str]
@@ -154,6 +184,8 @@ class TheoryReply(BaseModel):
     new_mission: NewMission | None = None
     combine: NewCombine | None = None
     links: list[NewLink] = []
+    dead_leads: list[NewDeadLead] = []
+    claim_tags: list[NewClaimTag] = []
 
 class Theory(TheoryReply):
     """The reply after code has checked it, with what code dropped and the line it was based on."""
@@ -167,10 +199,14 @@ def _clean(text: str, limit: int = MAX_WHY) -> str:
 
 # ---------- what the Theorist reads ----------
 
-def _row(m: Mission) -> str:
+def _row(m: Mission, tags: dict | None = None) -> str:
     when = f" {m.published_at:%Y-%m-%d}" if m.state == State.DONE and m.published_at else ""
     made = f" | combines {', '.join(m.combines)}" if m.combines else ""
-    return f"- {m.slug} | {STAGES[m.state]}{when} | {m.topic}{made}"
+    tag = (tags or {}).get(m.slug)
+    claim = f" | {claim_tags.text(tag)}" if tag and m.state != State.DEAD_LEAD else ""
+    dead = store.get_dead_lead(m.slug) if m.state == State.DEAD_LEAD else None
+    why = f" ({dead.verdict.replace('_', ' ')}: {dead.why})" if dead else ""
+    return f"- {m.slug} | {STAGES[m.state]}{why}{when}{claim} | {m.topic}{made}"
 
 def connections_text(missions: list[Mission]) -> str:
     """The links already drawn, the combines waiting for the editor, and what the editor turned down."""
@@ -181,8 +217,13 @@ def connections_text(missions: list[Mission]) -> str:
     waiting = [f"- {' + '.join(c.members)} -> {c.topic}" for c in store.all_combines("proposed")]
     if waiting:
         parts.append("Combines waiting for the editor (don't propose them again):\n" + "\n".join(waiting))
+    dead = [f"- {d.slug}: {d.verdict.replace('_', ' ')}, {d.why}" for d in store.all_dead_leads("proposed")]
+    if dead:
+        parts.append("Dead leads waiting for the editor (don't propose them again):\n" + "\n".join(dead))
     turned = [f"- {k.a} <-> {k.b} (link removed)" for k in links if k.status == "removed"]
     turned += [f"- {' + '.join(c.members)} (combine rejected)" for c in store.all_combines("rejected")]
+    turned += [f"- {d.slug} (kept going: not a dead lead)" for d in store.all_dead_leads()
+               if d.status in ("rejected", "revived") and d.slug in topics]
     if turned:
         parts.append("The editor turned these down; never propose them again:\n" + "\n".join(turned))
     return "\n\n".join(parts)
@@ -191,18 +232,19 @@ def desk_text(missions: list[Mission]) -> str:
     """Every epic with its latest missions, the missions in no epic, the latest published articles, and the
     connections drawn so far. Missions already combined into another are left out: the bigger one stands in."""
     every, missions = missions, [m for m in missions if m.state != State.COMBINED]
+    tags = store.all_claim_tags()
     parts = []
     for e in store.all_epics():
         mine = [m for m in missions if m.epic == e.slug]
         status = " (proposed, waiting for the editor)" if e.status == "proposed" else ""
-        rows = [_row(m) for m in mine[-MAX_PER_EPIC:]] or ["- no missions yet"]
+        rows = [_row(m, tags) for m in mine[-MAX_PER_EPIC:]] or ["- no missions yet"]
         more = [f"- and {len(mine) - MAX_PER_EPIC} earlier missions"] if len(mine) > MAX_PER_EPIC else []
         parts.append(f"Epic: {e.title}{status}, {len(mine)} missions\n" + "\n".join(more + rows))
     if not parts:
         parts.append("Epics: none yet")
     loose = [m for m in missions if not m.epic]
     if loose:
-        parts.append("Missions in no epic:\n" + "\n".join(_row(m) for m in loose[-MAX_LOOSE:]))
+        parts.append("Missions in no epic:\n" + "\n".join(_row(m, tags) for m in loose[-MAX_LOOSE:]))
     posts = sorted((m for m in missions if m.state == State.DONE and m.published_at),
                    key=lambda m: m.published_at, reverse=True)
     lines, shown = [], 0
@@ -211,7 +253,8 @@ def desk_text(missions: list[Mission]) -> str:
         if not b or not a:
             continue
         brief, article = ResearchBrief(**b), Article(**a)
-        lines.append(f'- {m.slug} ({m.published_at:%Y-%m-%d}): "{article.title}". {article.dek}')
+        claim = f", {claim_tags.text(tags[m.slug])}" if m.slug in tags else ""
+        lines.append(f'- {m.slug} ({m.published_at:%Y-%m-%d}{claim}): "{article.title}". {article.dek}')
         lines += [f"    Left open: {c.text}" for c in brief.claims if c.kind == "possibility"][:MAX_OPEN]
         shown += 1
         if shown == MAX_POSTS:
@@ -231,7 +274,7 @@ def history_text(history: list[dict]) -> str:
 def prompt(line: str, history: list[dict], missions: list[Mission], now=None) -> str:
     today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
     return SYSTEM.format(today=today, patterns=MAX_PATTERNS, questions=MAX_QUESTIONS, max_line=MAX_LINE,
-                         members=MAX_MEMBERS, links=MAX_LINKS,
+                         members=MAX_MEMBERS, links=MAX_LINKS, dead=MAX_DEAD, tags=MAX_TAGS,
                          line=line, history=history_text(history), desk=desk_text(missions))
 
 # ---------- what code holds it to ----------
@@ -283,8 +326,11 @@ def settle(reply: TheoryReply, line: str, missions: list[Mission]) -> Theory:
         mission = NewMission(topic=" ".join(mission.topic.split()), objective=mission.objective.strip(), epic=home)
     combine = settle_combine(reply.combine, missions, dropped)
     links = settle_links(reply.links, missions, combine, dropped)
+    dead = settle_dead_leads(reply.dead_leads, missions, combine, dropped)
+    tags = settle_claim_tags(reply.claim_tags, missions, dropped)
     return Theory(patterns=patterns, inspiration=new_line, why=" ".join(reply.why.split()),
-                  new_mission=mission, combine=combine, links=links, based_on=line, dropped=dropped)
+                  new_mission=mission, combine=combine, links=links, dead_leads=dead, claim_tags=tags, based_on=line,
+                  dropped=dropped)
 
 def settle_epic(e: NewEpic, missions: list[Mission], dropped: list[str], new: int = 0) -> NewEpic | None:
     """A new epic with a 1 to 4 word title no epic has, holding at least MIN_EXISTING known missions and
@@ -388,6 +434,72 @@ def settle_links(links: list[NewLink], missions: list[Mission], combine: NewComb
             a, b = b, a
         pairs.add(frozenset((a.slug, b.slug)))
         kept.append(NewLink(mission=a.slug, to=b.slug, why=_clean(k.why)))
+    return kept
+
+def settle_dead_leads(items: list[NewDeadLead], missions: list[Mission], combine: NewCombine | None,
+                      dropped: list[str]) -> list[NewDeadLead]:
+    """Up to MAX_DEAD proposed dead leads: known missions not yet being written, each once, with a known verdict and
+    a reason, not in this turn's combine, and not one already proposed or that the editor kept going."""
+    by_slug = {m.slug: m for m in missions}
+    folded = set(combine.missions) if combine else set()
+    kept: list[NewDeadLead] = []
+    for d in items:
+        slug, verdict = d.mission.strip(), d.verdict.strip().lower().replace(" ", "_")
+        m, old = by_slug.get(slug), store.get_dead_lead(slug)
+        why = None
+        if not m:
+            why = "no such mission"
+        elif m.state not in COMBINABLE:
+            why = "only missions not yet being written can be dead leads"
+        elif verdict not in VERDICTS:
+            why = f"the verdict is one of {', '.join(VERDICTS)}"
+        elif not d.why.strip():
+            why = "it needs a reason"
+        elif slug in folded:
+            why = "this turn's combine takes it"
+        elif old and old.status == "proposed":
+            why = "it is waiting for the editor already"
+        elif old and old.status in ("rejected", "revived"):
+            why = "the editor kept it going"
+        elif any(k.mission == slug for k in kept):
+            why = "proposed twice"
+        elif len(kept) == MAX_DEAD:
+            why = f"at most {MAX_DEAD} a turn"
+        if why:
+            dropped.append(f"dead lead dropped: {slug}, {why}")
+            continue
+        kept.append(NewDeadLead(mission=slug, verdict=verdict, why=_clean(d.why)))
+    return kept
+
+def settle_claim_tags(items: list[NewClaimTag], missions: list[Mission], dropped: list[str]) -> list[NewClaimTag]:
+    """Up to MAX_TAGS claim tag changes: missions with a brief, each once, a known tag that differs from the one it
+    has, with a reason, and never over a tag the editor set. The floor (claim_tags.floor) is applied when it is
+    saved."""
+    by_slug = {m.slug: m for m in missions}
+    tags = store.all_claim_tags()
+    kept: list[NewClaimTag] = []
+    for t in items:
+        slug, tag = t.mission.strip(), t.tag.strip().lower()
+        m, old = by_slug.get(slug), tags.get(slug)
+        why = None
+        if not m or not claim_tags.taggable(m):
+            why = "no such mission with a brief"
+        elif tag not in CLAIM_TAGS:
+            why = f"the tag is {' or '.join(CLAIM_TAGS)}"
+        elif not t.why.strip():
+            why = "it needs a reason"
+        elif old and old.by == "human":
+            why = "the editor set this tag"
+        elif old and old.value == tag:
+            why = f"it is {tag} already"
+        elif any(k.mission == slug for k in kept):
+            why = "changed twice"
+        elif len(kept) == MAX_TAGS:
+            why = f"at most {MAX_TAGS} a turn"
+        if why:
+            dropped.append(f"claim tag dropped: {slug}, {why}")
+            continue
+        kept.append(NewClaimTag(mission=slug, tag=tag, why=_clean(t.why)))
     return kept
 
 # ---------- the library: what it looks up before it answers ----------
@@ -613,10 +725,11 @@ def board_picture(notes: list[dict]) -> str:
     edge = "+" + "-" * GRID_COLS + "+"
     return "\n".join([f"x {x0:.0f} to {x1:.0f}, y {y0:.0f} to {y1:.0f}", edge, *rows, edge,
                       "E epic or Unsorted, q queued, r researching, b brief, w writing, a article in review, "
-                      "p published, x parked, c combined, + two notes in one cell"])
+                      "p published, x parked, c combined, d dead lead, + two notes in one cell"])
 
 MARKS = {State.QUEUED: "q", State.RESEARCHING: "r", State.BRIEF_READY: "b", State.AWAITING_COMMENTS: "w",
-         State.WRITING: "w", State.ARTICLE_READY: "a", State.DONE: "p", State.PARKED: "x", State.COMBINED: "c"}
+         State.WRITING: "w", State.ARTICLE_READY: "a", State.DONE: "p", State.PARKED: "x", State.COMBINED: "c",
+         State.DEAD_LEAD: "d"}
 
 def epics_note(active: int, waiting: list[str]) -> str:
     """How many epics the desk has, for the board prompt, and whether one already waits for the editor."""
