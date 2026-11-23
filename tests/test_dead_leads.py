@@ -154,9 +154,10 @@ def test_the_theorist_is_told_to_test_the_world_and_reads_tags_and_dead_leads():
 
 def test_the_finder_hunts_records():
     from agents import finder
+    assert any(a.startswith("Read the fringe") for a in finder.ANGLES)
     assert all(any(w in a.lower() for w in ("record", "court", "testimony", "filing", "data", "trail"))
                for a in finder.ANGLES)
-    assert "a question a document can answer" in finder.PROPOSE and "court filings" in finder.PROPOSE
+    assert "the open question" in finder.PROPOSE and "fringe source is fine" in finder.PROPOSE and "Explore." in finder.SEARCH
 
 # ---------- claim tags ----------
 

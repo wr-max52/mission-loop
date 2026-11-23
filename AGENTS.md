@@ -244,10 +244,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
   5 searches from 2 randomly drawn lateral angles, then the main model proposes missions. Code keeps at
   most 3, each resting on a URL the searches returned and not too close to an existing topic. They are
   queued and researched straight away, and still go through human brief review. A finder failure is
-  logged and never stops the loop. Its angles (`finder.ANGLES`) each end at a record (the court case, the
-  testimony, the filings, the dataset, the official record that contradicts the story), and a lead's topic is a
-  question a document can answer, its objective naming the kinds of record that would (#132; prompting only, no
-  code check).
+  logged and never stops the loop. It explores: a lead may start anywhere, the fringe included ("Read the fringe"
+  stays one of `finder.ANGLES`), but every angle ends at a record (the court case, the testimony, the filings, the
+  dataset, the official record that contradicts the story), and a lead's topic is the open question it raises, as
+  a question a document can answer, its objective naming the kinds of record that would and where (#132;
+  prompting only, no code check).
 - Verifiable leads (#132, prompting only): the finder, the Theorist, research and Researcher Chat's `add_mission` all
   ask questions a document can answer (has anyone testified..., has a court heard it, is there a filing, an arrest or
   booking record, a dataset) and name the kinds of record that would answer them. The Theorist tests the desk

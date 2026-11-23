@@ -17,8 +17,11 @@ TOO_SIMILAR = 0.6                          # share of meaningful words two topic
 
 # The models run at a low temperature, so the same prompt would search the same way every pass.
 # Drawing different angles each time is what keeps the finder wandering.
-# Every angle ends at a record: a document that could answer the lead, so the desk tests the world, not its own ideas.
+# The finder explores: a lead may start anywhere, the fringe included. Every lead it proposes then carries the open
+# question and the record that could settle it, so research tests the world, not the desk's own ideas.
 ANGLES = [
+    "Read the fringe: the wildest claim in forums, newsletters and podcasts about this field. It may be the start of a "
+    "real story: what is the open question in it, and what record (a filing, a ruling, testimony, data) could settle it?",
     "Find the court case: a lawsuit, ruling, settlement or prosecution in this field the usual story leaves out.",
     "Find the testimony: someone who said it under oath, to a legislature or an inquiry, on the record.",
     "Follow the money through filings: contracts, lobbying and campaign-finance records, annual reports, tax filings.",
@@ -57,17 +60,19 @@ Rules:
 - Stay in the same domain and field as the inspiration line, and close to its main focus.
 - A claim does not need to be true or respectable to be worth finding. It does need to exist already:
   someone must really be making it, on a page your searches return.
-- Prefer claims a document could settle: has anyone testified to it, has a court heard it, is there a
-  filing, an arrest record, an audit or a dataset? A lead nothing on the record could ever answer is weak.
+- Explore. A lead can start anywhere: a fringe post, a podcast, a dissenting expert, an odd number. For
+  each one, ask what open question it raises and what record could answer it: has anyone testified to it,
+  has a court heard it, is there a filing, an arrest record, an audit or a dataset?
 - When you have about three strong leads, stop calling tools and reply with the word DONE."""
 
 PROPOSE = """Now pick the 1 to 3 most surprising leads from the search results above and output them as JSON
 matching the schema. Each one becomes a mission for the research desk.
-- topic: one specific line naming the claim to investigate, as a question a document can answer (has anyone
-  testified that..., was there a ruling on..., do the filings show...). Never a general subject.
-- objective: two or three sentences saying what is being claimed, who is claiming it, and which records
-  would support or sink it, by kind (testimony, court filings, arrest or booking records, regulatory or
-  campaign-finance filings, contracts, datasets, FOIA responses). Treat the claim as a lead to test, not as true.
+- topic: one specific line: the open question the lead raises, as a question a document can answer (has
+  anyone testified that..., was there a ruling on..., do the filings show...). Never a general subject.
+- objective: two or three sentences saying what is being claimed, who is claiming it (a fringe source is fine:
+  say so), and which records would support or sink it, by kind and where they would be (testimony, court
+  filings, arrest or booking records, regulatory or campaign-finance filings, contracts, datasets, FOIA
+  responses). Treat the claim as a lead to test, not as true.
 - source_url: copied exactly from a search result above, a page showing that this claim is really being made.
 - epic: the title of the desk's existing epic (listed below) this lead fits best, copied exactly. Pick the
   closest one even when the fit is loose. Leave it empty only if the desk has no epics yet.
