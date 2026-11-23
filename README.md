@@ -80,8 +80,8 @@ one. **Settings → Setup** shows the same list.
 - **The play button says Waiting.** The loop is running but can't work (no model chosen, Ollama closed, a key
   that stopped working). Hover over it for the reason. It tries again every 30 seconds, so fixing the cause is
   enough.
-- **"Port 8770 is already in use".** The app may already be open in another window. Otherwise start it on another
-  port: `./start.sh --port 8771`.
+- **"Port 8770 is already in use".** Another app has the port (a running Mission Loop is simply opened again). Start
+  it on another port: `./start.sh --port 8771`.
 - **Missions get parked.** A mission is set aside after three failed attempts. Its page says why; requeue it once
   the cause is fixed.
 
