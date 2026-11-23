@@ -21,7 +21,7 @@ def called(path: Path) -> set[str]:
 
 def keys() -> set[str]:
     """Every English string the UI looks up: the literals, and the tables it translates at display time."""
-    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py") | called(ROOT / "doctor.py")
+    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py") | called(ROOT / "doctor.py") | called(ROOT / "clock.py")
     out |= set(ui.MESSAGES.values()) | set(ui.ERRORS.values()) | set(ui.LABELS.values())
     out |= set(activity.AGENTS.values()) | set(settings.WORKERS.values()) | set(ui.WORKER_BLURBS.values())
     out |= {s for steps in ui.ROLE_STEPS.values() for s in steps} | set(ui.ASK_ACTION.values())

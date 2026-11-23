@@ -21,6 +21,7 @@ from starlette.staticfiles import StaticFiles
 import activity, agents, avatars, board, claim_tags, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
+from agents import channel as channel_contract
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
                        RATING_FACTORS, RATING_FAIL_AT, RATING_SCALE)
 from render import CSS, brief_html, epic_pill
@@ -2715,9 +2716,17 @@ def publish_queue(missions: list[Mission]) -> list[tuple[str, str, list[tuple[st
             out.append((c.KEY, c.NAME, entries))
     return out
 
+def queue_pace(key: str, n: int, lead: str = "") -> str:
+    """How long a capped place's n queued articles take, "about 3 weeks (one a day)" (channel.estimate, #119),
+    after `lead`; "" for the local site and channels with no PACE."""
+    found = next((c for c in live_channels() if c.KEY == key), None)
+    words = channel_contract.estimate(found, n, clock.now()) if found else ""
+    return f"{lead}{escape(words)}" if words else ""
+
 def queue_card(queued: list, count: int) -> str:
     """The Missions page's one card for everything waiting to be published; the queue is on /published."""
-    places = " · ".join(f"{escape(name)} {len(entries)}" for _, name, entries in queued)
+    places = " · ".join(f"{escape(name)} {len(entries)}{queue_pace(key, len(entries), ' · ')}"
+                        for key, name, entries in queued)
     return (f'<a class="card publish" href="/published#queue"><div class="row"><span class="topic">'
             f'{_n("{n} article queued", "{n} articles queued", count)}</span><span class="badge publish">{_("Publishing")}</span></div>'
             f'<div class="sub">{places}</div></a>')
@@ -2733,8 +2742,10 @@ def queue_section(queued: list) -> str:
             f'<li><a href="{f"#a-{escape(slug)}" if key != "site" or asked else f"/m/{quote(slug)}"}">{escape(title)}</a>'
             + (f' · <strong>{_("requested")}</strong>' if asked else "") + "</li>"
             for slug, title, asked in entries)
-        parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span></h3>'
-                     f'<ol class="queue">{items}</ol>')
+        pace = queue_pace(key, len(entries))
+        parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span>'
+                     + (f'<span class="hint">{pace}</span>' if pace else "")
+                     + f'</h3><ol class="queue">{items}</ol>')
     total = len({slug for _, _, entries in queued for slug, _, _ in entries})
     return heading("clock", _("Queue"), total, "queue") + "".join(parts)
 
