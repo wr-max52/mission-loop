@@ -9,13 +9,17 @@ suspects rests on (the claims, quotes and article sections behind the desk's one
 with the request for its theory. A library that fails or runs out of time never stops the Theorist; it answers from
 the desk alone and says so.
 
-It may evolve the inspiration line, propose up to MAX_EPICS new epics and propose at most one new mission. It
+It may evolve the inspiration line and propose at most one new mission (in an existing epic or none). It
 also connects dots: it may propose combining 2 to MAX_MEMBERS open missions into one bigger mission (at most one
 combine a turn), and link up to MAX_LINKS pairs while keeping them separate: two open missions, or an open
 mission and a published article. Code holds it to that: the line may only ask questions and must keep at least
-KEEP of the current line's words (an evolution, not a rewrite), a new epic needs MIN_EPIC_MISSIONS missions, a
-new mission must not repeat one the desk has, a combine takes only missions not yet being written, and a link
-needs an open mission and a reason. The orchestrator applies what is left (orchestrator.apply_theory)."""
+KEEP of the current line's words (an evolution, not a rewrite), a new mission must not repeat one the desk has, a
+combine takes only missions not yet being written, and a link needs an open mission and a reason. The orchestrator
+applies what is left (orchestrator.apply_theory).
+
+New epics come only from the board turn (#131): every BOARD_EVERY-th turn, which arranges the cork board, may also
+propose one new epic (MAX_EPICS) that gathers at least MIN_EXISTING missions already on the desk, with up to
+MAX_NEW_MISSIONS new ones, MIN_EPIC_MISSIONS in all, and only while no other proposed epic waits for review."""
 import asyncio, math, re
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
@@ -31,8 +35,10 @@ KEEP = 0.5                                 # share of the current line's meaning
 MAX_LINE = 500                             # characters, as in the UI's box
 MAX_QUESTIONS = 3
 MAX_PATTERNS = 4
-MAX_EPICS = 2
-MIN_EPIC_MISSIONS = 2                      # an epic is a line of inquiry, not one mission
+MAX_EPICS = 1                              # new epics a board turn may propose (ideas turns propose none, #131)
+MIN_EPIC_MISSIONS = 3                      # an epic is a line of inquiry, not one mission
+MIN_EXISTING = 2                           # of them already on the desk; the rest may be new missions
+MAX_NEW_MISSIONS = 2                       # new missions a board turn's epic may bring
 MAX_PER_EPIC = 8                           # latest missions shown under each epic
 MAX_LOOSE = 12                             # latest missions in no epic shown
 MAX_POSTS = 6                              # latest published articles shown in full
@@ -86,24 +92,19 @@ Reply with JSON matching the schema:
     answers or claims.
   - At most {max_line} characters.
 - why: one or two sentences: what you changed in the line and which pattern led there, or why you kept it.
-- new_epics: usually empty, at most {epics}. Only for a theme emerging across epics, or a strand inside one epic
-  that has grown into a line of inquiry of its own. title: 1 to 3 words, specific yet thematic, a line of
-  inquiry that can grow, not a goal (e.g. "Fed Policy Capture"), and not the name of an existing epic. why:
-  one sentence. missions: the slugs of the existing missions that belong in it (they move there once the
-  editor approves it). It needs at least {min_epic} missions, counting your new mission if it goes there.
 - new_mission: at most one, or null. The single question that best tests a pattern you named. It must connect
   missions, not repeat one, and be a question about the outside world that a document can answer: has anyone
   testified that..., is there a court filing on..., do the records show.... Never a term the desk coined.
   topic: one specific line, as a question. objective: two or three sentences naming the missions it draws on and
   the kinds of record that would support or sink it (testimony, court filings, arrest or booking records,
   regulatory or campaign-finance filings, contracts, datasets, FOIA responses). epic: the title of an existing
-  epic, or of one of your new_epics.
+  epic, or "". You don't make new epics this turn.
 - combine: usually null. Only when 2 to {members} open missions are really one investigation, so researching
   them apart would duplicate the work or miss the connection. Only missions that are queued, researching, brief
   in review or parked can be combined; never published ones or ones being written. missions: their slugs.
   topic: one specific line, as a question, for the bigger mission. objective: two or three sentences: what each
-  mission brings and what evidence would answer the combined question. epic: the title of an existing epic, of
-  one of your new_epics, or "". why: one sentence. The editor approves it; the missions then stop and the
+  mission brings and what evidence would answer the combined question. epic: the title of an existing epic, or
+  "". why: one sentence. The editor approves it; the missions then stop and the
   combined mission is researched in their place.
 - links: usually empty, at most {links}. Connect missions that should stay separate but bear on each other, so
   each one's research sees the other. mission: an open mission's slug (not published). to: the slug of another
@@ -138,21 +139,26 @@ How the line got here, oldest first:
 class TheoryFailed(Exception):
     pass
 
+class EpicMission(BaseModel):
+    topic: str
+    objective: str
+
 class NewEpic(BaseModel):
     title: str
     why: str = ""
     missions: list[str] = []               # slugs of existing missions that belong in it
+    new_missions: list[EpicMission] = []   # a board turn's new missions for it (the chat brings none)
 
 class NewMission(BaseModel):
     topic: str
     objective: str
-    epic: str = ""                         # an existing epic's title, or one of new_epics
+    epic: str = ""                         # an existing epic's title, or ""
 
 class NewCombine(BaseModel):
     missions: list[str]                    # 2+ slugs of open missions not yet being written
     topic: str
     objective: str
-    epic: str = ""                         # an existing epic's title, one of new_epics, or ""
+    epic: str = ""                         # an existing epic's title, or ""
     why: str = ""
 
 class NewLink(BaseModel):
@@ -175,7 +181,6 @@ class TheoryReply(BaseModel):
     patterns: list[str]
     inspiration: str
     why: str = ""
-    new_epics: list[NewEpic] = []
     new_mission: NewMission | None = None
     combine: NewCombine | None = None
     links: list[NewLink] = []
@@ -269,8 +274,7 @@ def history_text(history: list[dict]) -> str:
 def prompt(line: str, history: list[dict], missions: list[Mission], now=None) -> str:
     today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
     return SYSTEM.format(today=today, patterns=MAX_PATTERNS, questions=MAX_QUESTIONS, max_line=MAX_LINE,
-                         epics=MAX_EPICS, min_epic=MIN_EPIC_MISSIONS, members=MAX_MEMBERS, links=MAX_LINKS,
-                         dead=MAX_DEAD, tags=MAX_TAGS,
+                         members=MAX_MEMBERS, links=MAX_LINKS, dead=MAX_DEAD, tags=MAX_TAGS,
                          line=line, history=history_text(history), desk=desk_text(missions))
 
 # ---------- what code holds it to ----------
@@ -297,8 +301,8 @@ def line_problems(new: str, current: str) -> list[str]:
     return problems
 
 def settle(reply: TheoryReply, line: str, missions: list[Mission]) -> Theory:
-    """Keep only what the Theorist may do: a line that passes line_problems (else the line stays), new epics
-    with enough missions that aren't existing epics, and one new mission the desk doesn't already have."""
+    """Keep only what the Theorist may do: a line that passes line_problems (else the line stays) and one new
+    mission the desk doesn't already have, in an active epic or none. New epics are the board turn's (#131)."""
     dropped: list[str] = []
     new_line = " ".join(reply.inspiration.split())
     problems = line_problems(new_line, line)
@@ -315,62 +319,50 @@ def settle(reply: TheoryReply, line: str, missions: list[Mission]) -> Theory:
         dropped.append(f"new mission dropped: the desk already has one like it ({mission.topic.strip()})")
         mission = None
 
-    epics: list[NewEpic] = []
-    for e in reply.new_epics:
-        joins = bool(mission and epic_title(mission.epic).lower() == epic_title(e.title).lower())
-        if len(epics) == MAX_EPICS and epic_title(e.title):
-            dropped.append(f"new epic dropped: {epic_title(e.title)}, at most {MAX_EPICS} at a time")
-            continue
-        kept = settle_epic(e, missions, dropped, epics, joins)
-        if kept:
-            epics.append(kept)
-
     if mission:
         home = epic_title(mission.epic)
-        ours = next((e.title for e in epics if e.title.lower() == home.lower()), "")
         found = store.find_epic(home) if home else None
-        home = ours or (found.title if found and found.status == "active" else "")
+        home = found.title if found and found.status == "active" else ""
         mission = NewMission(topic=" ".join(mission.topic.split()), objective=mission.objective.strip(), epic=home)
-    combine = settle_combine(reply.combine, missions, epics, dropped)
+    combine = settle_combine(reply.combine, missions, dropped)
     links = settle_links(reply.links, missions, combine, dropped)
     dead = settle_dead_leads(reply.dead_leads, missions, combine, dropped)
     tags = settle_claim_tags(reply.claim_tags, missions, dropped)
-    return Theory(patterns=patterns, inspiration=new_line, why=" ".join(reply.why.split()), new_epics=epics,
+    return Theory(patterns=patterns, inspiration=new_line, why=" ".join(reply.why.split()),
                   new_mission=mission, combine=combine, links=links, dead_leads=dead, claim_tags=tags, based_on=line,
                   dropped=dropped)
 
-def settle_epic(e: NewEpic, missions: list[Mission], dropped: list[str], taken: list[NewEpic] = (),
-                joins: bool = False) -> NewEpic | None:
-    """A new epic with a 1 to 4 word title no epic has (nor one of taken, this turn's), holding at least
-    MIN_EPIC_MISSIONS known missions (joins: one more is coming, the new mission). Used for the Theorist's and the
-    chat assistant's proposals."""
+def settle_epic(e: NewEpic, missions: list[Mission], dropped: list[str], new: int = 0) -> NewEpic | None:
+    """A new epic with a 1 to 4 word title no epic has, holding at least MIN_EXISTING known missions and
+    MIN_EPIC_MISSIONS in all (new: how many new missions come with it, a board turn's). Used for the Theorist's
+    board turn and the chat assistant's proposals, which bring no new missions, so need MIN_EPIC_MISSIONS known
+    ones."""
     title = epic_title(e.title)
     if not title:
         dropped.append(f"new epic dropped: {e.title.strip()!r} is not a 1 to 4 word title")
         return None
-    if store.find_epic(title) or title.lower() in (k.title.lower() for k in taken):
+    if store.find_epic(title):
         dropped.append(f"new epic dropped: {title} already exists")
         return None
     known = {m.slug for m in missions}
     members = [s for s in dict.fromkeys(s.strip() for s in e.missions) if s in known]
-    if len(members) + joins < MIN_EPIC_MISSIONS:
-        dropped.append(f"new epic dropped: {title} needs at least {MIN_EPIC_MISSIONS} missions")
+    if len(members) < MIN_EXISTING or len(members) + new < MIN_EPIC_MISSIONS:
+        dropped.append(f"new epic dropped: {title} needs at least {MIN_EPIC_MISSIONS} missions, "
+                       f"{MIN_EXISTING} of them already on the desk")
         return None
     return NewEpic(title=title, why=" ".join(e.why.split()), missions=members)
 
-def _epic_for(name: str, new_epics: list[NewEpic], members: list[Mission]) -> str:
-    """The combined mission's epic: one of this turn's new epics, an active epic, else the one its members share."""
+def _epic_for(name: str, members: list[Mission]) -> str:
+    """The combined mission's epic: an active epic, else the one its members share."""
     title = epic_title(name)
-    ours = next((e.title for e in new_epics if title and e.title.lower() == title.lower()), "")
     found = store.find_epic(title) if title else None
-    if ours or (found and found.status == "active"):
-        return ours or found.title
+    if found and found.status == "active":
+        return found.title
     shared = {m.epic for m in members}
     epic = store.get_epic(shared.pop()) if len(shared) == 1 and "" not in shared else None
     return epic.title if epic and epic.status == "active" else ""
 
-def settle_combine(c: NewCombine | None, missions: list[Mission], new_epics: list[NewEpic],
-                   dropped: list[str]) -> NewCombine | None:
+def settle_combine(c: NewCombine | None, missions: list[Mission], dropped: list[str]) -> NewCombine | None:
     """A combine of 2 to MAX_MEMBERS missions that aren't being written yet, with a topic and objective, new to
     the desk (apart from the missions it folds together), and not one the editor has seen already."""
     if not c:
@@ -401,7 +393,7 @@ def settle_combine(c: NewCombine | None, missions: list[Mission], new_epics: lis
         dropped.append(f"combine dropped: {why}")
         return None
     return NewCombine(missions=slugs, topic=_clean(c.topic, 400), objective=c.objective.strip(),
-                      epic=_epic_for(c.epic, new_epics, members), why=_clean(c.why))
+                      epic=_epic_for(c.epic, members), why=_clean(c.why))
 
 def settle_links(links: list[NewLink], missions: list[Mission], combine: NewCombine | None,
                  dropped: list[str]) -> list[NewLink]:
@@ -664,15 +656,15 @@ def theorize(now=None) -> Theory:
                                     toolbox_factory=library_toolbox))
 
 
-# ---------- board turns: every BOARD_EVERY-th turn only arranges the cork board (#69) ----------
+# ---------- board turns: every BOARD_EVERY-th turn arranges the cork board (#69) and may propose an epic (#131) ----------
 
 MAX_MOVES = 12                             # notes a board turn may move or resize
 BOARD_MARGIN = 800                         # px a note may go past the board's current edges
 GRID_COLS, GRID_ROWS = 60, 22              # the rough picture of the board the Theorist sees
 
-BOARD_SYSTEM = """You are the Theorist of an investigative research desk. This turn you do one thing only: arrange
-the desk's cork board so a human reading it sees how the work hangs together. You change nothing else: no
-missions, epics, links or inspiration.
+BOARD_SYSTEM = """You are the Theorist of an investigative research desk. This turn you arrange the desk's cork board
+so a human reading it sees how the work hangs together, and you may propose one new epic. You change nothing
+else: no links, combines or inspiration.
 
 The board is a 2D map in pixels; x grows to the right, y grows downwards. Each note is a mission or an epic. A
 note at size 1.0 is about 160 px wide and 110 px tall; sizes run from {size_min} to {size_max}. Strings join an
@@ -687,8 +679,19 @@ Make the board read well:
   strings few.
 - Move only what helps; leave a note alone when it already sits well. At most {max_moves} notes.
 
-Reply with "moves": each {{"id": a note id from the list, "x", "y", "size"}} (size may be null to keep it), and
-"why": one or two sentences on what you arranged and why."""
+A new epic (a long-running line of inquiry) is rare. Propose one only if it makes sense: the board shows a strand
+of missions that belong together and no epic names yet. Keep the desk to few epics; a strand that fits an existing
+epic is not a new one. {epics}
+- new_epic: usually null. title: 1 to 3 words, specific yet thematic, a line of inquiry that can grow, not a goal
+  (e.g. "Fed Policy Capture"), and not the name of an existing epic. why: one sentence. missions: the slugs of at
+  least {min_existing} missions already on the board that belong in it (they move there once the editor approves
+  it; a slug is a note id without "m:"). new_missions: up to {max_new} new questions that fill out the strand, each
+  with a topic (one specific line, as a question, not repeating a mission on the board) and an objective (two or
+  three sentences: which missions it draws on and what evidence would answer it). At least {min_epic} missions in
+  all, counting the new ones.
+
+Reply with "moves": each {{"id": a note id from the list, "x", "y", "size"}} (size may be null to keep it),
+"why": one or two sentences on what you arranged and why, and "new_epic"."""
 
 class NoteMove(BaseModel):
     id: str                                # a note id: "m:<slug>" or "e:<slug>"
@@ -700,6 +703,7 @@ class BoardReply(BaseModel):
     """What the model writes on a board turn."""
     moves: list[NoteMove] = []
     why: str = ""
+    new_epic: NewEpic | None = None
 
 class BoardTidy(BoardReply):
     """A board turn after code has checked it."""
@@ -727,9 +731,19 @@ MARKS = {State.QUEUED: "q", State.RESEARCHING: "r", State.BRIEF_READY: "b", Stat
          State.WRITING: "w", State.ARTICLE_READY: "a", State.DONE: "p", State.PARKED: "x", State.COMBINED: "c",
          State.DEAD_LEAD: "d"}
 
+def epics_note(active: int, waiting: list[str]) -> str:
+    """How many epics the desk has, for the board prompt, and whether one already waits for the editor."""
+    note = f"The desk has {active} active epic{'s' * (active != 1)}."
+    if waiting:
+        note += (f" A proposed epic is waiting for the editor ({', '.join(waiting)}), so propose none this turn: "
+                 "new_epic must be null.")
+    return note
+
 def board_desk() -> dict:
-    """board.layout() with what the Theorist needs to read each note: its title and stage."""
+    """board.layout() with what the Theorist needs to read each note (its title and stage), and the epics: how
+    many are active and which proposed ones wait for the editor."""
     data = board.layout()
+    data["epics"] = {"active": len(store.all_epics("active")), "waiting": [e.title for e in store.all_epics("proposed")]}
     missions = {m.slug: m for m in store.all_missions()}
     epics = {e.slug: e for e in store.all_epics()}
     for n in data["notes"]:
@@ -749,12 +763,43 @@ def board_text(data: dict) -> str:
     return ("Notes:\n" + "\n".join(rows) + "\n\nStrings:\n" + ("\n".join(strings) or "- none")
             + "\n\nThe board now:\n" + board_picture(data["notes"]))
 
-def settle_board(reply: BoardReply, data: dict) -> BoardTidy:
+def settle_board_epic(e: NewEpic | None, missions: list[Mission], dropped: list[str]) -> NewEpic | None:
+    """A board turn's new epic (#131): none while another proposed epic waits for the editor; up to MAX_NEW_MISSIONS
+    new missions, each with a topic and objective and not like any on the desk (or each other); then settle_epic:
+    at least MIN_EXISTING missions on the desk and MIN_EPIC_MISSIONS in all. The new missions go with the epic."""
+    if not e:
+        return None
+    waiting = [x.title for x in store.all_epics("proposed")]
+    if waiting:
+        dropped.append(f"new epic dropped: {epic_title(e.title) or e.title.strip()}, "
+                       f"another proposed epic is waiting for the editor ({', '.join(waiting)})")
+        return None
+    topics, new = [m.topic for m in missions], []
+    for idea in e.new_missions:
+        topic = " ".join(idea.topic.split())
+        if not topic or not idea.objective.strip():
+            dropped.append("new mission dropped: it needs a topic and an objective")
+        elif too_similar(topic, topics):
+            dropped.append(f"new mission dropped: the desk already has one like it ({topic})")
+        elif len(new) == MAX_NEW_MISSIONS:
+            dropped.append(f"new mission dropped: {topic}, at most {MAX_NEW_MISSIONS} with a new epic")
+        else:
+            new.append(EpicMission(topic=topic, objective=idea.objective.strip()))
+            topics.append(topic)
+    kept = settle_epic(e, missions, dropped, new=len(new))
+    if kept:
+        kept.new_missions = new
+    return kept
+
+def settle_board(reply: BoardReply, data: dict, missions: list[Mission] | None = None) -> BoardTidy:
     """Code holds a board turn to the board: known notes only, each once, at most MAX_MOVES, sizes in range,
-    positions near the board, and no note dropped on top of another (it is nudged to the nearest free spot)."""
+    positions near the board, and no note dropped on top of another (it is nudged to the nearest free spot). Its
+    new epic is held to settle_board_epic; dropping it never drops the moves."""
     notes = {n["id"]: n for n in data["notes"]}
     if not notes:
         return BoardTidy(why=_clean(reply.why), dropped=[f"{len(reply.moves)} move(s): the board is empty"] if reply.moves else [])
+    epic_dropped: list[str] = []
+    epic = settle_board_epic(reply.new_epic, store.all_missions() if missions is None else missions, epic_dropped)
     xs, ys = [n["x"] for n in notes.values()], [n["y"] for n in notes.values()]
     box = (min(xs) - BOARD_MARGIN, max(xs) + BOARD_MARGIN, min(ys) - BOARD_MARGIN, max(ys) + BOARD_MARGIN)
     where = {i: (n["x"], n["y"]) for i, n in notes.items()}
@@ -778,12 +823,15 @@ def settle_board(reply: BoardReply, data: dict) -> BoardTidy:
                 size = round(min(board.SIZE_MAX, max(board.SIZE_MIN, mv.size)), 2)
             where[mv.id] = (round(x, 1), round(y, 1))
             kept.append(NoteMove(id=mv.id, x=round(x, 1), y=round(y, 1), size=size))
-    return BoardTidy(moves=kept, why=_clean(reply.why), dropped=dropped)
+    return BoardTidy(moves=kept, why=_clean(reply.why), new_epic=epic, dropped=dropped + epic_dropped)
 
 async def run_board(data: dict, now=None) -> BoardTidy:
     today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
+    counts = data.get("epics", {})
     system = today + BOARD_SYSTEM.format(size_min=board.SIZE_MIN, size_max=board.SIZE_MAX, gap=board.MIN_GAP,
-                                         max_moves=MAX_MOVES)
+                                         max_moves=MAX_MOVES, min_existing=MIN_EXISTING, max_new=MAX_NEW_MISSIONS,
+                                         min_epic=MIN_EPIC_MISSIONS,
+                                         epics=epics_note(counts.get("active", 0), counts.get("waiting", [])))
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": board_text(data) + "\n\nArrange the board. Reply as JSON matching the schema."}]
     reply = await llm.ask(messages, BoardReply, "theorist", TheoryFailed)

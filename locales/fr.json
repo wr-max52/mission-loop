@@ -828,7 +828,7 @@
  "Their own quirk, drawn by a model.": "Sa propre manie, dessinée par un modèle.",
  "Their quirk": "Sa manie",
  "Theorist": "Théoricien",
- "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "Vérification du Théoricien (code) : questions seulement, garde la moitié de ses mots ; une nouvelle série exige 2 missions ou plus et un nom inédit ; la nouvelle mission doit être nouvelle ; une fusion prend 2 à 4 missions pas encore en rédaction ; un lien exige une mission ouverte, une raison et une paire inédite. Le reste est écarté.",
+ "Theorist check (code): questions only, keeps half its words; new epic only on a board turn, 3+ missions, 2+ existing, a new name, none while one waits; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "Vérification du Théoricien (code) : questions seulement, garde la moitié de ses mots ; une nouvelle série seulement lors d'un tour de tableau, 3 missions ou plus dont 2 existantes, un nom inédit, aucune tant qu'une autre attend ; la nouvelle mission doit être nouvelle ; une fusion prend 2 à 4 missions pas encore en rédaction ; un lien exige une mission ouverte, une raison et une paire inédite. Le reste est écarté.",
  "Theorist proposes combining {n} missions into one.": "Le Théoricien propose de fusionner {n} missions en une.",
  "Theorist runs next.": "Le Théoricien passe ensuite.",
  "Theorist's notes": "Notes du Théoricien",
