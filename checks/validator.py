@@ -145,6 +145,10 @@ def source_problem(s, blocked: set[str] | None = None, archive: bool = False) ->
 def _quote_score(quote: str, page_text: str) -> float:
     return fuzz.partial_ratio(_norm(quote), _norm(page_text)[:MAX_TEXT_CHARS])
 
+def failed_source_ids(notes: str) -> set[str]:
+    """The sources a check's notes name: every per-source problem starts with "<source id>: "."""
+    return {line.split(":", 1)[0] for line in notes.splitlines()}
+
 def validate(m: Mission, brief: ResearchBrief) -> tuple[bool, str]:
     problems: list[str] = []
     ids = {s.id for s in brief.sources}

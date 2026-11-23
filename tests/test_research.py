@@ -282,6 +282,40 @@ async def test_too_few_sources_holding_up_fails_the_attempt_with_its_draft(monke
     assert "Only 1 verified supporting domain(s); need 3" in failed.value.notes
     assert failed.value.brief.thesis.startswith("Stub thesis") and failed.value.brief.claims == []
 
+KEPT = [Source(id="s1", url="https://web.archive.org/web/2024/https://a.example.com/r", title="A", quote="Kept words.",
+               stance="supports"),
+        Source(id="s2", url="https://b.example.com", title="B", quote="Also kept.", stance="supports")]
+
+async def test_sources_kept_from_a_failed_attempt_start_the_pick_unchanged_and_unchecked(monkeypatch):
+    m = M.model_copy(update={"kept_sources": KEPT})
+    again = Source(id="s1", url="https://a.example.com/r/", title="A", quote="Changed words.", stance="supports")
+    new = Source(id="s2", url="https://d.example.com", title="D", quote="New words.", stance="supports")
+    pick = SourcePick(thesis="T", sources=[again, new]).model_dump_json()
+    checked = []
+    def check(s, blocked=None, archive=False):
+        checked.append(s.url)
+        return None, s.url
+    monkeypatch.setattr(validator, "source_problem", check)
+    script(monkeypatch, [text("DONE"), text(pick), text(CLAIMS_JSON)])
+    brief = await research_mod.run_research(m, toolbox_factory=FakeToolbox)
+    assert brief.sources[:2] == KEPT                                     # the kept copies win, quote and archive and all
+    assert [(s.id, s.url) for s in brief.sources[2:]] == [("s3", "https://d.example.com")]   # a fresh id, no clash
+    assert checked == ["https://d.example.com"]                         # only the new source was checked
+
+async def test_a_pick_still_short_says_which_sites_it_holds(monkeypatch):
+    m = M.model_copy(update={"kept_sources": KEPT})
+    script(monkeypatch, [text("DONE"), text(SourcePick(thesis="T", sources=[]).model_dump_json())])
+    with pytest.raises(research_mod.BriefFailed) as failed:
+        await research_mod.run_research(m, toolbox_factory=FakeToolbox)
+    assert "Only 2 verified supporting domain(s); need 3 (held: a.example.com, b.example.com)" in failed.value.notes
+    assert failed.value.brief.sources == KEPT
+
+def test_the_next_search_is_told_what_is_held_and_what_is_missing():
+    rejected = RejectedBrief(brief=stub_brief(M).model_copy(update={"sources": KEPT}),
+                             notes="Only 2 verified supporting domain(s); need 3")
+    notes = research_mod._notes(M.model_copy(update={"kept_sources": KEPT, "rejected_brief": rejected}))
+    assert "Held: 2 supporting sites (a.example.com, b.example.com). Find 1 more supporting page on other sites." in notes
+
 async def test_claims_are_fixed_by_code_where_safe_and_fed_back_where_not(monkeypatch):
     bad = ClaimSet(counterpoint="c", claims=[
         Claim(text="It is possible that X, based on s1.", source_ids=["s1"], kind="fact"),   # code relabels it

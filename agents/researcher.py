@@ -119,14 +119,41 @@ REVISE_CLAIMS = (" The last brief failed its check: its claims and the problems 
 class ResearchFailed(Exception):
     pass
 
-def _failed_source_ids(notes: str) -> set[str]:
-    """The validator starts every per-source problem with "<source id>: "."""
-    return {line.split(":", 1)[0] for line in notes.splitlines()}
+def _held(kept: list) -> str:
+    """What the kept sources already give the brief, and what the search must still find."""
+    if not kept:
+        return ""
+    sites = sorted(validator.support_domains(kept))
+    need = validator.MIN_SUPPORT_DOMAINS - len(sites)
+    held = f"\nHeld: {len(sites)} supporting site{'s' if len(sites) != 1 else ''}" + (f" ({', '.join(sites)})" if sites else "")
+    return held + (f". Find {need} more supporting page{'s' if need > 1 else ''} on other sites." if need > 0 else
+                   ". That is enough supporting sites; fix the other problems.")
+
+def _key(url: str) -> str:
+    """A source's page, the same whether it is cited live or as its Wayback copy (see _core)."""
+    return "".join(_core(wayback.original(url) or url))
+
+def _with_kept(kept: list, picked: list) -> list:
+    """The pick after the kept sources: one the model picked again (the same page) is left out, since the kept
+    copy wins, and a new one whose id a kept source has gets the next free s<n>."""
+    pages, used, out = {_key(s.url) for s in kept}, {s.id for s in kept}, []
+    for s in picked:
+        if _key(s.url) in pages:
+            continue
+        if s.id in used:
+            n = 1
+            while f"s{n}" in used:
+                n += 1
+            s = s.model_copy(update={"id": f"s{n}"})
+        used.add(s.id)
+        pages.add(_key(s.url))
+        out.append(s)
+    return out
 
 def _notes(m: Mission) -> str:
     if m.rejected_brief:
         brief, notes = m.rejected_brief.brief, m.rejected_brief.notes
-        failed = _failed_source_ids(notes)
+        failed = validator.failed_source_ids(notes)
         verified = [s.id for s in brief.sources if s.id not in failed]
         return f"""
 Your previous brief was rejected. Revise it instead of starting over, and skip the exploring stage:
@@ -136,7 +163,7 @@ Sources that passed verification: {", ".join(verified) or "none"}.
 Keep these exactly as they are (same id, url, title, quote and stance). They count as fetched, so do
 not search for them or fetch them again. Spend your research only on fixing every problem below, and
 update any claim that cites a source you replace:
-{notes}
+{notes}{_held(m.kept_sources)}
 """
     if not m.validator_notes:
         return ""
@@ -477,8 +504,10 @@ async def _pick_sources(m: Mission, messages: list) -> SourcePick:
         trail.record("note", "brief step 1: choosing the sources")
         pick = await llm.ask(messages, SourcePick, "source picker", ResearchFailed)
         _save_pick(m, pick.thesis, pick.sources)
-    blocked, passed, failed = validator.blocked_domains(), [], []
-    todo = pick.sources
+    blocked, passed, failed = validator.blocked_domains(), list(m.kept_sources), []
+    todo = _with_kept(m.kept_sources, pick.sources)   # kept ones passed on an earlier attempt: not checked again
+    if m.kept_sources:
+        trail.record("note", f"brief step 1: {len(m.kept_sources)} source(s) kept from the last attempt")
     for round in range(SOURCE_ROUNDS):
         seen = {s.id for s in passed}
         failed = []
@@ -504,8 +533,9 @@ async def _pick_sources(m: Mission, messages: list) -> SourcePick:
         _save_pick(m, pick.thesis, passed + todo)   # passed ones are checked again on a resume: cheap, and certain
     domains = validator.support_domains(passed)
     if len(domains) < validator.MIN_SUPPORT_DOMAINS:
+        held = f" (held: {', '.join(sorted(domains))})" if domains else ""
         notes = [p for _, p in failed] + [
-            f"Only {len(domains)} verified supporting domain(s); need {validator.MIN_SUPPORT_DOMAINS}. Find "
+            f"Only {len(domains)} verified supporting domain(s); need {validator.MIN_SUPPORT_DOMAINS}{held}. Find "
             "supporting pages on other websites, and copy each quote exactly from the page"]
         draft = ResearchBrief(thesis=pick.thesis, sources=passed + [s for s, _ in failed], counterpoint="", claims=[])
         raise BriefFailed(draft, "\n".join(notes))

@@ -1,6 +1,5 @@
 import httpx
 import pytest
-from agents.researcher import _failed_source_ids
 import wayback
 from checks import validator
 from contracts import Mission, ResearchBrief, Source, Claim
@@ -121,7 +120,7 @@ def test_researcher_can_tell_which_sources_failed():
     b.sources[1].url = "https://dead.example/404"
     ok, notes = validator.validate(M, b)
     assert not ok
-    failed = _failed_source_ids(notes)
+    failed = validator.failed_source_ids(notes)
     assert {"s1", "s2"} <= failed and not {"s3", "s4"} & failed
 
 def scripted_get(monkeypatch, outcomes):
