@@ -132,9 +132,12 @@ def test_missions_that_fetch_get_the_page_tools():
     assert _tool_servers(Mission(slug="a", topic="t", tools=["search"])) == ["search"]
     assert _tool_servers(Mission(slug="a", topic="t", tools=["fetch", "pages"])) == ["fetch", "pages"]
 
-def test_search_is_limited_to_web_and_news():
-    env = json.loads((ROOT / "mcp.json").read_text())["search"]["env"]
-    assert env["BRAVE_MCP_ENABLED_TOOLS"].split() == ["brave_web_search", "brave_news_search"]
+async def test_search_server_runs_through_the_toolbox(monkeypatch):
+    monkeypatch.chdir(ROOT)
+    async with Toolbox(["search"]) as tb:
+        assert sorted(t["function"]["name"] for t in tb.tools) == ["news_search", "web_search", "wiki_search"]
+        assert not tb.skipped              # no key and no npx needed
+        assert await tb.call("web_search", {"query": "  "}) == "Give a query: the words to search for."
 
 async def test_pages_server_runs_through_the_toolbox(monkeypatch):
     monkeypatch.chdir(ROOT)                # the app runs from the project folder

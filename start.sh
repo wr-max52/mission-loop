@@ -33,7 +33,6 @@ if [ ! -f "$STAMP" ] || ! cmp -s requirements.txt "$STAMP"; then
   cp requirements.txt "$STAMP"
 fi
 
-command -v npx >/dev/null 2>&1 || echo "Note: npx isn't installed, so research can't search the web. Install it: brew install node"
 command -v uvx >/dev/null 2>&1 || echo "Note: uvx isn't installed, so research reads pages with fewer tools. Install it: brew install uv"
 command -v ollama >/dev/null 2>&1 || echo "Note: Ollama isn't installed. Get it at https://ollama.com/download, or use a cloud model's API key in the app."
 

@@ -42,8 +42,9 @@ is required just to look around:
      `ollama pull qwen3:8b`, then press **Connect Ollama**. It gives each worker one of your models.
    - With a cloud model (Claude, GPT, Gemini, Grok, DeepSeek, OpenRouter and more): paste its API key on
      **Settings → Model providers**, then pick a model for each worker.
-2. **Web search.** Research searches with Brave Search. Get a key at https://brave.com/search/api/ (there is a
-   free tier) and paste it into the card. It is checked with Brave and saved on this machine.
+2. **Web search.** Works out of the box with DuckDuckGo (free, no key), plus GDELT for news and Wikipedia for
+   background. For steadier results add a key for Brave Search, Tavily, Exa or Serper under **Settings → Web
+   search**; each search tries the sources in your order and falls back to the next when one is down.
 3. **Give it something to work on.** An inspiration line (a question the mission finder explores, finding its own
    missions), or a mission you add yourself.
 4. **Start the loop** with the play button at the top of the page.

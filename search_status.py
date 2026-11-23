@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 STATUS = Path("data/search_status.json")
-SOURCE = "Brave Search"                    # the one web search source mcp.json runs today
+SOURCE = "Brave Search"                    # the source named when an error doesn't say which
+ALL_DOWN = "every search source is down: "   # search_tools.py's marker: the reasons, source by source, follow
 RATE_WAIT = 5.0                            # seconds before the one retry of a rate-limited search
 FINDER_RETRY = 30 * 60                     # seconds the finder waits out an outage before it tries search again
 
@@ -17,22 +18,26 @@ KINDS = {
     "key": "refused the key",
     "rate": "is over its rate limit",
     "unreachable": "can't be reached",
+    "error": "answered with an error",
 }
 FIX = {
     "credit": "Top up the search provider's credit, or add another search source.",
     "key": "Paste a working key under Web search, or add another search source.",
     "rate": "Wait a little, or add another search source.",
     "unreachable": "Check this machine's internet connection, or add another search source.",
+    "error": "Try again later, or add another search source.",
+    "all": "Fix or top up a search source under Settings → Web search, or wait for the free sources' limits to reset.",
 }
 
 @dataclass
 class Outage:
-    kind: str                              # a key of KINDS
+    kind: str                              # a key of KINDS, or "all": every source is down
     source: str = SOURCE
+    detail: str = ""                       # "all": each source's reason
 
     @property
     def reason(self) -> str:
-        return f"{self.source} {KINDS[self.kind]}"
+        return self.detail if self.kind == "all" else f"{self.source} {KINDS[self.kind]}"
 
 _CODE = re.compile(r"^\s*(?:error:\s*)?(?:[\w.]+ failed:\s*)?\D{0,60}?\b(40[1-3]|429)\b")
 _CREDIT = re.compile(r"credit|quota|payment required|insufficient balance|billing", re.I)
@@ -46,6 +51,9 @@ def classify(result: str, source: str = SOURCE) -> Outage | None:
     about the search source itself (a bad argument, say)."""
     if not result.startswith("ERROR"):
         return None
+    if ALL_DOWN in result:                 # the search server tried every source
+        detail = result.split(ALL_DOWN, 1)[1].strip().rstrip(".")
+        return Outage("all", "", detail or "no source answered")
     head = result[:600]
     code = _CODE.search(head.lower())
     status = code.group(1) if code else ""

@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 from typer.testing import CliRunner
 import ollama
 from types import SimpleNamespace as NS
-import agents, doctor, orchestrator, run as cli, settings, status_tools, store, ui
+import agents, doctor, orchestrator, run as cli, search_sources, settings, status_tools, store, ui
 from agents import assistant
 from agents import finder, llm, publisher, toolbox
 from contracts import Mission
@@ -26,7 +26,7 @@ def no_models(monkeypatch):
     monkeypatch.delenv("MISSION_LOOP_MODEL")
 
 def brave(status: int):
-    return httpx.MockTransport(lambda request: httpx.Response(status, json={}))
+    return httpx.MockTransport(lambda request: httpx.Response(status, json={"web": {"results": []}}))
 
 def ready_to_go(monkeypatch):
     settings.save_search_key("brave-key")
@@ -100,8 +100,17 @@ def test_a_fresh_clone_needs_a_model_search_and_work(no_models):
     assert not found["models"].ok and found["models"].blocks_loop
     assert "Connect Ollama" in found["models"].fix                  # Ollama answers with models installed
     assert "connection" not in found                                 # nothing to connect until a model is chosen
-    assert not found["search"].ok and not found["search"].blocks_loop and found["search"].link == doctor.BRAVE_KEYS
-    assert found["npx"].ok and found["uvx"].ok and not found["work"].ok
+    assert found["search"].ok and "DuckDuckGo" in found["search"].detail   # free search needs no key
+    assert "npx" not in found and found["uvx"].ok and not found["work"].ok
+
+def test_no_search_source_on_is_a_problem_with_the_fix():
+    settings.set_search_on("ddgs", False)
+    found = {c.key: c for c in doctor.checks()}
+    assert not found["search"].ok and not found["search"].blocks_loop and found["search"].link == "/settings#research"
+    assert "Switch DuckDuckGo on" in found["search"].fix
+    settings.save_search_key("tavily-key", "tavily")
+    found = {c.key: c for c in doctor.checks()}
+    assert found["search"].ok and found["search"].detail == "Searches with Tavily."
 
 def test_all_set(monkeypatch):
     ready_to_go(monkeypatch)
@@ -119,15 +128,15 @@ def test_ollama_closed_is_a_blocking_problem(monkeypatch):
     found = {c.key: c for c in doctor.checks(conn=closed)}
     assert not found["connection"].ok and found["connection"].blocks_loop and "Ollama not answering" in found["connection"].detail
 
-def test_missing_npx_and_uvx_say_what_to_install(monkeypatch):
+def test_missing_uvx_says_what_to_install(monkeypatch):
     monkeypatch.setattr(toolbox, "WHICH", lambda command: None)
     found = {c.key: c for c in doctor.checks()}
-    assert not found["npx"].ok and "brew install node" in found["npx"].fix
     assert not found["uvx"].ok and "brew install uv" in found["uvx"].fix
+    assert found["search"].ok                                        # search no longer needs npx
 
 def test_doctor_command(no_models):
     result = CliRunner().invoke(cli.app, ["doctor"])
-    assert result.exit_code == 1 and "!! A model for each worker" in result.output and "-- Web search key" in result.output
+    assert result.exit_code == 1 and "!! A model for each worker" in result.output and "ok Web search" in result.output
 
 # ---------- tools this machine can't run are skipped ----------
 
@@ -144,13 +153,25 @@ async def test_toolbox_skips_a_missing_command_and_an_empty_key(tmp_path, monkey
     async with toolbox.Toolbox(["echo"], config_path=cfg) as tb:
         assert "echo: hi" in await tb.call("echo", {"text": "hi"}) and tb.skipped == {}
 
-def test_the_saved_search_key_reaches_the_search_server():
-    assert toolbox.server_status(["search"])["search"] == "BRAVE_API_KEY is not set"
+def test_search_keys_are_saved_per_source_and_privately(monkeypatch):
+    assert toolbox.server_status(["search"])["search"] == ""          # the search server runs without any key
     settings.save_search_key("abc123")
-    assert toolbox._expand("${BRAVE_API_KEY}") == "abc123" and toolbox.server_status(["search"])["search"] == ""
+    settings.save_search_key("tv-1", "tavily")
+    assert settings.search_key() == "abc123" and settings.search_key("tavily") == "tv-1" and not settings.search_key("exa")
     assert stat.S_IMODE(settings.SEARCH_FILE.stat().st_mode) == 0o600
+    settings.forget_search_key("brave")
+    assert not settings.search_key() and settings.search_key("tavily") == "tv-1"
+    monkeypatch.setenv("EXA_API_KEY", "from-env")
+    assert settings.search_key("exa") == "from-env" and not settings.search_key_saved("exa")
     with pytest.raises(ValueError):
         settings.save_search_key("has spaces in it")
+    with pytest.raises(ValueError):
+        settings.save_search_key("k", "ddgs")                       # DuckDuckGo takes no key
+
+def test_a_brave_key_saved_before_sources_still_works():
+    settings.SEARCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    settings.SEARCH_FILE.write_text('{"key": "old-brave"}')
+    assert settings.search_key("brave") == "old-brave" and settings.search_on("brave")
 
 async def test_the_finder_says_web_search_is_off():
     class NoSearch:
@@ -160,13 +181,14 @@ async def test_the_finder_says_web_search_is_off():
     with pytest.raises(finder.FinderFailed, match="web search is off"):
         await finder.run_finder("a line", [], toolbox_factory=lambda names: NoSearch())
 
-def test_the_brave_key_check(monkeypatch):
-    monkeypatch.setattr(doctor, "TRANSPORT", brave(401))
-    assert doctor.check_search_key("bad") == (False, "Brave refused that key")
-    monkeypatch.setattr(doctor, "TRANSPORT", brave(200))
+def test_the_key_check(monkeypatch):
+    monkeypatch.setattr(search_sources, "TRANSPORT", brave(401))
+    assert doctor.check_search_key("bad") == (False, "Brave Search refused that key")
+    assert doctor.check_search_key("bad", "serper") == (False, "Serper refused that key")
+    monkeypatch.setattr(search_sources, "TRANSPORT", brave(200))
     assert doctor.check_search_key("good") == (True, "")
     def offline(request): raise httpx.ConnectError("no network")
-    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(offline))
+    monkeypatch.setattr(search_sources, "TRANSPORT", httpx.MockTransport(offline))
     ok, note = doctor.check_search_key("maybe")
     assert ok and "saved anyway" in note                             # offline: warn, don't block
 
@@ -175,9 +197,9 @@ def test_the_brave_key_check(monkeypatch):
 def test_fresh_home_page_shows_get_started(client, no_models):
     html = client.get("/").text
     card = html.split('id="setup"')[1].split("</section>")[0]
-    assert "Get started" in card and "3 steps left" in card
+    assert "Get started" in card and "2 steps left" in card          # web search works with no key
     assert 'action="/settings/ollama-connect"' in card and 'name="back" value="/"' in card
-    assert 'action="/settings/search"' in card and 'action="/inspiration"' in card
+    assert 'action="/settings/search"' not in card and 'action="/inspiration"' in card
     assert 'href="/about"' in card and 'data-ask=' in card             # the About page and Researcher Chat
     assert all(htmllib.escape(line) in card for line in ui.INSPIRATIONS)
     assert html.index('id="setup"') < html.index('id="flow"')         # first thing on the page
@@ -198,18 +220,34 @@ def test_the_card_hides_returns_and_goes_once_everything_is_done(client, monkeyp
     ready_to_go(monkeypatch)
     assert 'id="setup"' not in client.get("/").text                   # nothing left to set up
 
-def test_saving_a_search_key_checks_it_with_brave(client, monkeypatch):
-    monkeypatch.setattr(doctor, "TRANSPORT", brave(401))
-    r = client.post("/settings/search", data={"key": "nope", "back": "/"}, follow_redirects=False)
+def test_saving_a_search_key_checks_it_first(client, monkeypatch):
+    monkeypatch.setattr(search_sources, "TRANSPORT", brave(401))
+    r = client.post("/settings/search", data={"key": "nope", "source": "brave", "back": "/"}, follow_redirects=False)
     assert r.headers["location"] == "/?error=search_key" and not settings.search_key()
-    r = client.post("/settings/search", data={"key": "two words"}, follow_redirects=False)
-    assert r.headers["location"] == "/settings?error=search_format"
-    monkeypatch.setattr(doctor, "TRANSPORT", brave(200))
-    r = client.post("/settings/search", data={"key": "good-key", "back": "/"}, follow_redirects=False)
-    assert r.headers["location"] == "/?done=search_saved" and settings.search_key() == "good-key"
+    r = client.post("/settings/search", data={"key": "two words", "source": "brave"}, follow_redirects=False)
+    assert r.headers["location"] == "/settings?error=search_format#search"
+    r = client.post("/settings/search", data={"key": "k", "source": "ddgs"}, follow_redirects=False)
+    assert "error=search_format" in r.headers["location"]           # no key for DuckDuckGo
+    monkeypatch.setattr(search_sources, "TRANSPORT", brave(200))
+    r = client.post("/settings/search", data={"key": "good-key", "source": "tavily", "back": "/"}, follow_redirects=False)
+    assert r.headers["location"] == "/?done=search_saved" and settings.search_key("tavily") == "good-key"
     assert "Remove key" in client.get("/settings").text
-    client.post("/settings/search", data={"remove": "1"})
-    assert not settings.search_key()
+    client.post("/settings/search", data={"remove": "1", "source": "tavily"})
+    assert not settings.search_key("tavily")
+
+def test_settings_lists_every_source_and_saves_order_and_switches(client):
+    page = client.get("/settings").text
+    order = [page.index(f"<strong>{name}</strong>") for name in
+             ("Brave Search", "Tavily", "Exa", "Serper", "DuckDuckGo", "GDELT")]
+    assert order == sorted(order) and "no key" in page and "news only" in page
+    r = client.post("/settings/search/move", data={"source": "ddgs", "step": "-1"}, follow_redirects=False)
+    assert "done=search_order" in r.headers["location"]
+    assert settings.search_order()[3:5] == ["ddgs", "serper"]
+    client.post("/settings/search/toggle", data={"source": "ddgs", "on": ""})
+    assert not settings.search_on("ddgs") and settings.search_sources_on("web") == []
+    assert settings.search_sources_on("news") == ["gdelt"]
+    client.post("/settings/search/toggle", data={"source": "ddgs", "on": "1"})
+    assert settings.search_sources_on("web") == ["ddgs"]
 
 # ---------- an honest loop ----------
 

@@ -6,8 +6,8 @@ of turns the page sends back. It keeps no memory and saves nothing.
 
 Every tool comes from MCP servers in mcp.json: "loop" (status_tools.py), "library" (library_tools.py: search_library,
 the desk's own work by meaning and words, the same library the Theorist searches), and the researcher's own web
-tools, "fetch" and "pages" (page_tools.py: find_in_page, page_links, wayback_versions), plus "search" (Brave web and
-news search) when a Brave key is set. It can do everything the Theorist can: read the desk as the Theorist does
+tools, "fetch" and "pages" (page_tools.py: find_in_page, page_links, wayback_versions), plus "search" (search_tools.py:
+web_search, news_search and wiki_search over the sources set in Settings → Web search) while a source is on. It can do everything the Theorist can: read the desk as the Theorist does
 (desk_overview), search the library, change the inspiration line, propose epics and combines (they wait for the
 human), link missions, arrange the cork board, queue a mission and ask for the Theorist's turn, through the
 Theorist's own checks. The same tools are what Settings -> MCP server shares with other apps on this network
@@ -144,8 +144,9 @@ def pick(model: str | None) -> str:
         return default
 
 def web_search() -> bool:
-    """Brave's search needs a key (saved on the Settings page or in .env) and npx; reading pages works without."""
-    return not server_status(["search"], CONFIG)["search"]
+    """Web search works while a search source is on (DuckDuckGo needs no key, so it usually is); reading pages works
+    without."""
+    return not server_status(["search"], CONFIG)["search"] and bool(settings.search_sources_on("web"))
 
 def servers() -> list[str]:
     return [LOOP_SERVER, LIBRARY_SERVER, *WEB_SERVERS, *(["search"] if web_search() else [])]

@@ -10,15 +10,12 @@ answering" instead of "Running". Nothing here starts or stops anything.
 import json, os, time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import httpx
-import search_status, settings, store
+import search_sources, search_status, settings, store
 from i18n import _, _n
 from agents import llm, toolbox
 
 WAITING = Path("data/waiting.json")
-TRANSPORT: httpx.BaseTransport | None = None   # tests swap in a mock; None is the real network
 OLLAMA_DOWNLOAD = "https://ollama.com/download"
-BRAVE_KEYS = "https://brave.com/search/api/"
 
 @dataclass
 class Check:
@@ -77,25 +74,25 @@ def _connection(conn: dict, deep: bool) -> list[Check]:
 def _tools(probe: bool = False) -> list[Check]:
     status = toolbox.server_status(["search", "fetch"])
     out = []
-    key = settings.search_key()
-    out.append(Check("search", _("Web search key"), bool(key),
-                     _("Brave Search key set.") if key else _("No Brave Search key. Research can't search the web."),
-                     "" if key else _("Get a free key from Brave and paste it under Web search."),
-                     "" if key else BRAVE_KEYS))
-    if key and probe:
-        probe_search(key)
-    down = search_status.current() if key else None
-    if down:                               # the key is there but searches fail: one check says why and since when
+    sources = settings.search_sources_on("web")
+    names = ", ".join(settings.SEARCH_SOURCES[s]["name"] for s in sources)
+    out.append(Check("search", _("Web search"), bool(sources),
+                     _("Searches with {names}.").format(names=names) if sources
+                     else _("No web search source is on. Research can't search the web."),
+                     "" if sources else _("Switch DuckDuckGo on (free, no key) or add a key under Web search."),
+                     "" if sources else "/settings#research"))
+    if sources and probe:
+        probe_search()
+    down = search_status.current() if sources else None
+    if down:                               # sources are on but searches fail: one check says why
         out.append(Check("search_up", _("Web search works"), False,
                          _("Web search is down: {reason}.").format(reason=down["reason"]),
                          _(down.get("fix") or search_status.FIX["unreachable"]), "/settings#research"))
-    for command, server, what in (("npx", "search", _("web search")), ("uvx", "fetch", _("reading pages"))):
-        missing = "not installed" in status.get(server, "")
-        out.append(Check(command, _("{command} for {what}").format(command=command, what=what), not missing,
-                         _("{command} not installed: {what} is off.").format(command=command, what=what) if missing
-                         else _("{command} installed.").format(command=command),
-                         _("Install it: brew install {package}").format(package="node" if command == "npx" else "uv")
-                         if missing else ""))
+    missing = "not installed" in status.get("fetch", "")
+    out.append(Check("uvx", _("{command} for {what}").format(command="uvx", what=_("reading pages")), not missing,
+                     _("{command} not installed: {what} is off.").format(command="uvx", what=_("reading pages"))
+                     if missing else _("{command} installed.").format(command="uvx"),
+                     _("Install it: brew install {package}").format(package="uv") if missing else ""))
     return out
 
 def _work() -> list[Check]:
@@ -140,52 +137,41 @@ def done(found: list[Check] | None = None) -> bool:
 def as_dicts(found: list[Check]) -> list[dict]:
     return [asdict(c) for c in found]
 
-# ---------- checking a Brave key before it is saved ----------
+# ---------- checking a search source's key before it is saved ----------
 
-def _brave(key: str) -> httpx.Response:
-    with httpx.Client(transport=TRANSPORT, timeout=10) as client:
-        return client.get(settings.SEARCH_API, params={"q": "test", "count": 1},
-                          headers={"X-Subscription-Token": key.strip(), "Accept": "application/json"})
-
-def check_search_key(key: str) -> tuple[bool, str]:
-    """(True, "") if Brave takes the key; (False, why) if it refuses it. A network failure counts as unknown, not
-    refused: (True, note), so a key can still be saved offline (warn, don't block)."""
+def check_search_key(key: str, source: str = "brave") -> tuple[bool, str]:
+    """(True, "") if the source takes the key with one test search; (False, why) if it refuses it. Anything else
+    (out of credit, rate limited, unreachable) counts as unknown, not refused: (True, note), so a key can still be
+    saved (warn, don't block)."""
+    name = settings.SEARCH_SOURCES[source]["name"]
     try:
-        r = _brave(key)
-    except httpx.HTTPError as e:
-        return True, f"Couldn't reach Brave to check it ({type(e).__name__}); saved anyway."
-    if r.status_code in (401, 403, 422):
-        return False, "Brave refused that key"
-    if r.status_code == 402:
-        return True, "Brave says the key is out of prepaid credit; saved anyway. Top up to search."
-    if r.status_code == 429:
-        return True, "Brave says the key is over its rate limit right now; saved anyway."
-    if r.status_code >= 400:
-        return True, f"Brave answered {r.status_code}; saved anyway."
-    search_status.clear()                  # a new key that works ends a recorded outage
+        search_sources.RUN[source]("web", "test", 1, "", key.strip())
+    except search_sources.SourceDown as e:
+        if e.outage.kind == "key":
+            return False, f"{name} refused that key"
+        return True, f"{e.outage.reason}; saved anyway."
+    search_sources.wake(source)            # a key that works: try the source again at once
+    search_status.clear()                  # and a recorded outage is over
     return True, ""
 
 PROBE_EVERY = 10 * 60                      # seconds between real test searches (each one costs a query)
 _probed = 0.0
 
-def probe_search(key: str) -> search_status.Outage | None:
-    """One real test search, at most every PROBE_EVERY seconds: records an outage or clears one. Returns the
-    outage it found (None when it works, or when it didn't ask this time)."""
+def probe_search() -> search_status.Outage | None:
+    """One real test search through the sources in order, at most every PROBE_EVERY seconds: records an outage
+    (every source down) or clears one. Returns the outage it found (None when it works, or when it didn't ask)."""
     global _probed
     if time.monotonic() - _probed < PROBE_EVERY and _probed:
         return None
     _probed = time.monotonic()
     try:
-        r = _brave(key)
-    except httpx.HTTPError:
-        outage = search_status.Outage("unreachable")
-    else:
-        outage = search_status.classify(f"ERROR: {r.status_code} {r.text[:300]}") if r.status_code >= 400 else None
-    if outage:
+        search_sources.search("web", "news today", 1)
+    except search_sources.AllDown as e:
+        outage = search_status.Outage("all", "", str(e))
         search_status.record(outage)
-    else:
-        search_status.clear()
-    return outage
+        return outage
+    search_status.clear()
+    return None
 
 # ---------- why the loop is waiting ----------
 

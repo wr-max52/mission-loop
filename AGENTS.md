@@ -11,7 +11,7 @@ into `site/` on this machine, posts the article text to 1f916.ai only once `data
 from the Settings page), and announces it on Bluesky only once a login is saved (`data/bluesky.json`, from the
 Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/1f916.json` is the citizen's whole
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
-`data/providers.json` the cloud model providers' API keys, `data/search.json` the Brave Search key,
+`data/providers.json` the cloud model providers' API keys, `data/search.json` the web search sources' keys,
 `data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
 copy) and `data/email.json` the outreach email login (an app password): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
 
@@ -35,12 +35,12 @@ The written issue is what Will approves; nothing after it waits on him until the
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
-  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
+  whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 809 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
-  public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
-  server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
+- Tests: `pytest -q` (expects 845 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+  public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
+  included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
   `stub_agents` turns outreach on with a pretend channel and the stub Outreach agent; the `no_outreach` fixtures turn it off)
 - Config, not code: nothing machine-specific is written in the code. Models, the Ollama address, the cloud model
@@ -72,12 +72,12 @@ The written issue is what Will approves; nothing after it waits on him until the
   Research Assistant; never overwrites a choice). Researcher Chat's picker lists cloud models too.
 - Setup check (`doctor.py`): one list of what this machine still needs, each with how to fix it: a model for each
   worker that's on, those models answering (`deep=True` asks `llm.ready`, else Ollama's quick `llm.connection` and
-  whether a cloud provider has a key), the Brave key, `npx` and `uvx` (from `toolbox.server_status`), and something to
+  whether a cloud provider has a key), a web search source that is on, `uvx` (from `toolbox.server_status`), and something to
   work on (a mission or an inspiration line). `python run.py doctor` prints it (exit 1 while a model is missing), the
   Settings page's Setup section shows it, Researcher Chat reads it (`setup_status`), and the home page's Get started
-  card (`ui.setup_card`) walks through it: Connect Ollama (or links to get Ollama or add a cloud key), the Brave key
-  (checked with Brave by `doctor.check_search_key`, `TRANSPORT` for tests; offline it is saved with a note, a refusal
-  is not saved), an inspiration line with example lines (`ui.INSPIRATIONS`) or Add a mission, then play. The card goes
+  card (`ui.setup_card`) walks through it: Connect Ollama (or links to get Ollama or add a cloud key), web search
+  (already done on a fresh clone: DuckDuckGo needs no key; keys are optional, under Settings → Web search), an
+  inspiration line with example lines (`ui.INSPIRATIONS`) or Add a mission, then play. The card goes
   once every check passes, or when hidden (`settings.setup_dismissed`; Settings → Setup brings it back). It never
   blocks anything. Every CLI command creates the database first (`run._start`), `ui` refuses a port with a live
   listener (`run._port_free`) and writes the site's index and About page when `site/` has none, so `/site/` and the
@@ -87,6 +87,22 @@ The written issue is what Will approves; nothing after it waits on him until the
   reason) and checks again every `run.WAIT_RETRY` (30 s) instead of resting; the top bar then says Waiting (amber,
   the reason on hover) instead of Running, and the loop panel says what to fix. It is cleared when the loop can work
   or stops.
+- Web search sources (`search_sources.py`, code, no model, served by `search_tools.py` as the `search` entry in
+  `mcp.json`, #106): every agent sees three tools whichever source answers: `web_search(query, count, freshness)`,
+  `news_search(...)` and `wiki_search(query, count)` (Wikipedia only, for background on a specific topic; its
+  answer says it is not proof, and its failures are plain text, never an outage). Sources live in
+  `settings.SEARCH_SOURCES` (each public address is there and nowhere else): keyed Brave Search, Tavily, Exa and
+  Serper (`BRAVE_API_KEY` etc., or pasted on Settings → Web search, checked with one search by
+  `doctor.check_search_key`, saved per source in `data/search.json`, mode 600, which wins over `.env`; a Brave key
+  saved before as `{"key": ...}` still counts), and keyless DuckDuckGo (the `ddgs` library; web and news) and GDELT
+  (news only). A search tries the sources that are on (`settings.search_sources_on`), in the order set on Settings →
+  Web search (up/down, switch on/off; `search_order`, `search_off` in settings.json); an outage (the kinds below)
+  moves on and rests that source (`data/search_sources.json`, `REST`: 30 minutes for credit or key, 5 for the rest);
+  no results is an answer. Every source answers in one shape (title, url, snippet, date) and the text names the
+  source and any skipped. Only when every source is down does the tool fail, with `search_status.ALL_DOWN` and each
+  reason, which the search loop sorts as one outage (kind `all`). DuckDuckGo is used politely (`DDG_GAP`,
+  `DDG_PER_MINUTE`, then it rests) and GDELT at most every 5 seconds; nothing tries to get past a block. Requests carry
+  a generic User-Agent. Search no longer needs `npx`. `search_sources.TRANSPORT` and `DDG` let tests block the network.
 - Search outages (`search_status.py`, code, no model, #105): a web search tool's error is sorted into a kind (out of
   credit 402, key refused 401/403, rate limited 429, unreachable) with one plain sentence ("Brave Search is out of
   prepaid credit"); no results is not an outage. The search loop (`researcher._search`, used by research, the finder
@@ -483,8 +499,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   (like `page_tools.py`, `status_tools.py`) and is reached through `agents/toolbox.py`, never imported directly,
   so other clients can use it later. Script paths in `mcp.json` are relative to `mcp.json`, which `toolbox.CONFIG`
   finds next to the code whatever the working folder. A server this machine can't run is skipped, not fatal: its
-  command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty (the
-  search server's `BRAVE_API_KEY`, which `settings.search_key` also reads from `data/search.json`). `Toolbox.skipped`
+  command isn't installed (`toolbox.WHICH`, swapped in tests) or a variable it lists under `requires` is empty.
+  `Toolbox.skipped`
   says which and why; the finder stops with that reason instead of searching with no tool.
 - Sharing the tools on this network (`mcp_share.py`, Settings -> MCP server): every tool Researcher Chat has, and so
   every tool the Theorist and the other agents use, as one MCP server other apps connect to (Claude Code, Claude
@@ -527,8 +543,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   `theorist.settle_board`, saved `by="chat"`), and
   `setup_status` (the setup check, `doctor.py`); `mission_status` names a mission's links and
   combines, `theorist_notes` the Theorist's last combine, links and library searches), the `library` server (`search_library`), the researcher's web tools `fetch` and `pages` (`find_in_page`, `page_links`,
-  `wayback_versions`), and `search` (Brave web and news search) when `BRAVE_API_KEY` is set; without a key the
-  panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
+  `wayback_versions`), and `search` (`web_search`, `news_search`, `wiki_search`) while a web search source is on;
+  with every source off the panel says it can only read pages it is given. Mission listings name each mission's epic. All loop tools but
   `add_mission`, `set_mission_epic` and the Theorist's moves only read the database, `data/activity.json`, the channels' state files, the
   trails and `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the
   UI's Add mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones
@@ -697,7 +713,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
 | Set the published site's name, tagline and About statement | Settings → Publication |
-| Save the Brave search key | the Get started card or Settings → Web search (or `BRAVE_API_KEY` in `.env`) |
+| Pick web search sources, their order and keys | Settings → Web search (or `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `SERPER_API_KEY` in `.env`) |
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |

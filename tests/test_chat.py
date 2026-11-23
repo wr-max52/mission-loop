@@ -196,7 +196,8 @@ def scripted(monkeypatch, *replies):
     return seen
 
 async def test_assistant_looks_then_answers(monkeypatch):
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)          # a real .env may hold one
+    settings.set_search_on("ddgs", False)                      # no search source on: no search tools
+    settings.set_search_on("gdelt", False)
     seen = scripted(monkeypatch, call("loop_status"), say("The loop is running."))
     boxes = []
     answer = await assistant.run_chat("what's going on?", toolbox_factory=lambda n: boxes.append(FakeToolbox(n)) or boxes[-1])
@@ -226,8 +227,9 @@ async def test_empty_question_needs_no_model(monkeypatch):
     scripted(monkeypatch)
     assert "Ask me" in await assistant.run_chat("   ", toolbox_factory=FakeToolbox)
 
-async def test_web_tools_and_search_only_with_a_key(monkeypatch):
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+async def test_web_tools_and_search_while_a_source_is_on(monkeypatch):
+    assert assistant.servers() == ["loop", "library", "fetch", "pages", "search"] and assistant.web_search()   # DuckDuckGo
+    settings.set_search_on("ddgs", False)
     assert assistant.servers() == ["loop", "library", "fetch", "pages"] and not assistant.web_search()
     monkeypatch.setenv("BRAVE_API_KEY", "k")
     assert assistant.servers() == ["loop", "library", "fetch", "pages", "search"] and assistant.web_search()
@@ -316,7 +318,7 @@ def test_ask_passes_the_model_on(monkeypatch):
 def test_model_picker_lists_models_and_reports_ollama_down(monkeypatch):
     client = TestClient(ui.app)
     default = assistant.default_model()
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    settings.set_search_on("ddgs", False)                      # no search source on
     found = [{"name": default, "family": "small-test", "crew": "assistant"}, {"name": "llama3:8b", "family": "llama", "crew": "assistant"}]
     monkeypatch.setattr(ui.agents, "chat_catalog", lambda: found)
     assert client.get("/chat/models").json() == {
