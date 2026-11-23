@@ -344,7 +344,6 @@
  "Gold": "Gold",
  "GPT models.": "GPT-Modelle.",
  "Green": "Grün",
- "Greetings from": "Grüße aus",
  "Grid": "Raster",
  "Grin": "Grinsen",
  "Grok models.": "Grok-Modelle.",
@@ -1227,5 +1226,7 @@
  "Every researcher visits as a cyborg: metal, lights and pipes.": "Alle Forschenden kommen als Cyborg: Metall, Lichter und Rohre.",
  "Metal": "Metall",
  "Glowing eyes": "Leuchtende Augen",
- "Start from a cyborg": "Mit einem Cyborg beginnen"
+ "Start from a cyborg": "Mit einem Cyborg beginnen",
+ "Post card": "Postkarte",
+ "To": "An"
 }

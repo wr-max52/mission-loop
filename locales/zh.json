@@ -344,7 +344,6 @@
  "Gold": "金",
  "GPT models.": "GPT 模型。",
  "Green": "绿",
- "Greetings from": "来自",
  "Grid": "网格",
  "Grin": "咧嘴笑",
  "Grok models.": "Grok 模型。",
@@ -1227,5 +1226,7 @@
  "Every researcher visits as a cyborg: metal, lights and pipes.": "每位研究员都以赛博格形象出现：金属、灯光和管道。",
  "Metal": "金属",
  "Glowing eyes": "发光的眼睛",
- "Start from a cyborg": "从赛博格开始"
+ "Start from a cyborg": "从赛博格开始",
+ "Post card": "明信片",
+ "To": "致"
 }

@@ -75,13 +75,37 @@
 
   // ---------- notes ----------
   const hue = id => { let h = 7; for (const c of id) h = (h * 33 + c.charCodeAt(0)) % 360; return h; };
-  const RAINBOW = [4, 28, 48, 140, 205, 265];      // alphabet magnet colours, in order
-  function alphaWord(text) {                       // the word the alphabet magnets spell: the first strong one
-    const words = String(text).replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
-    const w = words.find(x => x.length >= 4) || words[0] || "?";
-    return w.toUpperCase().slice(0, 8);
+  // A published mission's postcard stamp: [picture, caption, price]. Satire of institutions and light memes, never a
+  // real person. One line each: add one and it is in the draw. Stamps are artwork, so their words aren't translated.
+  const STAMPS = [
+    ["🏛️", "Forever Stamp: Filibuster", "∞¢"], ["⬛", "Redacted", "███"], ["💼", "Lobbyist Approved", "$$$"],
+    ["📉", "Postage Due: The Deficit", "$34T"], ["🔥", "This Is Fine", "0¢"], ["📈", "Stonks", "↑↑¢"],
+    ["↩️", "Ctrl+Z", "undo"], ["🐕", "Much Airmail. Wow", "such ¢"], ["🦅", "Freedom Rate", "1776¢"],
+    ["🗳️", "Vote Early, Vote Once", "1¢"], ["🐖", "Pork Barrel Special", "$1B"], ["🐘", "Elephant in the Room", "2¢"],
+    ["🫏", "Donkey Express", "2¢"], ["🕵️", "Classified (Not Really)", "?¢"], ["📜", "Terms & Conditions Apply", "TL;DR"],
+    ["☕", "Committee Coffee Break", "4 hrs"], ["🔍", "Citation Needed", "[?]"], ["🤡", "Clown Mail", "honk"],
+    ["📋", "Red Tape Priority", "27B/6"], ["🍿", "C-SPAN Binge", "3¢"], ["🐸", "Not My Department", "0¢"],
+    ["🛸", "Declassified UAP Post", "??¢"], ["💸", "Trickle-Down Delivery", "0.01¢"], ["🧻", "Paper Trail", "1 roll"],
+    ["⏳", "Pending Review Since 1987", "∞"], ["🤫", "Off the Record", "shh"], ["🫠", "Approval Rating", "38%"],
+    ["🗿", "Bureaucracy Express", "moai"], ["🐐", "G.O.A.T. Mail", "baa"], ["🚨", "Breaking News", "!!!"],
+    ["🧠", "Big Brain Postage", "200 IQ"], ["🍕", "Pentagon Pizza Index", "1 slice"], ["🦆", "Rubber Duck Edition", "quack"],
+    ["🎰", "Earmark Jackpot", "777"], ["🪦", "Here Lies Net Neutrality", "RIP"], ["👀", "Sources Say", "anon"],
+    ["🧂", "Grain of Salt", "1 pinch"], ["🦗", "Crickets: Official Response", "0¢"], ["📠", "Sent from My Fax", "1997"],
+    ["🌚", "Leaked at Midnight", "3am"],
+  ];
+  const AIRMAIL = [["#d8343a", "#2f78c8"], ["#2c9b52", "#d8343a"], ["#e0a91e", "#1f3b7a"], ["#7b4bc4", "#ee7a2c"],
+    ["#1d9a9a", "#e05a8a"], ["#d8343a", "#1f3b7a"]];                     // a postcard's border stripes
+  const CARD = ["#fffdf6", "#fbf5e6", "#f6f1e7", "#fff8ee"];              // postcard stock
+  const SHEET = ["#fffffb", "#fffef4", "#fdf7c8"];                        // notebook paper: white, cream, yellow legal
+  const INK = ["#22397a", "#1e1e22", "#5b5e63", "#2d55a8"];               // blue, black, pencil, royal blue
+  const HANDS = 5;                                                        // .hand-0 .. .hand-4 in ui.py
+  const seed = (id, salt) => { let h = 2166136261 ^ salt; for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+  const draw = (id, salt, list) => list[seed(id, salt) % list.length];   // the same mission always draws the same
+  function stampHtml(slug) {
+    const i = seed(slug, 3) % STAMPS.length, [pic, caption, price] = STAMPS[i];
+    return `<span class="stamp" style="--sh:${(i * 47) % 360}"><i>${pic}</i><b>${esc(caption)}</b><em>${esc(price)}</em></span>`;
   }
-  function magnetHtml(n) {                         // missions grow from letters to word tiles to a postcard
+  function magnetHtml(n) {                         // missions go from notebook paper to word tiles to a postcard
     if (n.kind === "epic")
       return `<div class="souvenir" style="--h:${hue(n.slug)}"><svg class="horseshoe" viewBox="0 0 40 30" aria-hidden="true">`
         + `<path d="M6 2v12a14 14 0 0 0 28 0V2h-8v12a6 6 0 0 1-12 0V2z"/><path class="tip" d="M6 2h8v5H6zM26 2h8v5h-8z"/></svg>`
@@ -89,17 +113,20 @@
         + `<div class="n">${esc(n.count_text)}</div></div>`;
     if (n.kind === "unsorted") return `<div class="t">${esc(n.title)}</div><div class="n">${esc(n.count_text)}</div>`;
     const live = n.live ? `<span class="now">${tr("working now")}</span>` : "", grip = `<span class="grip" title="${tr("Resize")}"></span>`;
-    if (n.paper === "done" || n.paper === "publish") {
-      const mark = n.paper === "done" ? tr("Published") : tr("Article ready");
-      return `<div class="postcard"><div class="photo" style="--h:${hue(n.epic || n.slug)}"><span class="greet">${tr("Greetings from")}</span>`
-        + `<span class="place">${esc(n.epic || tr("the desk"))}</span></div><div class="back"><div class="t">${esc(n.short)}</div>`
-        + `<span class="stampbox"></span><span class="postmark">${mark}</span></div></div>${live}${grip}`;
+    const s = n.slug, hand = `hand-${seed(s, 5) % HANDS}`;
+    if (n.paper === "done") {                      // published: the back of a postcard, stamped and franked
+      const [a1, a2] = draw(s, 1, AIRMAIL);
+      const waves = `<svg class="waves" viewBox="0 0 44 18" aria-hidden="true"><path d="M0 3q5.5-3 11 0t11 0 11 0 11 0M0 9q5.5-3 11 0t11 0 11 0 11 0M0 15q5.5-3 11 0t11 0 11 0 11 0"/></svg>`;
+      return `<div class="postcard" style="--a1:${a1};--a2:${a2};--card:${draw(s, 2, CARD)};--ink:${draw(s, 4, INK)}">`
+        + `<div class="pc"><div class="pc-head">${tr("Post card")}</div><div class="msg ${hand}">${esc(n.short)}</div>`
+        + `<div class="addr">${stampHtml(s)}<span class="postmark">${waves}<span class="ring"><b>${tr("Published")}</b>`
+        + `<small>${esc(n.posted || "")}</small></span></span>`
+        + `<div class="to ${hand}"><span>${tr("To")}</span> ${esc(n.epic || tr("the desk"))}</div><div class="line"></div><div class="line"></div></div>`
+        + `</div></div>${live}${grip}`;
     }
-    if (n.paper === "queued" && !n.faded || n.paper === "research") {
-      const letters = [...alphaWord(n.short)].map((c, i) =>
-        `<b style="--h:${RAINBOW[i % RAINBOW.length]};--r:${((i * 37) % 11) - 5}deg">${esc(c)}</b>`).join("");
-      return `<div class="alpha">${letters}</div><div class="tape">${esc(n.short)}</div>${live}${grip}`;
-    }
+    if (n.paper === "queued" && !n.faded || n.paper === "research")   // a new mission: a page torn from a notebook
+      return `<div class="notebook ${hand}" style="--sheet:${draw(s, 2, SHEET)};--ink:${draw(s, 4, INK)}">`
+        + `<div class="t">${esc(n.short)}</div><div class="st">${esc(n.stage)}</div></div>${live}${grip}`;
     const words = String(n.short).split(/\s+/).slice(0, 10);
     const tiles = words.map((w, i) => `<i style="--r:${((i * 53) % 7) - 3}deg">${esc(w)}</i>`).join("");
     const tag = n.dead ? tr("Dead lead") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;

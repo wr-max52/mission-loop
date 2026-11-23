@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 910 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 911 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -687,8 +687,12 @@ replies) only while outreach is on and a channel is ready;
   (`/board?focus=<slug>`, zoomed onto it). Its look (#68) is the gear on the board or Settings → Display → Board, the
   same setting (`settings.board_style`, saved in `data/settings.json` only when not cork, sticky notes and red
   string): a surface (cork, paper, grid, night, fridge, arcade; grid, night and arcade move with the view), cards (sticky notes;
-  fridge magnets, where a mission grows from rainbow alphabet letters while queued or researching, to word-puzzle
-  tiles from the brief on, to a postcard once its article is ready, and an epic is a souvenir magnet; or hologram
+  fridge magnets, where a mission is a handwritten page torn from a spiral notebook while queued or researching,
+  word-puzzle tiles from the brief on (Article ready included), and the back of an airmail postcard once published
+  (#143: the title as the message, "To" its epic, a postmark with the date, and a stamp from `STAMPS` in
+  `assets/board.js`, institution satire and light memes, never a real person, one line each and not translated,
+  since a stamp is artwork; the stamp, stripes, card, paper, ink and handwriting are drawn from the slug, so a
+  mission always looks the same), and an epic is a souvenir magnet; or hologram
   panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
   joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour (the gear and Settings → Display → Board both have the picker). A card's colour is its
   stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note
