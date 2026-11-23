@@ -35,10 +35,10 @@ The written issue is what Will approves; nothing after it waits on him until the
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
-  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
+  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 798 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 809 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
   server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -331,6 +331,16 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   repeating tokens ("token repeat limit reached"): a stuck search turn ends the search, and a stuck structured
   reply keeps whatever valid JSON it wrote before (checked as usual), else the attempt fails. `llm.ask` is the
   shared structured call: one repair round for malformed JSON, the Overrun salvage, and stop handling.
+- Models leave memory once nothing wants them (#107; `llm.IDLE_UNLOAD`, 5 minutes): the loop's own Ollama calls keep
+  their model for its rest plus a minute (`llm.KEEP_ALIVE`, set from `--every` by `run.py loop`), so a rest never
+  reloads one; a sweep after a full rest (not one a UI action cut short) that calls no model unloads them
+  (`run._unload_after_rest`, `llm.LAST_CALL`); a stopping `run`/`loop` sets them to unload 5 minutes on
+  (`llm.release`), so play within that keeps them. Researcher Chat and the avatar studio keep theirs 5 minutes. While
+  the UI is open, `ui.idle_unloader` looks every `ui.IDLE_CHECK` (30 s) and, once the loop has been off 5 minutes,
+  unloads any of ours still held longer than that (`llm.unload_pinned`: a loop that died). Only Mission Loop's models
+  (`llm.ours()`: the workers', the chat and embedding models, any this process called, none in stub runs) are touched,
+  and only ones `ps` shows loaded (`llm.loaded`), since an empty request would load one. Nothing here ever raises;
+  `llm.CLIENT` is the fake Ollama in tests.
 - Publishing has two parts: the local site, the foundation every article is written to first, and channels,
   everywhere else it goes, each posting from the local site's feed. Where each article went is recorded per
   mission in `Mission.channels` (key -> when and where):
@@ -599,7 +609,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 
 ## Operating it
 
-The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
+The easy way: `python run.py ui`, which opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't; with a UI
+already running on the port it opens that one and exits). It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to wake the loop. The top bar of every page has the Auto switch and, beside
 it, the loop's play/pause button with its state (`ui.loop_button`; green and pulsing while the loop is off): play starts the loop, which runs in the
@@ -681,7 +692,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | You want to | Command |
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
-| Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
+| Open the UI | `python run.py ui` → opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't) |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |

@@ -1,7 +1,8 @@
 """Every model call goes through here, so tests can replace one function. A model is an Ollama model (a bare name,
 sent to settings.ollama_host) or a cloud provider's ("anthropic/claude-...", sent by agents/providers.py); either
 way the agents get an ollama.Message back. Models come from config (settings.model_for); none are written here."""
-import asyncio, time
+import asyncio, os, time
+from datetime import datetime, timezone
 import ollama
 import settings, stopping, trail
 from agents import providers
@@ -21,6 +22,15 @@ TOOLS_ROOM = 2048                          # tokens left over for the tool defin
 # its prompts bounded. Its replies get a bigger cap: reasoning models spend part of it thinking before they answer.
 CLOUD_CONTEXT = 65536
 CLOUD_REPLY_TOKENS = 16384
+# How long Ollama keeps a model loaded once nothing asks it anything (#107). A paused loop's models unload this long
+# after it stops (release, and the UI's unload_pinned for a loop that died); Researcher Chat's model the same after
+# the last question. A running loop's calls keep theirs for its rest plus a minute (run.py loop sets KEEP_ALIVE), so
+# a rest never reloads a model, and a rest that ends with nothing for a model to do unloads them (unload).
+IDLE_UNLOAD = 5 * 60
+KEEP_ALIVE = IDLE_UNLOAD + 60              # seconds the loop's own calls keep their model loaded
+USED: set[str] = set()                     # Ollama models this process has called (a model picked in Researcher Chat)
+LAST_CALL = 0.0                            # time.monotonic() of this process's last Ollama call
+CLIENT = None                              # tests swap in a fake Ollama client for loaded/unload
 
 def context_for(model: str | None) -> int:
     """How many tokens of prompt and reply the loop gives a model: CONTEXT on Ollama, CLOUD_CONTEXT elsewhere."""
@@ -127,8 +137,9 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True, th
             return (await providers.chat(provider, name, messages, tools, format, CLOUD_REPLY_TOKENS))[0]
         client = ollama.AsyncClient(host=settings.ollama_host())
         extra = {} if think is None else {"think": think}
+        _used(name)
         return (await client.chat(model=name, messages=messages, tools=tools, format=format,
-                                  options=OPTIONS, keep_alive="24h", **extra)).message
+                                  options=OPTIONS, keep_alive=_duration(IDLE_UNLOAD), **extra)).message
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 
@@ -140,8 +151,9 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True, th
                 raise Overrun(f"reply ran past {CLOUD_REPLY_TOKENS} tokens", msg.content or "".join(parts))
             return msg
         client = ollama.AsyncClient(host=settings.ollama_host())   # new client per call: safe across asyncio.run()
+        _used(name)
         kw = dict(model=name, messages=fit(messages, reply_tokens), tools=tools, format=format,
-                  options={**OPTIONS, "num_predict": reply_tokens}, keep_alive="24h")
+                  options={**OPTIONS, "num_predict": reply_tokens}, keep_alive=_duration(KEEP_ALIVE))
         try:
             if format is None:
                 response = await client.chat(**kw)
@@ -221,6 +233,62 @@ def connection(timeout: float = 2) -> dict:
     except Exception as e:
         out["error"] = type(e).__name__
     return out
+
+# ---------- keeping models loaded only while they are wanted (#107) ----------
+
+def _used(name: str) -> None:
+    global LAST_CALL
+    USED.add(name)
+    LAST_CALL = time.monotonic()
+
+def _duration(seconds: float) -> str:
+    return f"{int(seconds)}s"
+
+def _client(timeout: float):
+    return CLIENT if CLIENT is not None else ollama.Client(host=settings.ollama_host(), timeout=timeout)
+
+def ours() -> set[str]:
+    """The Ollama models Mission Loop loads: the workers', the chat model, the library's embedding model and any model
+    this process has called. A model another app loaded is never one of them. Stub runs load none."""
+    if os.environ.get("MISSION_LOOP_STUBS") == "1":
+        return set()
+    refs = [settings.worker_model(w) for w in settings.WORKERS] + [settings.chat_model(), settings.embed_model()]
+    names = {name for pid, name in map(settings.split_model, filter(None, refs)) if pid == settings.LOCAL}
+    return {n for n in names | USED if n}
+
+def loaded(timeout: float = 5) -> dict[str, datetime | None]:
+    """What Ollama holds in memory now, each with when it unloads by itself; {} when Ollama can't be reached."""
+    try:
+        return {m.model: m.expires_at for m in _client(timeout).ps().models}
+    except Exception:
+        return {}
+
+def unload(models, keep_alive: str | int = 0) -> list[str]:
+    """Unload each of `models` Ollama holds now (keep_alive 0), or with a duration set it to unload that long from now.
+    Only loaded models are touched: an empty request for one that isn't loaded would load it. Never raises; returns
+    the models it reached."""
+    held = loaded()
+    done = []
+    for name in sorted(set(models) & held.keys()):
+        try:
+            _client(30).generate(model=name, keep_alive=keep_alive)
+            done.append(name)
+        except Exception:
+            pass
+    return done
+
+def release() -> list[str]:
+    """The loop is stopping: its models unload IDLE_UNLOAD from now, unless a loop started meanwhile asks again."""
+    return unload(ours(), _duration(IDLE_UNLOAD))
+
+def unload_pinned(now: datetime | None = None) -> list[str]:
+    """Unload Mission Loop's models that Ollama still holds for longer than IDLE_UNLOAD: a loop that died, or a call
+    from before #107 that asked for 24 hours. The UI calls it once the loop has been off IDLE_UNLOAD."""
+    now = now or datetime.now(timezone.utc)
+    mine = ours()
+    pinned = [n for n, until in loaded().items()
+              if n in mine and until is not None and (until - now).total_seconds() > IDLE_UNLOAD]
+    return unload(pinned) if pinned else []
 
 def catalog(conn: dict | None = None) -> list[dict]:
     """Every model the workers can pick, Ollama's first: [{"ref", "provider", "name", "size", "loaded"}]. ref is what
