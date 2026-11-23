@@ -81,16 +81,25 @@ def chat_catalog() -> list[dict]:
 def chat_web() -> bool:
     return False
 
-def chat(question: str, history: list[dict] | None = None, model: str | None = None) -> str:
-    """No model: asks the real loop MCP server for its status, so stub runs still go through MCP."""
-    import asyncio
-    from agents.assistant import CONFIG
+def chat(question: str, history: list[dict] | None = None, model: str | None = None, on_event=None) -> str:
+    """No model: asks the real loop MCP server for its status, so stub runs still go through MCP, and tells
+    on_event about it like the real Researcher Chat."""
+    import asyncio, time
+    from agents.assistant import CONFIG, describe
     from agents.toolbox import Toolbox
 
     async def ask() -> str:
         async with Toolbox(["loop"], config_path=CONFIG) as tb:
             return await tb.call("loop_status", {})
-    return f"Stub answer to: {question}\n" + asyncio.run(ask())
+    started, step = time.monotonic(), describe("loop_status", {})
+    if on_event:
+        on_event(step)
+    answer = f"Stub answer to: {question}\n" + asyncio.run(ask())
+    if on_event:
+        on_event({"type": "text", "text": answer})
+        on_event({"type": "done", "answer": answer, "model": "stub", "seconds": round(time.monotonic() - started, 1),
+                  "tools": 1, "kinds": [step["kind"]], "calls": [{"label": step["label"], "what": ""}]})
+    return answer
 
 STUB_COLORS = {"red": "#c0392b", "blue": "#3d6a9e", "green": "#2f9e44", "pink": "#e84393", "purple": "#7b5ea7",
                "black": "#17110e", "white": "#f2f0f7", "yellow": "#f1c40f", "orange": "#e67e22", "brown": "#6e4527"}

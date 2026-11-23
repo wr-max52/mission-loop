@@ -1,5 +1,5 @@
 """The chat assistant, its read-only loop MCP server, and the agents' trails it reads."""
-import json, time
+import json, shutil, subprocess, time
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
@@ -188,10 +188,15 @@ class FakeToolbox:
 
 def scripted(monkeypatch, *replies):
     seen = []
-    async def fake_chat(messages, tools=None, format=None, model=None, stoppable=True):
+    async def fake_chat(messages, tools=None, format=None, model=None, stoppable=True, on_chunk=None):
         assert stoppable is False                                   # a pressed stop never cuts the chat off
         seen.append((list(messages), tools, model))
-        return replies[len(seen) - 1]
+        reply = replies[len(seen) - 1]
+        for kind in ("thinking", "content"):                        # streamed, as Ollama does, a few characters a piece
+            text = getattr(reply, kind) or ""
+            for i in range(0, len(text), 5):
+                on_chunk and on_chunk("thinking" if kind == "thinking" else "text", text[i:i + 5])
+        return reply
     monkeypatch.setattr(llm, "chat", fake_chat)
     return seen
 
@@ -290,6 +295,15 @@ def test_chat_model_is_config():
 
 # ---------- the UI: a bubble on every page, a panel over the left third ----------
 
+def events(r) -> list[dict]:
+    return [json.loads(line) for line in r.text.splitlines() if line.strip()]
+
+def answer(r) -> str:
+    """The answer a streamed chat run ended with."""
+    done = events(r)[-1]
+    assert done["type"] == "done"
+    return done["answer"]
+
 def test_bubble_on_every_page_and_ask_without_the_loop(monkeypatch):
     """No loop has ever run here: the assistant still answers, from what is on disk."""
     monkeypatch.setattr(ui.agents, "chat", stubs.chat)              # real MCP server, no model
@@ -301,16 +315,18 @@ def test_bubble_on_every_page_and_ask_without_the_loop(monkeypatch):
     assert 'data-ask="Where is the mission grid at' in client.get("/m/grid").text
     assert not orchestrator.loop_running()
     r = client.post("/chat/ask", json={"question": "what's up?", "history": [{"role": "user", "content": "hi"}]})
-    assert r.status_code == 200 and "Loop: off" in r.json()["answer"] and "1 queued" in r.json()["answer"]
+    assert r.status_code == 200 and "Loop: off" in answer(r) and "1 queued" in answer(r)
+    assert events(r)[0] == {"type": "tool", "name": "loop_status", "kind": "loop status", "label": "Checking the loop",
+                            "what": ""}
 
 def test_ask_passes_the_model_on(monkeypatch):
     got = {}
-    def fake(q, h, model=None):
+    def fake(q, h, model=None, on_event=None):
         got["model"] = model
         return "fine"
     monkeypatch.setattr(ui.agents, "chat", fake)
     client = TestClient(ui.app)
-    assert client.post("/chat/ask", json={"question": "x", "model": "llama3:8b"}).json()["answer"] == "fine"
+    assert answer(client.post("/chat/ask", json={"question": "x", "model": "llama3:8b"})) == "fine"
     assert got["model"] == "llama3:8b"
     client.post("/chat/ask", json={"question": "x"})
     assert got["model"] is None
@@ -340,15 +356,17 @@ def test_panel_is_researcher_chat_with_a_guide_only_while_animations_are_on():
 def test_chat_ask_refuses_other_sites_and_reports_failures(monkeypatch):
     client = TestClient(ui.app)
     assert client.post("/chat/ask", json={"question": "x"}, headers={"origin": "https://evil.example"}).status_code == 403
-    def broken(q, h, model=None): raise ConnectionError("refused")
+    def broken(q, h, model=None, on_event=None): raise ConnectionError("refused")
     monkeypatch.setattr(ui.agents, "chat", broken)
-    assert "Is Ollama running?" in client.post("/chat/ask", json={"question": "x"}).json()["answer"]
+    r = client.post("/chat/ask", json={"question": "x"})
+    assert "Is Ollama running?" in answer(r) and events(r)[-1]["tools"] == 0
 
 def test_an_answer_outlives_the_page_that_asked(monkeypatch):
     """A page that navigates mid-answer hands it on: the next page fetches it by the id the question carried."""
     import threading
     go = threading.Event()
-    def slow(q, h, model=None):
+    def slow(q, h, model=None, on_event=None):
+        on_event({"type": "tool", "name": "web_search", "kind": "web search", "label": "Searching the web", "what": q})
         go.wait(5)
         return f"answer to {q}"
     monkeypatch.setattr(ui.agents, "chat", slow)
@@ -360,17 +378,19 @@ def test_an_answer_outlives_the_page_that_asked(monkeypatch):
             break
         threading.Event().wait(0.02)
     go.set()
-    assert client.get("/chat/answer", params={"id": "abc"}).json() == {"answer": "answer to q1"}
+    replay = events(client.get("/chat/answer", params={"id": "abc"}))
+    assert [e["type"] for e in replay] == ["tool", "done"] and replay[0]["what"] == "q1"
+    assert replay[1]["answer"] == "answer to q1" and replay[1]["tools"] == 1 and replay[1]["kinds"] == ["web search"]
     asked.join()
     r = client.get("/chat/answer", params={"id": "never-asked"})          # e.g. the UI restarted meanwhile
     assert r.status_code == 404 and r.json() == {"lost": True}
 
 def test_chat_keeps_only_a_few_finished_answers(monkeypatch):
-    monkeypatch.setattr(ui.agents, "chat", lambda q, h, model=None: "ok")
+    monkeypatch.setattr(ui.agents, "chat", lambda q, h, model=None, on_event=None: "ok")
     monkeypatch.setattr(ui, "CHAT_JOBS", {})
     client = TestClient(ui.app)
     for i in range(ui.CHAT_JOBS_KEPT + 5):
-        client.post("/chat/ask", json={"question": "x", "id": f"q{i}"})
+        assert answer(client.post("/chat/ask", json={"question": "x", "id": f"q{i}"})) == "ok"
     assert len(ui.CHAT_JOBS) == ui.CHAT_JOBS_KEPT and f"q{ui.CHAT_JOBS_KEPT + 4}" in ui.CHAT_JOBS
 
 def test_panel_has_copy_and_keeps_the_draft():
@@ -393,3 +413,114 @@ async def test_a_stale_stop_flag_never_cuts_the_assistant_off(monkeypatch):
     assert (await llm.chat([], stoppable=False)).content == "still here"
     with pytest.raises(llm.Cut):
         await llm.chat([])
+
+
+# ---------- the live line: what the chat is doing while it works ----------
+
+async def test_the_run_streams_its_steps_then_a_summary(monkeypatch):
+    """A tool call shows before it runs, the answer comes in pieces, and done says what it took."""
+    class WebBox(FakeToolbox):
+        async def call(self, name, args):
+            return "page text"
+    scripted(monkeypatch, call("web_search", query="grid outage Texas"), call("fetch", url="https://www.example.com/a?b=1"),
+             say("The grid failed in **February**."))
+    got = []
+    out = await assistant.run_chat("why did the grid fail?", model="small-test:4b", toolbox_factory=WebBox,
+                                   on_event=got.append)
+    assert out == "The grid failed in **February**."
+    assert got[0] == {"type": "tool", "name": "web_search", "kind": "web search", "label": "Searching the web",
+                      "what": "grid outage Texas"}
+    assert got[1] == {"type": "tool", "name": "fetch", "kind": "reading pages", "label": "Reading a page",
+                      "what": "example.com"}
+    pieces = [e["text"] for e in got if e["type"] == "text"]
+    assert len(pieces) > 1 and "".join(pieces) == out
+    done = got[-1]
+    assert done["type"] == "done" and done["answer"] == out and done["model"] == "small-test:4b"
+    assert done["tools"] == 2 and done["kinds"] == ["web search", "reading pages"] and done["seconds"] >= 0
+    assert done["calls"] == [{"label": "Searching the web", "what": "grid outage Texas"},
+                             {"label": "Reading a page", "what": "example.com"}]
+
+async def test_no_tools_still_says_what_it_took(monkeypatch):
+    scripted(monkeypatch, say("Hello."))
+    got = []
+    await assistant.run_chat("hi?", toolbox_factory=FakeToolbox, on_event=got.append)
+    assert got[-1]["tools"] == 0 and got[-1]["kinds"] == [] and got[-1]["calls"] == []
+
+def test_thinking_shows_its_last_few_words_and_inline_think_tags_stay_out_of_the_answer():
+    got = []
+    live = assistant._Live(got.append)
+    for piece in ["<thi", "nk>I should look at", " which mission covers the grid", " outage in Texas", " first</think>",
+                  "\n\nThe ", "grid."]:
+        live("text", piece)
+    thoughts = [e["text"] for e in got if e["type"] == "thinking"]
+    assert thoughts and all(len(t.split()) <= assistant.THINKING_WORDS for t in thoughts)
+    assert thoughts[-1] == "mission covers the grid outage in Texas first"
+    assert "".join(e["text"] for e in got if e["type"] == "text") == "The grid."
+    assert assistant.split_thinking("<think>hmm</think> Done.") == ("hmm", "Done.")
+    assert assistant.split_thinking("<thi") == ("", "") and assistant.split_thinking("Plain.") == ("", "Plain.")
+    got.clear()
+    live = assistant._Live(got.append)
+    live("thinking", "Let me check the loop ")
+    live("text", "One moment.")
+    live.clear()                                    # it asked for a tool after all: take the text back
+    assert [e["type"] for e in got] == ["thinking", "text", "clear"]
+
+def test_tool_labels_name_the_site_and_fall_back_to_the_tool_name():
+    assert assistant.describe("find_in_page", {"url": "https://news.example.org/x", "query": "q"})["what"] == "news.example.org"
+    odd = assistant.describe("brand_new_tool", {"query": "x" * 200})
+    assert odd["label"] == "Brand new tool" and odd["kind"] == "brand new tool" and len(odd["what"]) == assistant.WHAT_CHARS
+    import re
+    root = Path(__file__).parent.parent
+    ours = {name for f in ("status_tools.py", "page_tools.py", "search_tools.py", "library_tools.py")
+            for name in re.findall(r"@server\.tool\(\)\s*\n(?:async )?def (\w+)", (root / f).read_text())}
+    assert len(ours) > 20 and ours | {"fetch"} <= set(assistant.TOOL_LABELS)   # every tool the chat has reads plainly
+
+async def test_ollama_replies_stream_to_on_chunk(monkeypatch):
+    class Chunk:
+        def __init__(self, **m):
+            self.message = Message(role="assistant", **m)
+    class FakeClient:
+        def __init__(self, host=None):
+            pass
+        async def chat(self, stream=False, **kw):
+            assert stream
+            async def gen():
+                yield Chunk(thinking="Hmm, ")
+                yield Chunk(content="The loop ")
+                yield Chunk(content="is off.")
+                yield Chunk(content="", tool_calls=call("loop_status").tool_calls)
+            return gen()
+    monkeypatch.setattr(llm.ollama, "AsyncClient", FakeClient)
+    seen = []
+    msg = await llm.chat([], stoppable=False, on_chunk=lambda kind, text: seen.append((kind, text)))
+    assert seen == [("thinking", "Hmm, "), ("text", "The loop "), ("text", "is off.")]
+    assert msg.content == "The loop is off." and msg.thinking == "Hmm, " and msg.tool_calls[0].function.name == "loop_status"
+
+def test_tool_steps_reach_the_page_in_its_language(monkeypatch):
+    settings.set_language("fr")
+    def fake(q, h, model=None, on_event=None):
+        on_event(assistant.describe("web_search", {"query": "réseau"}))
+        return "ok"
+    monkeypatch.setattr(ui.agents, "chat", fake)
+    got = events(TestClient(ui.app).post("/chat/ask", json={"question": "x"}))
+    assert got[0]["label"] != "Searching the web" and got[0]["what"] == "réseau"
+    assert got[-1]["calls"][0]["label"] == got[0]["label"] and got[-1]["kinds"] == [got[0]["kind"]]
+
+def test_panel_streams_and_keeps_the_summary():
+    html = TestClient(ui.app).get("/").text
+    assert "application/x-ndjson" not in html and "ndjson" in html            # the page reads the stream
+    assert "liveAnswer" in html and "runSummary" in html and "h.meta" in html
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node to run the page script")
+def test_markdown_tables_render_escaped():
+    js = ui.CHAT_JS.removeprefix("<script>").removesuffix("</script>")
+    part = js[js.index("  const esc ="):js.index("  // What an answer took")]
+    src = part + """;
+    process.stdout.write(markdown("Here:\\n\\n| Mission | Stage | N |\\n|:--|:-:|--:|\\n| **Grid** | writing | 4 |\\n| <b>x</b> | queued |\\n\\nAfter."));"""
+    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    html = out.stdout
+    assert html.startswith("<p>Here:</p><div class=\"md-table\"><table><thead><tr><th style=\"text-align:left\">Mission</th>")
+    assert '<td style="text-align:center">writing</td><td style="text-align:right">4</td>' in html
+    assert "<strong>Grid</strong>" in html and "&lt;b&gt;x&lt;/b&gt;" in html and "<b>" not in html
+    assert html.endswith("<p>After.</p>")

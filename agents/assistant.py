@@ -22,8 +22,9 @@ It never needs the loop: the loop tools read the files the loop leaves behind, s
 is running, stopped or was never started. It needs only a model: Ollama's, or a connected cloud provider's (and the
 network for the web tools).
 """
-import asyncio, os, re
+import asyncio, os, re, time
 from pathlib import Path
+from urllib.parse import urlparse
 import ollama
 import library, settings
 from agents import llm, providers
@@ -171,14 +172,116 @@ def _history(history: list[dict] | None) -> list[dict]:
     turns = [h for h in history or [] if h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip()]
     return [{"role": h["role"], "content": str(h["content"])[:MAX_MESSAGE_CHARS]} for h in turns[-MAX_TURNS:]]
 
+# How the live line names each tool, and what kind of tool it is for the summary above the answer: (kind, label).
+# English here; the UI translates both. A tool not listed shows its name with the underscores as spaces.
+TOOL_LABELS = {
+    "web_search": ("web search", "Searching the web"),
+    "news_search": ("news search", "Searching the news"),
+    "wiki_search": ("Wikipedia", "Looking it up on Wikipedia"),
+    "fetch": ("reading pages", "Reading a page"),
+    "find_in_page": ("reading pages", "Looking inside a page"),
+    "page_links": ("reading pages", "Listing a page's links"),
+    "wayback_versions": ("Wayback Machine", "Checking the Wayback Machine"),
+    "search_library": ("library", "Searching the library"),
+    "loop_status": ("loop status", "Checking the loop"),
+    "list_missions": ("missions", "Listing missions"),
+    "mission_status": ("missions", "Checking mission status"),
+    "search_missions": ("missions", "Searching missions"),
+    "agent_steps": ("agent steps", "Reading the agents' steps"),
+    "publication_status": ("publishing", "Checking what's published"),
+    "list_epics": ("epics", "Listing epics"),
+    "theorist_notes": ("Theorist", "Reading the Theorist's notes"),
+    "desk_overview": ("desk", "Looking at the desk"),
+    "board_overview": ("board", "Looking at the board"),
+    "setup_status": ("setup", "Checking setup"),
+    "add_mission": ("changes", "Adding a mission"),
+    "set_mission_epic": ("changes", "Moving a mission to an epic"),
+    "set_inspiration": ("changes", "Updating the inspiration line"),
+    "ask_theorist": ("changes", "Asking for the Theorist's turn"),
+    "propose_epic": ("changes", "Proposing an epic"),
+    "propose_combine": ("changes", "Proposing a combine"),
+    "link_missions": ("changes", "Linking missions"),
+    "arrange_board": ("changes", "Arranging the board"),
+}
+WHAT_KEYS = ("url", "query", "topic", "title", "slug", "mission", "epic", "line")   # what a call is on, first found
+WHAT_CHARS = 60
+THINKING_WORDS = 8                         # the live line shows the last few words of the model's thinking
+
+def describe(name: str, args: dict) -> dict:
+    """A tool call as the live line shows it: {"type": "tool", "name", "kind", "label", "what"}; a page's address
+    shows as its site."""
+    kind, label = TOOL_LABELS.get(name, (name.replace("_", " "), name.replace("_", " ").capitalize()))
+    what = next((str(args[k]) for k in WHAT_KEYS if args.get(k)), "")
+    if what.startswith(("http://", "https://")):
+        what = urlparse(what).netloc.removeprefix("www.") or what
+    what = " ".join(what.split())
+    return {"type": "tool", "name": name, "kind": kind, "label": label,
+            "what": what if len(what) <= WHAT_CHARS else what[:WHAT_CHARS - 1] + "…"}
+
+def split_thinking(text: str) -> tuple[str, str]:
+    """(thinking, answer) for a reply that may think inline in <think> tags; an unfinished tag is all thinking, and
+    a reply still spelling out "<think>" shows nothing yet."""
+    start = text.lstrip()
+    if start.startswith("<think>"):
+        inner, closed, rest = start[len("<think>"):].partition("</think>")
+        return inner, rest.lstrip() if closed else ""
+    if start and "<think>".startswith(start):
+        return "", ""
+    return "", text
+
+class _Live:
+    """Turns one model turn's streamed pieces into events: the tail of its thinking (once per new word) and the
+    answer's new text. clear() takes back text a turn wrote before it asked for tools."""
+    def __init__(self, emit):
+        self.emit, self.thinking, self.content, self.shown, self.tail = emit, "", "", 0, ""
+
+    def __call__(self, kind: str, piece: str) -> None:
+        if kind == "thinking":
+            self.thinking += piece
+        else:
+            self.content += piece
+        inline, visible = split_thinking(self.content)
+        words = (self.thinking + inline).split()
+        if words and not (self.thinking + inline)[-1:].isspace() and "</think>" not in self.content:
+            words = words[:-1]             # the last word may still be growing
+        tail = " ".join(words[-THINKING_WORDS:])
+        if tail and tail != self.tail and len(visible) <= self.shown:
+            self.tail = tail
+            self.emit({"type": "thinking", "text": tail})
+        if len(visible) > self.shown:
+            self.emit({"type": "text", "text": visible[self.shown:]})
+            self.shown = len(visible)
+
+    def clear(self) -> None:
+        if self.shown:
+            self.emit({"type": "clear"})
+
 async def run_chat(question: str, history: list[dict] | None = None, model: str | None = None,
-                   toolbox_factory=None) -> str:
+                   toolbox_factory=None, on_event=None) -> str:
+    """The answer. on_event, if given, hears the run as it happens: {"type": "tool", ...} before each tool call
+    (describe), "thinking" (the last few words), "text" (the next piece of the answer), "clear" (take back text
+    written before a tool call), then {"type": "done", "answer", "model", "seconds", "tools", "kinds", "calls"}."""
+    started, calls = time.monotonic(), []
+
+    def emit(event: dict) -> None:
+        if event["type"] == "tool":
+            calls.append(event)
+        if on_event:
+            on_event(event)
+    model = model or default_model()
+    answer = await _run(question, history, model, toolbox_factory, emit)
+    if on_event:
+        on_event({"type": "done", "answer": answer, "model": model, "seconds": round(time.monotonic() - started, 1),
+                  "tools": len(calls), "kinds": list(dict.fromkeys(c["kind"] for c in calls)),
+                  "calls": [{"label": c["label"], "what": c["what"]} for c in calls]})
+    return answer
+
+async def _run(question, history, model, toolbox_factory, emit) -> str:
     question = " ".join(question.split())[:MAX_MESSAGE_CHARS]
     if not question:
         return "Ask me what the loop is doing, or where a mission is."
     messages = [{"role": "system", "content": SYSTEM + _language()}, *_history(history),
                 {"role": "user", "content": question}]
-    model = model or default_model()
     if not model:
         return NO_MODEL
     factory = toolbox_factory or (lambda names: Toolbox(names, config_path=CONFIG))
@@ -186,21 +289,26 @@ async def run_chat(question: str, history: list[dict] | None = None, model: str 
         async with asyncio.timeout(TIME_LIMIT), factory(servers()) as tb:
             calls = 0
             while calls < MAX_TOOL_CALLS:
-                msg = await llm.chat(messages, tools=tb.tools, model=model, stoppable=False)
+                live = _Live(emit)
+                msg = await llm.chat(messages, tools=tb.tools, model=model, stoppable=False, on_chunk=live)
                 messages.append(msg)
                 if not msg.tool_calls:
-                    return (msg.content or "").strip() or "I couldn't put an answer together. Try asking again."
+                    return (split_thinking(msg.content or "")[1].strip()
+                            or "I couldn't put an answer together. Try asking again.")
+                live.clear()
                 for tc in msg.tool_calls[:MAX_TOOL_CALLS - calls]:
                     calls += 1
-                    result = await tb.call(tc.function.name, dict(tc.function.arguments or {}))
+                    args = dict(tc.function.arguments or {})
+                    emit(describe(tc.function.name, args))
+                    result = await tb.call(tc.function.name, args)
                     messages.append({"role": "tool", "tool_name": tc.function.name,
                                      "content": result[:_limit(tb, tc.function.name)]})
             messages.append({"role": "user", "content": "Answer now from what you found, without tools."})
-            msg = await llm.chat(messages, model=model, stoppable=False)
-            return (msg.content or "").strip() or OUT_OF_TIME
+            msg = await llm.chat(messages, model=model, stoppable=False, on_chunk=_Live(emit))
+            return split_thinking(msg.content or "")[1].strip() or OUT_OF_TIME
     except TimeoutError:
         return OUT_OF_TIME
 
-def chat(question: str, history: list[dict] | None = None, model: str | None = None) -> str:
-    """Sync entry point for the UI and CLI. An unknown model falls back to the default."""
-    return asyncio.run(run_chat(question, history, pick(model)))
+def chat(question: str, history: list[dict] | None = None, model: str | None = None, on_event=None) -> str:
+    """Sync entry point for the UI and CLI. An unknown model falls back to the default. on_event: see run_chat."""
+    return asyncio.run(run_chat(question, history, pick(model), on_event=on_event))

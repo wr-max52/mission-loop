@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 868 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 876 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -553,8 +553,17 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   loaded beside it), and keeps the conversation, the unsent draft and a question still being answered in that
   browser tab only (sessionStorage), so refreshes, moving between pages and closing the panel lose nothing; Clear starts
   over and Copy puts the conversation on the clipboard as text. A question carries an id, and the UI holds the last 20
-  answers in memory (`ui.CHAT_JOBS`, never on disk), so a page that navigates mid-answer hands it to the next page
-  (`/chat/answer`). With
+  runs in memory (`ui.CHAT_JOBS`, never on disk), so a page that navigates mid-answer hands it to the next page
+  (`/chat/answer`, which replays the run from its start and carries on). The run streams to the page as it happens
+  (#134): `assistant.run_chat(on_event=...)` sends a `tool` event before each call (`assistant.describe`: a plain label
+  and kind from `assistant.TOOL_LABELS`, English there and translated by `ui.chat_event`, and what it is on, a page as its
+  site), `thinking` (the last `THINKING_WORDS` (8) words, inline `<think>` tags included, `assistant.split_thinking`),
+  `text` (the answer's next piece; `llm.chat(on_chunk=...)` streams Ollama replies, cloud ones arrive whole), `clear`
+  (text written before a tool call, taken back) and `done` (answer, model, seconds, tool count, kinds, calls).
+  `/chat/ask` and `/chat/answer` send them as NDJSON. The panel shows one pulsing line rewritten at each step (a
+  shimmer; a slow pulse with reduced motion), then the answer as it is written, and above each finished answer one
+  small line ("4 tools · web search, library · 12s · qwen3:30b") that folds out every call; it is kept with the
+  conversation (`meta`) and in Copy. With
   animations on, a pixel researcher for the picked model walks in at the top of the panel and says which model it
   is (`Guide` in `assets/researchers.js`, sent by the chat's `chatguide` event; the script loads the first time the
   panel opens): a worker's own model brings someone from that worker's crew, any other model the tenured crew from
@@ -577,7 +586,7 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   trails and `data/loop.log`, so asking never touches a running agent. `add_mission` queues a new mission like the
   UI's Add mission box (it still needs brief approval); `set_mission_epic` puts any mission, published ones
   included, in an epic like the Epic field on its page (`orchestrator.assign_epic`). Neither changes a mission's
-  stage or work. The panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists).
+  stage or work. The panel renders a small, escaped Markdown subset in replies (bold, italic, code, links, lists, tables).
   By default it uses the small model with the loop's options (`settings.chat_model`: `chat_model` in settings.json,
   then `MISSION_LOOP_CHAT_MODEL`, else the Research Assistant's model), so Ollama reuses the loaded copy instead of
   reloading it. With no model chosen anywhere (a fresh clone) it uses the first installed model that can call tools,

@@ -120,7 +120,8 @@ def _get(m, key):
 def _as_dict(m) -> dict:
     return m if isinstance(m, dict) else m.model_dump(exclude_none=True)
 
-async def chat(messages, tools=None, format=None, model=None, stoppable=True, think=None) -> ollama.Message:
+async def chat(messages, tools=None, format=None, model=None, stoppable=True, think=None,
+               on_chunk=None) -> ollama.Message:
     """One model call, on the Principal Investigator's model unless `model` names another. Structured outputs
     (format set) are streamed so that, if stop is pressed, what was written before the grace ran out isn't
     lost: it comes back on Cut. A tool turn in flight when stop is pressed gets the shorter turn grace, so the
@@ -128,7 +129,9 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True, th
     had written. stoppable=False ignores the stop button: the chat assistant isn't loop work, and data/STOP
     can outlive a stopped loop. A cloud model ("provider/name") goes the same way through agents/providers.py.
     think=False asks an Ollama thinking model to answer straight away (the avatar studio's quick edits); None leaves
-    the model's own default, and cloud models ignore it."""
+    the model's own default, and cloud models ignore it. on_chunk(kind, text), with stoppable=False, streams an
+    Ollama reply as it is written ("thinking" or "text" pieces; Researcher Chat's live line); cloud models answer
+    in one piece and never call it."""
     model = model or model_for("pi")
     provider, name = settings.split_model(model)
     local = provider == settings.LOCAL
@@ -138,8 +141,22 @@ async def chat(messages, tools=None, format=None, model=None, stoppable=True, th
         client = ollama.AsyncClient(host=settings.ollama_host())
         extra = {} if think is None else {"think": think}
         _used(name)
-        return (await client.chat(model=name, messages=messages, tools=tools, format=format,
-                                  options=OPTIONS, keep_alive=_duration(IDLE_UNLOAD), **extra)).message
+        kw = dict(model=name, messages=messages, tools=tools, format=format, options=OPTIONS,
+                  keep_alive=_duration(IDLE_UNLOAD), **extra)
+        if on_chunk is None:
+            return (await client.chat(**kw)).message
+        content, thinking, calls = [], [], []
+        async for chunk in await client.chat(**kw, stream=True):
+            piece = chunk.message
+            if piece.thinking:
+                thinking.append(piece.thinking)
+                on_chunk("thinking", piece.thinking)
+            if piece.content:
+                content.append(piece.content)
+                on_chunk("text", piece.content)
+            calls.extend(piece.tool_calls or [])
+        return ollama.Message(role="assistant", content="".join(content), thinking="".join(thinking) or None,
+                              tool_calls=calls or None)
     parts: list[str] = []
     reply_tokens = TURN_TOKENS if format is None else REPLY_TOKENS
 

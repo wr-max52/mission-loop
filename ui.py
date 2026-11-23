@@ -13,7 +13,7 @@ from urllib.parse import urlparse, quote
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextResponse, Response,
-                                 JSONResponse)
+                                 JSONResponse, StreamingResponse)
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
@@ -623,6 +623,24 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .chat-log .md code { font-size:.88em; padding:0 .25em; border-radius:4px; background:var(--bg); }
 .chat-log .md a { color:var(--accent); }
 .chat-log .model-tag { display:block; margin-top:.3rem; font-size:.75rem; color:var(--muted); }
+.chat-log .md .md-table { overflow-x:auto; margin:.45rem 0; }
+.chat-log .md table { border-collapse:collapse; font-size:.88em; }
+.chat-log .md th, .chat-log .md td { border:1px solid var(--rule); padding:.25rem .5rem; text-align:left; vertical-align:top; }
+.chat-log .md th { background:var(--bg); }
+.chat-log .assistant.md, .chat-log .live { min-width:0; }
+.chat-log .assistant:has(.md-table) { max-width:100%; }
+.chat-log .run { margin:0 0 .45rem; padding-bottom:.35rem; border-bottom:1px solid var(--rule); font-size:.75rem; color:var(--muted); }
+.chat-log .run summary { cursor:pointer; }
+.chat-log .run ol { margin:.35rem 0 0; padding-left:1.3rem; }
+.chat-log .live { width:88%; box-sizing:border-box; }
+.chat-log .live .status { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--muted);
+  background:linear-gradient(90deg, var(--muted) 35%, var(--fg) 50%, var(--muted) 65%) 0 0 / 250% 100%;
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; animation:chat-shimmer 1.8s linear infinite; }
+.chat-log .live .status[hidden], .chat-log .live .md[hidden] { display:none; }
+@keyframes chat-shimmer { from { background-position:100% 0; } to { background-position:0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-log .live .status { -webkit-text-fill-color:currentColor; background:none; animation:chat-pulse 2s ease-in-out infinite; } }
+@keyframes chat-pulse { 50% { opacity:.45; } }
 .suggest { display:flex; gap:.4rem; flex-wrap:wrap; }
 .suggest[hidden] { display:none; }
 .suggest button { font-size:.82rem; padding:.3rem .7rem; border-radius:999px; }
@@ -1012,7 +1030,7 @@ async function refresh() {{
 JS_STRINGS = ["(default)", "Web search off. Switch a source on in Settings → Web search.", "Looking…",
               "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
               "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed", "Show", "Hide", "Press Ctrl/Cmd-C",
-              "just now", "{n}m ago", "{n}h ago"]
+              "just now", "{n}m ago", "{n}h ago", "Thinking", "1 tool", "{n} tools", "No tools", "{n}s", "{m}m {s}s"]
 
 def js_strings() -> str:
     """The few strings the page's scripts show, in the UI's language (window.I18N; English needs none)."""
@@ -3453,7 +3471,7 @@ CHAT_JS = """<script>
   const copyBtn = document.getElementById("chat-copy");
 
   // A small Markdown subset for the assistant's replies: **bold**, *italic*, `code`, http(s) links, headings,
-  // bullet and numbered lists, paragraphs. The text is escaped first, so a reply can never inject HTML.
+  // bullet and numbered lists, tables, paragraphs. The text is escaped first, so a reply can never inject HTML.
   const esc = s => s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]);
   function inline(s) {
     const codes = [];
@@ -3464,11 +3482,29 @@ CHAT_JS = """<script>
          .replace(/(^|[^_\\w])_(?=\\S)([^_\\n]+?)_(?!\\w)/g, "$1<em>$2</em>");
     return s.replace(/\\u0000(\\d+)\\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
   }
+  // a table: a row with pipes, then a divider row of dashes (colons set each column's alignment), then its rows
+  const cells = l => l.trim().replace(/^\\|/, "").replace(/\\|$/, "").split("|").map(c => c.trim());
+  const divider = l => l.includes("|") && l.includes("-") && /^\\s*\\|?(\\s*:?-+:?\\s*\\|)*\\s*:?-+:?\\s*\\|?\\s*$/.test(l);
+  function table(head, align, rows) {
+    const cell = (tag, c, j) => `<${tag}${align[j] ? ` style="text-align:${align[j]}"` : ""}>${inline(c || "")}</${tag}>`;
+    return `<div class="md-table"><table><thead><tr>${head.map((c, j) => cell("th", c, j)).join("")}</tr></thead><tbody>` +
+           rows.map(r => `<tr>${head.map((_, j) => cell("td", r[j], j)).join("")}</tr>`).join("") + "</tbody></table></div>";
+  }
   function markdown(text) {
     const out = []; let list = null, para = [];
     const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; };
     const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; };
-    for (const line of text.split("\\n")) {
+    const lines = text.split("\\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.includes("|") && i + 1 < lines.length && divider(lines[i + 1])) {
+        flushPara(); flushList();
+        const align = cells(lines[i + 1]).map(c => c.startsWith(":") && c.endsWith(":") ? "center"
+                                                 : c.endsWith(":") ? "right" : c.startsWith(":") ? "left" : "");
+        const rows = [];
+        for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) rows.push(cells(lines[i]));
+        i--; out.push(table(cells(line), align, rows)); continue;
+      }
       const bullet = line.match(/^\\s*[-*+]\\s+(.*)$/), num = line.match(/^\\s*\\d+[.)]\\s+(.*)$/), head = line.match(/^\\s*#{1,6}\\s+(.*)$/);
       if (bullet || num) {
         const tag = bullet ? "ul" : "ol";
@@ -3481,16 +3517,84 @@ CHAT_JS = """<script>
     flushPara(); flushList();
     return out.join("");
   }
-  function show(role, text, model, cls = "") {
+  // What an answer took, for the line above it: "4 tools · web search, library · 12s · qwen3:30b".
+  const secs = n => { n = Math.max(1, Math.round(n || 0));
+                      return n < 60 ? t("{n}s").replace("{n}", n) : t("{m}m {s}s").replace("{m}", Math.floor(n / 60)).replace("{s}", n % 60); };
+  const step = c => c.what ? `${c.label}: ${c.what}` : c.label;
+  function runLine(meta, model) {
+    const n = meta.tools || 0;
+    return [n ? (n === 1 ? t("1 tool") : t("{n} tools").replace("{n}", n)) : t("No tools"),
+            ...(meta.kinds && meta.kinds.length ? [meta.kinds.join(", ")] : []), secs(meta.seconds),
+            ...(model ? [model] : [])].join(" · ");
+  }
+  function runSummary(meta, model) {
+    const calls = meta.calls || [], box = document.createElement(calls.length ? "details" : "div");
+    box.className = "run";
+    const head = document.createElement(calls.length ? "summary" : "span"); head.textContent = runLine(meta, model);
+    box.appendChild(head);
+    if (calls.length) {
+      const ol = document.createElement("ol");
+      calls.forEach(c => { const li = document.createElement("li"); li.textContent = step(c); ol.appendChild(li); });
+      box.appendChild(ol);
+    }
+    return box;
+  }
+  function show(role, text, model, cls = "", meta = null) {
     const div = document.createElement("div");
     div.className = `msg ${role} ${cls}`;
-    if (role === "assistant" && !cls) { div.classList.add("md"); div.innerHTML = markdown(text || ""); }
-    else div.textContent = text;
-    if (model) { const tag = document.createElement("span"); tag.className = "model-tag"; tag.textContent = model; div.appendChild(tag); }
+    if (role === "assistant" && !cls) {
+      div.classList.add("md"); div.innerHTML = markdown(text || "");
+      if (meta) div.prepend(runSummary(meta, model));
+    } else div.textContent = text;
+    if (model && !meta) { const tag = document.createElement("span"); tag.className = "model-tag"; tag.textContent = model; div.appendChild(tag); }
     log.appendChild(div); log.scrollTop = log.scrollHeight; return div;
   }
+  // The answer being worked out: one pulsing line rewritten at each step (the tool at work, or the last few words of
+  // the model's thinking), then the answer itself as it is written.
+  function liveAnswer() {
+    const el = document.createElement("div"), line = document.createElement("div"), body = document.createElement("div");
+    el.className = "msg assistant live"; line.className = "status"; body.className = "md"; body.hidden = true;
+    line.textContent = t("Looking…"); el.append(line, body); log.appendChild(el); log.scrollTop = log.scrollHeight;
+    let text = "", queued = false;
+    const near = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    const say = s => { line.textContent = s; line.hidden = false; body.hidden = true; };
+    const draw = () => { queued = false; const follow = near(); body.innerHTML = markdown(text);
+                         if (follow) log.scrollTop = log.scrollHeight; };
+    return {el, on(ev) {
+      if (ev.type === "tool") { text = ""; say(step(ev)); }
+      else if (ev.type === "thinking") say(`${t("Thinking")}: …${ev.text}`);
+      else if (ev.type === "clear") { text = ""; say(t("Looking…")); }
+      else if (ev.type === "text") {
+        text += ev.text; line.hidden = true; body.hidden = false;
+        if (!queued) { queued = true; requestAnimationFrame(draw); }
+      }
+    }};
+  }
+  // Reads the run as it streams in (one JSON event a line) and returns its "done" event.
+  async function follow(r, live) {
+    if (!(r.headers.get("content-type") || "").includes("ndjson")) {
+      const data = await r.json();
+      return {answer: data.lost ? t("Answer lost when the UI restarted. Ask again.") : data.answer};
+    }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "", done = null;
+    for (;;) {
+      const {value, done: end} = await reader.read();
+      buf += dec.decode(value || new Uint8Array(), {stream: !end});
+      let nl;
+      while ((nl = buf.indexOf("\\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "done") done = ev; else live.on(ev);
+      }
+      if (end) break;
+    }
+    if (!done) throw new Error("the answer stopped short");
+    return done;
+  }
   function redraw() {
-    log.replaceChildren(); history.forEach(h => show(h.role, h.content, h.model));
+    log.replaceChildren(); history.forEach(h => show(h.role, h.content, h.model, "", h.meta));
     suggest.hidden = history.length > 0;
   }
   async function loadModels() {
@@ -3526,20 +3630,19 @@ CHAT_JS = """<script>
   function save() { history = history.slice(-20); store("chat-history", history); }
   async function wait(pending, request) {
     box.disabled = true;
-    const note = show("assistant", t("Looking…"), "", "wait");
-    let answer, model = pending.model;
-    try {
-      const r = await request();
-      const data = await r.json();
-      answer = data.lost ? t("Answer lost when the UI restarted. Ask again.") : data.answer;
-    } catch (e) {
+    const live = liveAnswer();
+    let done;
+    try { done = await follow(await request(), live); }
+    catch (e) {
       if (leaving) return;                     // the page is going; the next one picks it up
-      answer = t("No answer. Is the UI still running?");
+      done = {answer: t("No answer. Is the UI still running?")};
     }
-    note.remove();
+    live.el.remove();
     if ((store("chat-pending") || {}).id !== pending.id) return;      // cleared while it was thinking
-    show("assistant", answer, model);
-    history.push({role: "assistant", content: answer, model}); save(); store("chat-pending", null);
+    const model = done.model || pending.model, answer = done.answer || "";
+    const meta = "tools" in done ? {tools: done.tools, kinds: done.kinds || [], calls: done.calls || [], seconds: done.seconds} : null;
+    show("assistant", answer, model, "", meta);
+    history.push({role: "assistant", content: answer, model, ...(meta ? {meta} : {})}); save(); store("chat-pending", null);
     box.disabled = false; if (!panel.hidden) box.focus();
   }
   async function ask(question) {
@@ -3556,7 +3659,7 @@ CHAT_JS = """<script>
   }
   function transcript() {
     return history.map(h => h.role === "user" ? `${t("You")}: ${h.content}`
-                                              : `${t("Researcher Chat")}${h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
+                                              : `${t("Researcher Chat")}${h.meta ? ` (${runLine(h.meta, h.model)})` : h.model ? ` (${h.model})` : ""}: ${h.content}`).join("\\n\\n");
   }
   async function copy() {
     const text = transcript(), was = t("Copy");
@@ -3637,22 +3740,64 @@ def chat_crew(model: str) -> dict:
     from agents.assistant import crew
     return {"crew": crew(model), "family": model.split(":")[0]}
 
-# Answers the page is waiting for, by the id the page gave its question, so one survives the page navigating away
-# mid-answer: the next page picks it up from /chat/answer. This UI process only, the last few, never on disk.
-CHAT_JOBS: dict[str, concurrent.futures.Future] = {}
+# Questions being answered, by the id the page gave its question, each with every event of its run so far (the
+# live line's steps, the answer's pieces, then "done"), so a page that navigates away mid-answer hands the stream on:
+# the next page replays it from /chat/answer and carries on. This UI process only, the last few, never on disk.
+class ChatJob:
+    def __init__(self):
+        self.events: list[dict] = []
+        self.done = False
+
+    def push(self, event: dict) -> None:
+        self.events.append(chat_event(event))
+
+CHAT_JOBS: dict[str, ChatJob] = {}
 CHAT_JOBS_KEPT = 20
+CHAT_POLL = 0.05                           # seconds between looks for a running answer's next event
 _chat_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat")
 
-def _answer(question: str, history: list, model: str | None) -> str:
-    try:
-        return agents.chat(question, history, model)
-    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
-        return _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
+def chat_event(event: dict) -> dict:
+    """An event in the UI's language: the tool labels and kinds the assistant names in English."""
+    if event.get("type") == "tool":
+        return {**event, "label": _(event.get("label", "")), "kind": _(event.get("kind", ""))}
+    if event.get("type") == "done":
+        return {**event, "kinds": [_(k) for k in event.get("kinds") or []],
+                "calls": [{**c, "label": _(c.get("label", ""))} for c in event.get("calls") or []]}
+    return event
 
-def _keep_job(job_id: str, job: concurrent.futures.Future) -> None:
+def _answer(job: ChatJob, question: str, history: list, model: str | None) -> None:
+    started = time.monotonic()
+    try:
+        answer = agents.chat(question, history, model, on_event=job.push)
+    except Exception as e:                 # Ollama closed, model missing: say so instead of a blank page
+        answer = _("I couldn't answer just now ({error}). Is Ollama running?").format(error=f"{type(e).__name__}: {str(e)[:200]}")
+    if not job.events or job.events[-1].get("type") != "done" or job.events[-1].get("answer") != answer:
+        steps = [e for e in job.events if e.get("type") == "tool"]
+        job.events.append({"type": "done", "answer": answer, "model": model or "",
+                           "seconds": round(time.monotonic() - started, 1), "tools": len(steps),
+                           "kinds": list(dict.fromkeys(e["kind"] for e in steps)),
+                           "calls": [{"label": e["label"], "what": e.get("what", "")} for e in steps]})
+    job.done = True
+
+def _keep_job(job_id: str, job: ChatJob) -> None:
     CHAT_JOBS[job_id] = job
-    for old in [k for k, f in CHAT_JOBS.items() if f.done()][:max(0, len(CHAT_JOBS) - CHAT_JOBS_KEPT)]:
+    for old in [k for k, j in CHAT_JOBS.items() if j.done][:max(0, len(CHAT_JOBS) - CHAT_JOBS_KEPT)]:
         CHAT_JOBS.pop(old, None)
+
+async def _events(job: ChatJob):
+    sent = 0
+    while True:
+        while sent < len(job.events):
+            yield json.dumps(job.events[sent], ensure_ascii=False) + "\n"
+            sent += 1
+        if job.done and sent >= len(job.events):
+            return
+        await asyncio.sleep(CHAT_POLL)
+
+def chat_stream(job: ChatJob) -> StreamingResponse:
+    """The run as it happens, one JSON event a line (NDJSON), from its first event."""
+    return StreamingResponse(_events(job), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 async def chat_ask(request: Request) -> Response:
     if not same_origin(request):
@@ -3665,18 +3810,19 @@ async def chat_ask(request: Request) -> Response:
         history = history if isinstance(history, list) else []
     except (ValueError, AttributeError):
         return JSONResponse({"answer": _("That question didn't arrive in one piece. Try again.")}, status_code=400)
-    job = _chat_pool.submit(_answer, question, [h for h in history if isinstance(h, dict)], model)
+    job = ChatJob()
     if job_id:
         _keep_job(job_id, job)
-    # shielded, so a page that navigates away doesn't cancel the answer the next page will pick up
-    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
+    # the answer runs on its own thread, so a page that navigates away doesn't stop the one the next page picks up
+    _chat_pool.submit(_answer, job, question, [h for h in history if isinstance(h, dict)], model)
+    return chat_stream(job)
 
-async def chat_answer(request: Request) -> JSONResponse:
-    """The answer to a question an earlier page asked, waiting for it if it is still being worked out."""
+async def chat_answer(request: Request) -> Response:
+    """The run of a question an earlier page asked, from its start, carrying on while it is still being worked out."""
     job = CHAT_JOBS.get(request.query_params.get("id", ""))
     if job is None:
         return JSONResponse({"lost": True}, status_code=404)
-    return JSONResponse({"answer": await asyncio.shield(asyncio.wrap_future(job))})
+    return chat_stream(job)
 
 async def api_signature(request: Request) -> PlainTextResponse:
     return PlainTextResponse(signature())
