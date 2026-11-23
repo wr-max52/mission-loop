@@ -33,7 +33,7 @@ POSE = ("eyes", "arm", "layer", "icon")
 # part sits next to its own colors (the hat, then the hat's color), the way a person describes a look.
 ORDER = ("name", "worker", "skin", "metal", "glow", "style", "hair", "ahoge", "head", "cap", "beanie", "pom", "hijab", "face", "frame",
          "facial", "brow", "mouth", "lash", "lids", "bushy", "freckles", "grin", "outfit", "top", "shirt", "tie", "bow",
-         "legs", "pants", "skirt", "shoes", "pack", "rolled", "pencil", "prop", "maps", "propMap", "quirk")
+         "legs", "pants", "skirt", "shoes", "back", "pack", "rolled", "pencil", "prop", "maps", "propMap", "quirk")
 
 PROMPT = """You are the avatar designer in a research app. Every avatar is a small pixel-art researcher drawn
 from a JSON spec that starts from a built-in researcher. Change it to give the person what they ask for.
@@ -51,6 +51,8 @@ How to work:
 - Colors: `top` is the outfit's main color, `shirt` what shows under it, plus `hair`, `pants`, `shoes`, and the hat's
   own (`cap`, `beanie`, `pom`, `hijab`) or the glasses' `frame`. A robot or cyborg: `metal` (the metal in place of
   skin) and `glow` (the light its eyes glow with).
+- What they wear on their back (a backpack, a jet pack, ...): `back`, one of the pieces the schema lists, or null to
+  take it off; `pack` is a backpack's colour.
 
 Examples (the avatar is a researcher in a lab coat unless its spec says otherwise):
 - "a red beanie and a green hoodie" -> {"refused": false, "change": {"head": "beanie", "beanie": "#c0392b",
@@ -96,6 +98,7 @@ def schema(catalog: dict | None) -> dict:
     top = {"refused": {"type": "boolean"}}             # decided first, then the change, then the reply that describes it
     reply = {"reply": {"type": "string", "maxLength": 400}}
     lists = {k: _values(catalog or {}, k) for k in ENUMS + POSE}
+    back = _values(catalog or {}, "back")
     flags = [f for f in (catalog or {}).get("flags", []) if isinstance(f, str)][:20]
     colors = [c for c in (catalog or {}).get("colors", []) if isinstance(c, str)][:20]
     if not all(lists[k] for k in ENUMS) or not flags or not colors:
@@ -113,6 +116,7 @@ def schema(catalog: dict | None) -> dict:
     change = {
         "name": {"type": "string", "maxLength": 24},
         **{k: {"enum": lists[k]} for k in ENUMS},
+        **({"back": {"enum": back}} if back else {}),     # the back pieces (assets/backs.json), when the catalog has them
         "skin": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 7}, "minItems": 1, "maxItems": 3},
         **{c: HEX for c in colors},
         **{f: {"type": "boolean"} for f in flags},

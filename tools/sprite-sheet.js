@@ -68,6 +68,7 @@ function load(script, config = {}) {
   globalThis.document = { readyState: "complete", addEventListener() {}, querySelectorAll: () => [], querySelector: () => null, documentElement: {}, createElement: () => new Canvas() };
   globalThis.addEventListener = () => {}; globalThis.requestAnimationFrame = () => {}; globalThis.CSS = { escape: s => s };
   window.RESEARCHER_SPRITES = config;
+  window.RESEARCHER_BACKS = JSON.parse(fs.readFileSync(require("path").join(require("path").dirname(script), "backs.json"), "utf8"));
   (0, eval)(fs.readFileSync(script, "utf8"));
   return window.Researchers;
 }

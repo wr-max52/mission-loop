@@ -1,0 +1,83 @@
+{
+  "backpack": {
+    "name": "Backpack", "at": [-12, 0], "strap": true,
+    "tint": {"a": 1, "A": 0.74, "L": 1.25},
+    "pal": {"y": "#e0b64a"},
+    "rows": [
+      ".kkAAk.",
+      "kAaaaak",
+      "kALLLak",
+      "kAAyAAk",
+      "kAayaak",
+      "kAaaaak",
+      "kALLLak",
+      "kAAAAak",
+      "kAAAAak",
+      "kAAAAAk",
+      ".kkkkk."
+    ]
+  },
+  "radio-pack": {
+    "name": "Radio pack", "at": [-12, 0], "fps": 2, "strap": true,
+    "tint": {"a": 1, "A": 0.74, "L": 1.25},
+    "pal": {"y": "#e0b64a", "n": "#63e6ff", "N": "#1f6f8a", "E": "#6f7885"},
+    "frames": [
+      ["..n....", "..E....", ".kEAAk.", "kAEaaak", "kALLLak", "kAAyAAk", "kAayaak", "kAaaaak", "kALLLak", "kAAAAak", "kAAAAak", "kAAAAAk", ".kkkkk."],
+      ["..N....", "..E....", ".kEAAk.", "kAEaaak", "kALLLak", "kAAyAAk", "kAayaak", "kAaaaak", "kALLLak", "kAAAAak", "kAAAAak", "kAAAAAk", ".kkkkk."]
+    ]
+  },
+  "boiler": {
+    "name": "Boiler", "at": [-11, 2], "fps": 2,
+    "pal": {"y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "u": "#c0703a", "U": "#8a4a26", "r": "#ff5a3c", "a": "#ffd27a"},
+    "frames": [
+      [".bbb.", "byybB", "byybB", "buuUB", "byrbB", "byybB", ".bBB."],
+      [".bbb.", "byybB", "byybB", "buuUB", "byabB", "byybB", ".bBB."]
+    ]
+  },
+  "steam-pipes": {
+    "name": "Steam pipes", "at": [-12, 1], "fps": 2,
+    "pal": {"y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "u": "#e0925a", "U": "#8a4a26"},
+    "frames": [
+      [".yy...", "y..b..", "y..bBB", "y..b..", ".bb...", "....uU", "....uU", "...uuU", "...uU."],
+      ["......", "..y...", "..ybBB", "..b...", "......", "....uU", "....uU", "...uuU", "...uU."]
+    ]
+  },
+  "hazard-tank": {
+    "name": "Hazard tank", "at": [-11, 3],
+    "pal": {"d": "#ffd43b", "D": "#3a3a40", "E": "#6f6a62"},
+    "rows": [
+      "EEEE",
+      "ddDD",
+      "dDDd",
+      "DDdd",
+      "DddD",
+      "ddDD",
+      "EEEE"
+    ]
+  },
+  "power-cell": {
+    "name": "Power cell", "at": [-10, 4], "fps": 2,
+    "pal": {"i": "#a4abb6", "e": "#7b828d", "E": "#565c66", "r": "#ff2a2a", "R": "#7a1414"},
+    "frames": [
+      [".eE.", "eirE", "eieE", "eiRE", "eieE", ".EE."],
+      [".eE.", "eiRE", "eieE", "eirE", "eieE", ".EE."]
+    ]
+  },
+  "smokestack": {
+    "name": "Smokestack", "at": [-10, 8], "fps": 3,
+    "pal": {"y": "#f3d27a", "b": "#c8963e", "B": "#8f6522"},
+    "frames": [
+      ["....", "....", ".w..", "yb..", "yb..", "ybbB", ".BBB"],
+      ["....", "w...", "....", "yb..", "yb..", "ybbB", ".BBB"],
+      [".w..", "....", "....", "yb..", "yb..", "ybbB", ".BBB"]
+    ]
+  },
+  "jetpack": {
+    "name": "Jet pack", "at": [-10, 3], "fps": 6,
+    "pal": {"E": "#6f7885", "i": "#e6ebf1", "a": "#ff9d2e", "y": "#ffe066"},
+    "frames": [
+      [".iE", "EiE", "EiE", "EEE", ".a.", ".y."],
+      [".iE", "EiE", "EiE", "EEE", "yay", ".a."]
+    ]
+  }
+}

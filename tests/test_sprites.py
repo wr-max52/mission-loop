@@ -20,12 +20,13 @@ globalThis.addEventListener = () => {};
 globalThis.requestAnimationFrame = () => {};
 globalThis.CSS = { escape: s => s };
 window.RESEARCHER_SPRITES = %(config)s;
+window.RESEARCHER_BACKS = %(backs)s;
 eval(fs.readFileSync(%(script)s, "utf8"));
 console.log(JSON.stringify((%(body)s)(window.Researchers)));
 """
 
 def js(body: str, config: dict | None = None):
-    src = HARNESS % {"config": json.dumps(config or {}), "script": json.dumps(str(SCRIPT)), "body": body}
+    src = HARNESS % {"config": json.dumps(config or {}), "backs": json.dumps(avatars.backs()), "script": json.dumps(str(SCRIPT)), "body": body}
     out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -114,6 +115,63 @@ def test_cyborg_sprites_send_each_cyborg_in_place_of_its_original():
 
 def test_without_the_switch_no_cyborg_is_in_the_cast():
     assert js("R => [R.CYBORGS, R.CAST.length]") == [[], 12]
+
+# ---------- back pieces (assets/backs.json, #152) ----------
+
+BACKS = json.loads((ROOT / "assets" / "backs.json").read_text())
+
+def drawn(body: str):
+    """Runs body(R, pixels) on the real renderer (the contact-sheet tool's canvas); pixels(spec, seed) is a still's bytes."""
+    src = """
+const { load, Canvas } = require(%s);
+const R = load(%s, {});
+const pixels = (spec, seed = 11, face = -1) => { const c = new Canvas(); const v = R.renderSprite(c, spec, { action: "rest", t: 0.5, seed, face, width: 60, height: 62 });
+  if (!v.ok) throw new Error(v.errors.join("; ")); return Buffer.from(c.getContext("2d").d).toString("base64"); };
+console.log(JSON.stringify((%s)(R, pixels)));
+""" % (json.dumps(str(ROOT / "tools" / "sprite-sheet.js")), json.dumps(str(SCRIPT)), body)
+    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+def test_every_back_piece_follows_the_map_rules():
+    r = js("R => ({ backs: Object.keys(R.BACKS), parts: R.PARTS.back, errors: Object.fromEntries(Object.entries(PIECES).map(([k, p]) => [k, R.checkBack(p, k)])) })"
+           .replace("PIECES", json.dumps(BACKS)))
+    assert r["backs"] == list(BACKS) and r["parts"] == [None, *BACKS] and all(e == [] for e in r["errors"].values()), r["errors"]
+    assert js("R => R.checkBack({ name: 'X', at: [-12, 0], rows: ['ss'], tint: { s: 1 } }, 'x')") != []   # a tint letter can't be a slot
+    assert js("R => R.checkBack({ name: 'X', at: [10, 0], rows: ['aa'], tint: { a: 1 } }, 'x')") != []     # nor reach outside the back's box
+
+def test_a_back_piece_is_worn_by_name_or_taken_off():
+    r = js("""R => ({ ben: R.makeLook("ben", 3).back, mei: R.makeLook("mei", 3).back,
+      off: R.validateSprite({ base: "ben", name: "B", back: null }).ok, jet: R.validateSprite({ base: "mei", name: "M", back: "jetpack" }).ok,
+      bad: R.validateSprite({ base: "mei", name: "M", back: "nope" }).errors })""")
+    assert r["ben"] == "backpack" and r["mei"] is None and r["off"] and r["jet"]      # a pack colour and no `back`: a backpack
+    assert len(r["bad"]) == 1 and r["bad"][0].startswith("back: one of null, backpack, radio-pack")
+
+def test_taking_the_backpack_off_takes_the_strap_with_it():
+    r = drawn("""(R, px) => ({ worn: px({ base: "ben", name: "B" }) === px({ base: "ben", name: "B", back: null }),
+      bare: px({ base: "ben", name: "B", back: null }) === px({ base: "ben", name: "B", back: null, pack: ["#ff00ff", "#00ff00"] }),
+      strap: px({ base: "ben", name: "B", back: null }, 11, 1) === px({ base: "ben", name: "B", back: null, pack: ["#ff00ff", "#00ff00"] }, 11, 1) })""")
+    assert r == {"worn": False, "bare": True, "strap": True}      # off, the pack colour shows nowhere: no bag, no strap
+
+def test_every_cyborg_looks_the_same_with_its_back_piece_as_with_its_old_map():
+    old = {k: v for k, v in CYBORGS.items() if "back" in v}
+    r = drawn("""(R, px) => {
+  const out = {};
+  for (const [k, spec] of Object.entries(OLD)) {
+    const piece = R.BACKS[spec.back], map = { layer: "back", at: piece.at, pal: Object.assign({}, piece.pal) };
+    if (piece.frames) { map.frames = piece.frames; map.fps = piece.fps; } else map.rows = piece.rows;
+    const tinted = !!piece.tint, before = Object.assign({}, spec, { back: tinted ? "backpack" : null, maps: [...spec.maps, map] });
+    if (tinted) {                                   // the radio pack was the backpack with an antenna map over it
+      const bag = R.BACKS.backpack.rows.length, h = map.frames ? map.frames[0].length : map.rows.length;
+      map.frames = map.frames.map(f => f.slice(0, h - bag + 2).map(r => r.replace(/[^nNE]/g, ".")));   // just the antenna
+      map.at = [piece.at[0], piece.at[1] + bag - 2];
+    }
+    const seeds = [1, 2, 3, 5, 8, 11, 13, 21].filter(s => !tinted || R.makeLook(k.replace("-borg", ""), s).torso === 12);
+    out[k] = seeds.length > 0 && seeds.every(s => px(Object.assign({}, spec), s) === px(before, s));
+  }
+  return out;
+}""".replace("OLD", json.dumps(old)))
+    assert r == {k: True for k in old}, r
 
 def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
     """The About page's scene (#139): every beat is one the director knows, on a step the strip shows; played with

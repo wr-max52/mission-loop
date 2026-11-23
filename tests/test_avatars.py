@@ -3,7 +3,7 @@ import asyncio, base64, json
 from pathlib import Path
 import ollama, pytest
 from starlette.testclient import TestClient
-import agents, avatars, settings, ui
+import agents, avatars, render, settings, ui
 from agents import avatar, llm
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +82,24 @@ def test_the_sprite_studio_opens_in_the_app(client):
     assert client.get("/sprites/example.json").json()["base"] == "mei"
     assert 'fetch("/assets/cyborgs.json")' in page.text and len(client.get("/assets/cyborgs.json").json()) == 12
     assert 'href="/sprites"' in client.get("/settings").text
+    assert page.text.index("window.RESEARCHER_BACKS=") < page.text.index(ui.asset("researchers.js"))   # the pieces first
+
+def test_every_page_gets_the_back_pieces_before_the_drawing_script(client):
+    """assets/backs.json reaches the drawing script on every UI page and the published About page (#152)."""
+    pieces = avatars.backs()
+    assert {"backpack", "jetpack"} <= set(pieces) and pieces["backpack"]["strap"] is True
+    tag = avatars.backs_tag()
+    assert json.loads(tag.removeprefix("<script>window.RESEARCHER_BACKS=").removesuffix(";</script>")) == pieces
+    html = client.get("/avatars").text
+    assert tag in html and html.index(tag) < html.index(ui.asset("researchers.js"))
+    assert "Jet pack" in ui.script_strings("avatars.js")             # each piece's name is translated in the studio
+    about = render.about_html()                                       # the published site's About page plays them too
+    assert tag in about and about.index(tag) < about.index("../assets/researchers.js")
+
+def test_the_model_may_pick_a_back_piece_when_the_catalog_lists_them():
+    assert "back" not in avatar.schema(CATALOG)["properties"]["change"]["properties"]
+    s = avatar.schema(dict(CATALOG, back=[None, "backpack", "jetpack"]))
+    assert s["properties"]["change"]["properties"]["back"] == {"enum": [None, "backpack", "jetpack"]}
 
 def test_a_script_address_changes_when_the_script_does(tmp_path, monkeypatch):
     """So a browser never goes on using a copy from before an update."""
