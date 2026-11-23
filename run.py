@@ -247,12 +247,17 @@ def loop(every: float = typer.Option(15, help="Minutes to rest when there is not
 
 @app.command()
 def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
-       open_browser: bool = typer.Option(False, "--open", help="Open the UI in your browser once it is up")):
+       open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in your browser once it is up")):
     """The local web UI: missions, briefs, articles, approve/reject/publish, start/stop the loop."""
     import uvicorn
     import ui as web
     from agents import publisher
     if not _port_free(port):
+        if _our_ui(port):                  # already running: show it instead of refusing
+            print(f"Mission Loop UI is already running at http://127.0.0.1:{port}", flush=True)
+            if open_browser:
+                webbrowser.open(f"http://127.0.0.1:{port}")
+            return
         print(f"Port {port} is already in use: the UI may already be open at http://127.0.0.1:{port}, or another "
               f"app has the port. Pick another: python run.py ui --port {port + 1}", flush=True)
         raise typer.Exit(1)
@@ -270,6 +275,15 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
     if open_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
+
+def _our_ui(port: int) -> bool:
+    """Whether a Mission Loop UI answers on this port (its /api/flow), not some other app."""
+    import httpx
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/api/flow", timeout=1.0)
+        return r.status_code == 200 and "now" in r.json()
+    except Exception:
+        return False
 
 def _port_free(port: int) -> bool:
     """Like uvicorn, reuse an address a just-closed UI left in TIME_WAIT; only a live listener counts as taken."""

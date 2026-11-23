@@ -56,6 +56,43 @@ def test_the_ui_port_check(monkeypatch):
         result = CliRunner().invoke(cli.app, ["ui", "--port", str(taken)])
     assert result.exit_code == 1 and "already in use" in result.output and f"--port {taken + 1}" in result.output
 
+@pytest.fixture
+def opened(monkeypatch):
+    """What `ui` opens in the browser; the server itself never starts."""
+    import uvicorn
+    urls = []
+    monkeypatch.setattr(cli.webbrowser, "open", urls.append)
+    monkeypatch.setattr(cli.threading, "Timer", lambda delay, fn, args: NS(start=lambda: fn(*args)))
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_port_free", lambda port: True)
+    return urls
+
+def test_the_ui_opens_the_browser_unless_told_not_to(opened):
+    assert CliRunner().invoke(cli.app, ["ui", "--port", "8799"]).exit_code == 0
+    assert opened == ["http://127.0.0.1:8799"]
+    assert CliRunner().invoke(cli.app, ["ui", "--port", "8799", "--no-open"]).exit_code == 0
+    assert opened == ["http://127.0.0.1:8799"]
+
+def test_a_ui_already_running_is_opened_not_refused(opened, monkeypatch):
+    monkeypatch.setattr(cli, "_port_free", lambda port: False)
+    monkeypatch.setattr(cli, "_our_ui", lambda port: True)
+    result = CliRunner().invoke(cli.app, ["ui", "--port", "8799"])
+    assert result.exit_code == 0 and "already running" in result.output
+    assert opened == ["http://127.0.0.1:8799"]
+    monkeypatch.setattr(cli, "_our_ui", lambda port: False)
+    result = CliRunner().invoke(cli.app, ["ui", "--port", "8799"])
+    assert result.exit_code == 1 and "already in use" in result.output and len(opened) == 1
+
+def test_our_ui_is_told_apart_from_another_app(monkeypatch):
+    replies = {"ours": httpx.Response(200, json={"now": {}}), "other": httpx.Response(200, text="<html>")}
+    for name, reply in replies.items():
+        monkeypatch.setattr(httpx, "get", lambda url, timeout, reply=reply: reply)
+        assert cli._our_ui(8799) == (name == "ours")
+    def refused(url, timeout):
+        raise httpx.ConnectError("refused")
+    monkeypatch.setattr(httpx, "get", refused)
+    assert not cli._our_ui(8799)
+
 # ---------- the setup check ----------
 
 def test_a_fresh_clone_needs_a_model_search_and_work(no_models):
