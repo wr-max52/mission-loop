@@ -9,12 +9,14 @@ mission. A killed loop leaves the file behind, so only trust it while the loop h
 
 Every step that ends (the seat's next begin, or clear) is appended to the step log, data/steps.jsonl, one JSON line
 each: {"worker", "slug", "agent", "since", "ended", "outcome"} (outcome "done", "failed" or "stopped", with "why" for
-the last two). It is the whole history, kept on this machine; the UI shows the latest under the pipeline strip and
-all of it on /log. Like the rest of this file it is display-only.
+the last two), and "model": the model the seat's worker was set to when the step began (none for the desk, or a worker
+with no model; lines from before #121 have none either). It is the whole history, kept on this machine; the UI shows
+the latest under the pipeline strip, all of it on /log, and pass rates and times per step and per model on /stats
+(stats()). Like the rest of this file it is display-only.
 """
-import json, os, re, threading, time
+import json, math, os, re, statistics, threading, time
 from pathlib import Path
-import trail
+import settings, trail
 
 FILE = Path("data/activity.json")
 LOG = Path("data/steps.jsonl")
@@ -76,6 +78,8 @@ def _log(worker: str, e: dict | None) -> None:
             "ended": time.time(), "outcome": e.get("outcome", "done")}
     if e.get("why"):
         line["why"] = e["why"]
+    if e.get("model"):
+        line["model"] = e["model"]
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a") as f:
@@ -83,12 +87,18 @@ def _log(worker: str, e: dict | None) -> None:
     except OSError:
         pass
 
+def seat_model(seat: str) -> str:
+    """The model a seat runs on: its worker's ("assistant-2" -> the Research Assistant's); "" for the desk."""
+    worker = settings.seat_worker(seat)
+    return settings.worker_model(worker) if worker in settings.WORKERS else ""
+
 def begin(slug: str, agent: str) -> None:
     trail.start(slug, agent)               # the chat assistant reads what each agent did from here
     with _lock:
         data = _read()
         _log(_worker(), data.get(_worker()))   # this seat's last step ends here
-        data[_worker()] = {"slug": slug, "agent": agent, "since": time.time()}
+        data[_worker()] = {"slug": slug, "agent": agent, "since": time.time()} | (
+            {"model": model} if (model := seat_model(_worker())) else {})
         _write(data)
 
 def outcome(kind: str, why: str) -> None:
@@ -198,3 +208,43 @@ def history() -> list[dict]:
         return _lines(LOG.read_text(errors="replace"))[::-1]
     except OSError:
         return []
+
+# ---------- adding the log up (/stats) ----------
+
+STATS_AGENTS = ("sources", "brief", "source_check", "writer", "article_check", "article_rating", "outreach",
+                "theorist", "finder")      # the steps a model runs, whose pass rate says whether a model swap helped
+WEEK = 7 * 86400
+
+def percentile(values: list[float], p: float) -> float:
+    """The nearest-rank percentile: the smallest value with at least p of them at or below it (0.9: the slowest tenth
+    starts here)."""
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
+
+def stats(steps: list[dict], by_model: bool = False, since: float = 0) -> list[dict]:
+    """Each model step's runs in the log, one row per step in pipeline order (STATS_AGENTS, every one even with no
+    runs), or with by_model one per step and model that ran it, most runs first ("" for a line with no model).
+    A row: {"agent", "model", "runs", "passed", "failed", "stopped", "rate", "median", "p90"}. Passed is outcome
+    "done", so a source check that found a dead lead passed: the check did its job. The rate is passed out of passed
+    and failed (None with neither); a stop cuts a step short, so stopped runs count as runs but in neither the rate
+    nor the times, which are the passed and failed runs' seconds (None with none). since keeps steps that ended then
+    or later."""
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for e in steps:
+        if e.get("agent") in STATS_AGENTS and float(e.get("ended", 0)) >= since:
+            key = (e["agent"], (e.get("model") or "") if by_model else "")
+            groups.setdefault(key, []).append(e)
+    if not by_model:
+        for agent in STATS_AGENTS:
+            groups.setdefault((agent, ""), [])
+    rows = []
+    for (agent, model), runs in groups.items():
+        kinds = [e.get("outcome", "done") for e in runs]
+        passed, failed, stopped = kinds.count("done"), kinds.count("failed"), kinds.count("stopped")
+        times = [max(0.0, float(e["ended"]) - float(e.get("since", e["ended"])))
+                 for e in runs if e.get("outcome", "done") != "stopped"]
+        rows.append({"agent": agent, "model": model, "runs": len(runs), "passed": passed, "failed": failed,
+                     "stopped": stopped, "rate": passed / (passed + failed) if passed + failed else None,
+                     "median": statistics.median(times) if times else None,
+                     "p90": percentile(times, 0.9) if times else None})
+    return sorted(rows, key=lambda r: (STATS_AGENTS.index(r["agent"]), -r["runs"], r["model"]))

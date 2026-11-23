@@ -1239,5 +1239,21 @@
  "Hazard tank": "Tanque peligroso",
  "Power cell": "Celda de energía",
  "Smokestack": "Chimenea",
- "Jet pack": "Mochila propulsora"
+ "Jet pack": "Mochila propulsora",
+ "Stats": "Estadísticas",
+ "Runs": "Ejecuciones",
+ "Passed": "Aprobados",
+ "Failed": "Fallidos",
+ "Stopped": "Detenidos",
+ "Pass rate": "Tasa de aprobación",
+ "Median": "Mediana",
+ "Slowest tenth": "Décimo más lento",
+ "All time": "Todo el tiempo",
+ "Last 7 days": "Últimos 7 días",
+ "unknown model": "modelo desconocido",
+ "Back to the step log": "Volver al registro de pasos",
+ "Step stats": "Estadísticas de pasos",
+ "By step": "Por paso",
+ "By model": "Por modelo",
+ "Pass rate is passed out of passed and failed. A stop cuts a step short, so stopped runs count as runs but not in the pass rate or the times. Slowest tenth: nine in ten runs took this long or less.": "La tasa de aprobación es aprobados entre aprobados y fallidos. Detener un paso lo corta, así que las ejecuciones detenidas cuentan como ejecuciones pero no en la tasa ni en los tiempos. Décimo más lento: nueve de cada diez ejecuciones tardaron esto o menos."
 }

@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 919 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 925 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -707,13 +707,20 @@ replies) only while outreach is on and a channel is ready;
   which share their class names.
 - Step log: `activity.py` appends every agent step that ends (the seat's next `begin`, or `clear`) to
   `data/steps.jsonl` (`activity.LOG`, on this machine only, never trimmed): one JSON line with the seat, mission slug
-  (`""` for the Theorist and the finder), agent, start, end and outcome: `done`, or `failed`/`stopped` with why
+  (`""` for the Theorist and the finder), agent, start, end, the model the seat's worker was set to when the step
+  began (`activity.seat_model`; none for the desk, and lines from before #121 have none) and outcome: `done`, or `failed`/`stopped` with why
   (`activity.fail(e)` from the orchestrator's excepts, an `Interrupted` counting as stopped; `activity.outcome` for a
   failed source or article check or a paused search; the first outcome given stands). Under the pipeline strip
   (`ui.flow_status`, served in `/api/flow`'s `now`) the agents at work come first, then the last `RECENT_STEPS` (3)
   finished steps, each "Agent · mission · took 4m 12s · 3m ago" (`activity.recent` reads only the log's end), then Full log, which
   opens `/log` (`ui.log_page`): every step newest first, `LOG_PAGE` (200) a page, the ones at work on top, `?m=<slug>`
-  for one mission (a mission page's History links to it). Display-only, like the activity file.
+  for one mission (a mission page's History links to it), and links to `/stats` (`ui.stats_page`, #121): for each
+  model step (`activity.STATS_AGENTS`: sources, brief, source check, writing, article check, rating, outreach, Theorist,
+  finder) its runs, passed (outcome `done`, so a dead lead found by the source check passed), failed, stopped, pass
+  rate (passed out of passed and failed), median and slowest-tenth (nearest-rank 90th percentile) time, then the same
+  split by model ("unknown model" for a line with none), all time or `?window=week` (the last 7 days). Stopped runs
+  count as runs but in neither the rate nor the times, since a stop cuts a step short. `activity.stats` adds it up
+  from the whole log on each visit; plain tables, nothing stored. Display-only, like the activity file.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
