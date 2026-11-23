@@ -34,11 +34,12 @@
 <body>
 <!--back-->
 <h1>Sprite studio</h1>
-<p>Edit a sprite spec and see it in the real renderer. The rules are in <code>SPRITES.md</code>; the example is <code>tools/example-sprite.json</code>.</p>
+<p>Edit a sprite spec and see it in the real renderer. The rules are in <code>SPRITES.md</code>; the example is <code>tools/example-sprite.json</code>, and the cyborg crew is <code>assets/cyborgs.json</code>.</p>
 <div class="grid">
   <div>
     <div class="row" style="align-items:center;margin-bottom:8px">
       <label>Start from <select id="base"></select></label>
+      <label>Cyborgs <select id="borg"><option value="">open one…</option></select></label>
       <button id="reset">Example</button>
       <span id="status"></span>
     </div>
@@ -107,6 +108,14 @@
   $("base").addEventListener("change", () => {
     let spec = {}; try { spec = JSON.parse($("spec").value); } catch (e) { /* start over */ }
     spec.base = $("base").value; $("spec").value = JSON.stringify(spec, null, 2); draw();
+  });
+  // The cyborg crew (assets/cyborgs.json): each built-in drawn again in metal, as a spec to read, try and remix.
+  fetch("../assets/cyborgs.json").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(borgs => {
+    for (const [k, s] of Object.entries(borgs)) $("borg").append(new Option(s.name, k));
+    $("borg").addEventListener("change", () => {
+      const s = borgs[$("borg").value]; if (!s) return;
+      $("spec").value = JSON.stringify(s, null, 2); $("base").value = s.base; draw();
+    });
   });
   $("reset").addEventListener("click", () => { $("spec").value = JSON.stringify(example, null, 2); draw(); });
   let wait; $("spec").addEventListener("input", () => { clearTimeout(wait); wait = setTimeout(draw, 250); });

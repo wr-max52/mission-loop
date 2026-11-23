@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 900 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 909 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -434,10 +434,22 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     filters by tag (an approved epic is called a tag on the site; `?tag=` in the address, so an article's tag pill
     links to its list), and an article page has a link back and its newer and older article, read from
     `feed.json` so pages written once stay current. `site/about/` shows the pipeline strip (`flowchart.py`, the
-    same snake the UI draws, always with the human reviews: auto mode is the UI's own switch) playing a made-up run, a few seconds per stage with both workers busy
-    (`assets/about.js` drives it through `assets/flow.js`; `data-demo` means nothing is polled), says what each
-    agent does (`render.AGENT_NOTES`), and has a floor where a researcher or two drops by for a short visit and
-    says something (`window.RESEARCHERS_PACE`). Rebuilding the index rewrites it and copies those three scripts to
+    same snake the UI draws, always with the human reviews: auto mode is the UI's own switch) playing one made-up
+    mission from the Theorist to Publish as a short comic scene on a loop (#139): two researchers chase the work from
+    box to box (one from each worker's crew; the Assistant waits ahead at Sources, oversleeps, gulps a coffee and
+    makes it with two seconds to spare), hopping the gaps and leaping down where the strip turns, with a line at
+    every step, and a third walks in to Publish once they've gone ("Hot off the press!"), so the strip holds two at
+    a time. The scene is data: `TOUR` in `assets/researchers.js` is each actor's beats (enter, go, light, approve,
+    say, do a bit, wait, until/signal, cue, exit), played by `Tour` (a `FlowStage` on `#flow[data-tour]`) with
+    `Actor`s, researchers who follow beats instead of picking bits; `TOUR_BITS` adds the scene's own bits (the
+    leap, sleep and tap holds, jolt, shout, skid, cheer). A box lights only when a beat reaches it: `Tour` sends a
+    `tourstep` event and `assets/about.js` turns it into `Flow.apply` (`data-demo` means nothing is polled). A
+    resize lands anyone mid-run on their box. With reduced motion there is no scene: `about.js` lights each box in
+    turn and a `tourframe` event stands a still researcher on it. Below, Who does what is a card per strip step
+    (`render.STEP_NOTES`, `render.step_card`: the strip's icon, who runs it, what it does; the Theorist's, finder's
+    and rating checks are told on their agent's card), and two researchers drop into cards for a short visit, doing
+    that step's kind of work (`data-lab`, mostly from the crew that runs it; `window.RESEARCHERS_PACE`), apart from
+    the scene: the strip counts as two of the page's four (`Stage.hold`). Rebuilding the index rewrites it and copies those three scripts to
     `site/assets/`, and starting the UI copies any that differ from the code's (`publisher.refresh_assets`), so an
     updated script reaches the site without waiting for the next article. The UI serves `/assets` and `/site` with
     `Cache-Control: no-cache` (`ui.FreshFiles`) and writes every script's address with a stamp of its contents
@@ -782,6 +794,14 @@ most bits pass without a word. They work through about 40 bits weighted by mood 
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
+Its Cyborg sprites switch (`settings.cyborgs`, off by default, saved only while on) sends every built-in researcher's
+cyborg in its place: `assets/cyborgs.json` holds the 12 (`aris-borg` ... `pip-borg`), each a sprite spec, never code,
+with its original's clothes, colors, crew, quirk and every animation; `avatars.config` hands them to the page as
+`RESEARCHER_SPRITES.cyborgs` and `researchers.js` sends each original home (one switched off under Who visits keeps
+its cyborg home too; an avatar saved under a cyborg's name wins). What makes them machines is in the spec format for
+anyone's sprite: `metal` (a metal in place of skin) and `glow` (lit eyes), both in the avatar studio's Body tab with
+Start from a cyborg, and the sprite studio's Cyborgs list opens any of the 12 as a spec. The published site's About
+page keeps the originals.
 The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Page scripts get theirs as `window.I18N`: the shared few in `ui.JS_STRINGS`, and the board's and avatar studio's from every string literal inside their `tr(...)` calls (`ui.script_strings`, so no list to keep). The setup checks (`doctor.py`) are wrapped too; `run.py doctor` and Researcher Chat's `setup_status` read them in English. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
 when not System) and the chat colour (the app's red, seven pastels in `settings.CHAT_COLORS`, or any colour picked;
 `settings.chat_color()`). Both go on the UI's `<html>` from the server (`ui.html_attrs`: `data-theme` and the
@@ -793,6 +813,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't) |
+| Have the researchers visit as cyborgs | Settings → Display → Cyborg sprites |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |

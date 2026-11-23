@@ -292,7 +292,9 @@ def test_about_page_plays_the_pipeline_and_explains_the_agents():
     about = Path("site/about/index.html").read_text()
     assert 'id="flow" class="flow" data-demo' in about and 'data-step="brief_review"' in about
     assert 'data-step="publisher"' in about and "Source finder" in about and "Theorist" in about
-    assert about.count('class="card"') == 2 and "RESEARCHERS_PACE" in about       # a researcher or two drops by
+    assert 'data-tour' in about and '<div class="flow-track" data-lab>' in about   # one mission runs it, carried by researchers
+    assert about.count('class="card stepcard"') == 12 and "lab-floor" not in about  # a card a step; researchers drop in
+    assert "RESEARCHERS_PACE" in about
     for name in ("researchers.js", "flow.js", "about.js"):                         # it plays wherever the site is hosted
         assert Path("site/assets", name).read_bytes() == (publisher.ASSETS / name).read_bytes()
         assert f'src="../assets/{name}"' in about
@@ -301,6 +303,17 @@ def test_about_page_plays_the_pipeline_and_explains_the_agents():
     assert publisher.refresh_assets() == ["researchers.js"]                        # only what differs is copied
     assert Path("site/assets/researchers.js").read_bytes() == (publisher.ASSETS / "researchers.js").read_bytes()
     assert publisher.refresh_assets() == []
+
+def test_who_does_what_is_a_card_for_each_step_in_strip_order():
+    import re, render, flowchart
+    about = render.about_html()
+    cards = re.findall(r'<div class="card stepcard" id="step-(\w+)" data-kind="(\w+)" data-lab="\1"[^>]*>'
+                       r'<div class="head"><span class="badge"><span class="ico"', about)
+    strip = [k for k, kind, _ in flowchart.FLOW if k not in flowchart.OUTREACH_STEPS]
+    told = {"theorist_check", "finder_check", "rating_check"}                    # on the Theorist's, finder's and rater's cards
+    assert [k for k, _ in cards] == [k for k in strip if k not in told]
+    assert dict(cards)["source_check"] == "check" and dict(cards)["brief_review"] == "human" and dict(cards)["writer"] == "agent"
+    assert 'id="step-sources" data-kind="agent" data-lab="sources" data-worker="assistant"' in about   # its own crew mostly visits
 
 def test_no_mission_takes_a_site_folder_as_its_slug():
     assert orchestrator._new_slug("About", set()) == "about-2"

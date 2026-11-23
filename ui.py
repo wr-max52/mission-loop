@@ -78,6 +78,8 @@ MESSAGES = {
     "auto_off": "Auto mode off.",
     "animations_on": "Animations on.",
     "animations_off": "Animations off.",
+    "cyborgs_on": "Cyborg sprites on.",
+    "cyborgs_off": "Cyborg sprites off.",
     "library_saved": "Library settings saved.",
     "library_indexing": "Indexing the library. Refresh in a minute.",
     "theme_saved": "Appearance saved.",
@@ -2147,6 +2149,13 @@ def settings_body(request: Request, error: str = "") -> str:
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
   {_("Animations")}</label>
   <noscript><p><button>{_("Save")}</button></p></noscript>
+</form>
+<form method="post" action="/settings/cyborgs" class="actions display">
+  <h3>{icon("bolt")}{_("Cyborg sprites")}</h3>
+  <p class="hint">{_("Every researcher visits as a cyborg: metal, lights and pipes.")}</p>
+  <label class="switch"><input type="checkbox" role="switch" name="cyborgs" value="on"{" checked" if settings.cyborgs() else ""} onchange="this.form.requestSubmit()">
+  {_("Cyborg sprites")}</label>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>"""
     sections = "".join([
         settings_section("setup", setup_section(conn)),
@@ -2270,6 +2279,13 @@ async def save_animations(request: Request) -> Response:
     on = (await request.form()).get("animations") == "on"   # an unticked box sends nothing
     settings.set_animations(on)
     return go("/settings", done="animations_on" if on else "animations_off")
+
+async def save_cyborgs(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    on = (await request.form()).get("cyborgs") == "on"      # an unticked box sends nothing
+    settings.set_cyborgs(on)
+    return go("/settings", done="cyborgs_on" if on else "cyborgs_off")
 
 async def join_1f916(request: Request) -> Response:
     """The same registration as `python run.py join-1f916`, which saves the key before anything else."""
@@ -4631,7 +4647,7 @@ async def sprite_studio(request: Request) -> Response:
     except OSError:
         return PlainTextResponse(_("tools/sprites.html is missing."), status_code=404)
     html = html.replace('src="../assets/researchers.js"', f'src="{asset("researchers.js")}"')
-    html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")')
+    html = html.replace('fetch("example-sprite.json")', 'fetch("/sprites/example.json")').replace('fetch("../assets/cyborgs.json")', 'fetch("/assets/cyborgs.json")')
     html = html.replace("<!--back-->", f'<p><a href="/settings">&larr; {_("Settings")}</a></p>')
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
@@ -5091,6 +5107,7 @@ app = Starlette(routes=[
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
+    Route("/settings/cyborgs", save_cyborgs, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/language", save_language, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),

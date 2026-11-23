@@ -72,6 +72,10 @@ const HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", 
               "#f2f0f7", "#ff8fc7", "#b197fc", "#74c0fc", "#63e6be", "#e03131"];
 const CLOTH = ["#f4f4f0", "#e8e4da", "#2b2b30", "#3a3a40", "#7d8691", "#22346b", "#3d6a9e", "#74c0fc", "#218c74", "#5f7f6b",
                "#b5d8c6", "#8a5a3c", "#cc8e35", "#f1c40f", "#e67e22", "#c0392b", "#e84393", "#6e5a8a", "#b197fc", "#ffd8a8"];
+// A cyborg's metal (in place of skin) and the light its eyes glow with (SPRITES.md).
+const TINTS = { METAL: ["#c9973f", "#d87a45", "#b08d57", "#958a7c", "#e6ebf2", "#d5dce6", "#b4bcc8", "#8d97a6", "#5d6675", "#18181c", "#9cc5b0", "#e8c35a", "#c4b3f2", "#9fd0f5"],
+                GLOW: ["#ff2a2a", "#ff9d2e", "#ffb238", "#ffd43b", "#9be564", "#6dff9a", "#5ee6d0", "#63e6ff", "#4fc3ff", "#b79cff", "#ff8fc7", "#ffffff"] };
+let borgs = {};                                  // the cyborg crew (assets/cyborgs.json): ready-made starts for a remix
 // Bits that make good favourites: the vibe tab weights these up.
 const VIBES = ["read", "search", "notes", "dig", "typing", "coffee", "telescope", "eureka", "beaker", "rocket", "microscope", "chalkboard",
                "corkboard", "chart", "stamp", "duck", "globe", "juggle", "pizza", "dance", "cat", "bird", "flower", "sneeze", "plane", "sleep"];
@@ -98,7 +102,9 @@ const colorsFor = (tab, look) => ({
 }[tab] || []);
 
 const TABS = [
-  { id: "body", label: tr("Body"), groups: [{ title: tr("Start from"), kind: "base" }, { title: tr("Skin"), kind: "skin" }, { title: tr("Crew"), kind: "enum", field: "worker", chips: true }] },
+  { id: "body", label: tr("Body"), groups: [{ title: tr("Start from"), kind: "base" }, { title: tr("Skin"), kind: "skin" },
+      { title: tr("Metal"), kind: "tint", field: "metal", palette: "METAL" }, { title: tr("Glowing eyes"), kind: "tint", field: "glow", palette: "GLOW" },
+      { title: tr("Start from a cyborg"), kind: "borgs" }, { title: tr("Crew"), kind: "enum", field: "worker", chips: true }] },
   { id: "hair", label: tr("Hair"), groups: [{ title: tr("Style"), kind: "enum", field: "style", crop: "head" }, { title: tr("Extras"), kind: "flags", fields: ["ahoge"] }] },
   { id: "face", label: tr("Face"), groups: [{ title: tr("Glasses"), kind: "enum", field: "face", crop: "head" }, { title: tr("Mustache"), kind: "enum", field: "facial", crop: "head" },
       { title: tr("Resting brows"), kind: "enum", field: "brow", crop: "head" }, { title: tr("Resting mouth"), kind: "enum", field: "mouth", crop: "head" },
@@ -263,6 +269,19 @@ function group(g, lk) {
       "aria-label": fill(tr("Skin tone {n}"), { n: i + 1 }), onclick: () => change(set("skin", [i])) })));
     grid.className = "swatches";
     grid.append(h("button", { type: "button", class: "chip" + (state.spec.skin ? "" : " on"), onclick: () => { const n = clone(state.spec); delete n.skin; change(n); } }, tr("Like the original")));
+  } else if (g.kind === "tint") {                 // one color or none: the field is left out of the spec for none
+    const cur = valueOf(state.spec, g.field) || null;
+    grid.className = "swatches";
+    for (const c of TINTS[g.palette]) grid.append(h("button", { type: "button", class: "swatch" + (cur === c ? " on" : ""), style: `--c:${c}`, title: c, "aria-label": `${g.title} ${c}`,
+      onclick: () => change(set(g.field, c)) }));
+    grid.append(h("label", { class: "swatch own" }, h("input", { type: "color", value: cur || "#888888", "aria-label": `${g.title}: ${tr("any colour")}`, title: tr("Any colour"),
+      onchange: e => change(set(g.field, e.target.value.toLowerCase())) })));
+    grid.append(h("button", { type: "button", class: "chip" + (cur ? "" : " on"), onclick: () => { const n = clone(state.spec); delete n[g.field]; change(n); } }, tr("None")));
+  } else if (g.kind === "borgs") {                // a cyborg's whole spec, under the name being edited
+    for (const [k, spec] of Object.entries(borgs))
+      grid.append(h("button", { type: "button", class: "tile", title: spec.name, onclick: () => change(Object.assign(clone(spec), { name: state.spec.name }), { show: "wave" }) },
+        tile(spec, "full", 4), h("span", { text: spec.name.replace(/^(Dr\.|Prof\.|Det\.|Intern) /, "") })));
+    if (!Object.keys(borgs).length) return h("div");
   } else if (g.kind === "enum") {
     const cur = valueOf(state.spec, g.field);
     for (const v of R.PARTS[g.field]) {
@@ -516,7 +535,7 @@ function cast() {
   castHost.replaceChildren();
   for (const [worker, title] of [["assistant", tr("Young crew · Research Assistant")], ["pi", tr("Tenured crew · Principal Investigator")]]) {
     const row = h("div", { class: "crew-row" });
-    for (const k of R.CAST.filter(k => R.ROSTER[k].worker === worker && !k.startsWith("__"))) {
+    for (const k of R.CAST.filter(k => R.ROSTER[k].worker === worker && !k.startsWith("__") && !R.CYBORGS.includes(k))) {
       const custom = !R.BUILT_IN.includes(k), on = !off.has(k);
       const sw = h("input", { type: "checkbox", role: "switch", checked: on, "aria-label": fill(tr("{name} visits"), { name: who(k) }), onchange: async e => {
         try { await post(`/avatars/${encodeURIComponent(k)}/${e.target.checked ? "on" : "off"}`, {}); }
@@ -546,5 +565,6 @@ function cast() {
 }
 
 layout(); render(); cast(); models();
+fetch("/assets/cyborgs.json").then(r => r.ok ? r.json() : {}).then(d => { borgs = d || {}; render(); }).catch(() => {});
 if (reduce) frame(performance.now()); else requestAnimationFrame(frame);
 })();

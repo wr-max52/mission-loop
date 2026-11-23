@@ -1220,6 +1220,13 @@
  "replies": "réponses",
  "Missions at this step: {n}": "Missions à cette étape : {n}",
  "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and moves on when everyone has answered or the wait ends.": "Contrôle des réponses (code) : lit les réponses toutes les 10 minutes, remercie une fois chaque personne qui a répondu, et passe à la suite quand tout le monde a répondu ou que l'attente se termine.",
+ "Cyborg sprites": "Sprites cyborg",
+ "Cyborg sprites on.": "Sprites cyborg activés.",
+ "Cyborg sprites off.": "Sprites cyborg désactivés.",
+ "Every researcher visits as a cyborg: metal, lights and pipes.": "Chaque chercheur vient en cyborg : métal, lumières et tuyaux.",
+ "Metal": "Métal",
+ "Glowing eyes": "Yeux lumineux",
+ "Start from a cyborg": "Partir d'un cyborg",
  "Post card": "Carte postale",
  "To": "À"
 }
