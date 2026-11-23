@@ -352,11 +352,13 @@ class SiteToolbox:
             return "ERROR: Error executing tool fetch: Failed to fetch https://refusing.example.com/a - status code 403"
         return "page text"
 
+LEADS = "Leads: https://refusing.example.com/a https://x.example.com"   # addresses the run has been shown
+
 async def run_tools(monkeypatch, turns, budget=research_mod.MAX_TOOL_CALLS):
     SiteToolbox.calls = []
     script(monkeypatch, turns + [text("DONE")])
     async with SiteToolbox([]) as tb:
-        messages = await research_mod.tool_loop("s", tb, budget)
+        messages = await research_mod.tool_loop(LEADS, tb, budget)
     return [m["content"] for m in messages if isinstance(m, dict) and m.get("role") == "tool"]
 
 async def test_a_site_that_refuses_reading_is_explained_once_and_not_fetched_again(monkeypatch):
@@ -387,6 +389,26 @@ async def test_a_low_budget_is_shown_on_results_but_not_to_the_brief_writer(monk
     assert "[11 tool calls left" not in results[0] and "[10 tool calls left" in results[1]
     out = research_mod._for_brief([{"role": "tool", "content": results[1]}])
     assert out[0]["content"] == "page text"
+
+async def test_an_address_the_run_never_showed_is_refused_before_it_is_fetched(monkeypatch):
+    results = await run_tools(monkeypatch, [tool_call("fetch", url="https://made-up.example.org/report.pdf")])
+    assert results[0].startswith("Not run: this address wasn't in any search result or page you read")
+    assert SiteToolbox.calls == []
+
+async def test_the_same_page_written_another_way_is_fetched(monkeypatch):
+    urls = ["http://www.x.example.com/", "https://x.example.com#top",
+            "https://web.archive.org/web/2020/https://refusing.example.com/a"]
+    results = await run_tools(monkeypatch, [tool_call("fetch", url=u) for u in urls])
+    assert not any(r.startswith("Not run: this address") for r in results) and len(SiteToolbox.calls) == 3
+
+def test_addresses_in_a_result_and_a_pages_own_links_can_be_fetched():
+    g = research_mod.Guard(["fetch", "search"])
+    assert not g.has_seen("https://news.example.com/2026/story")
+    g.explain("search", {"query": "a"}, "Title: Story\nURL: https://news.example.com/2026/story?id=4&amp;p=2")
+    assert g.has_seen("https://news.example.com/2026/story?id=4&p=2")
+    g.explain("fetch", {"url": "https://news.example.com/2026/story"}, "See [the filing](/filings/2026-q1.pdf).")
+    assert g.has_seen("https://news.example.com/filings/2026-q1.pdf")    # a relative link on a site it read
+    assert not g.has_seen("https://news.example.com/filings/2025-q4.pdf")
 
 def test_failed_fetches_are_read_by_their_status_not_by_digits_in_the_address():
     g = research_mod.Guard(["fetch", "wayback_versions"])
