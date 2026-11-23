@@ -287,13 +287,24 @@ def test_site_filters_by_tag_and_every_article_leads_back():
     preview = Path("missions/p/preview.html").read_text()
     assert 'class="back"' not in preview and 'href="../about/"' not in preview and '<nav class="pager"' not in preview   # not on the site yet
 
+def test_about_page_always_draws_outreach(monkeypatch):
+    # #155: the About page shows the whole line, outreach included, whatever this desk has switched on; the UI's
+    # strip still follows the setup.
+    import flowchart, render, settings
+    monkeypatch.setattr(settings, "outreach_on", lambda: False)
+    strip = render.english_track()
+    assert all(f'data-step="{k}"' in strip for k in flowchart.OUTREACH_STEPS)
+    assert 'data-step="outreach"' not in flowchart.track({}, {}, {})
+    about = render.about_html()
+    assert 'id="step-outreach"' in about and 'id="step-replies"' in about
+
 def test_about_page_plays_the_pipeline_and_explains_the_agents():
     published("p", "Fed topic")
     about = Path("site/about/index.html").read_text()
     assert 'id="flow" class="flow" data-demo' in about and 'data-step="brief_review"' in about
     assert 'data-step="publisher"' in about and "Source finder" in about and "Theorist" in about
     assert 'data-tour' in about and '<div class="flow-track" data-lab>' in about   # one mission runs it, carried by researchers
-    assert about.count('class="card stepcard"') == 12 and "lab-floor" not in about  # a card a step; researchers drop in
+    assert about.count('class="card stepcard"') == 14 and "lab-floor" not in about  # a card a step; researchers drop in
     assert "RESEARCHERS_PACE" in about
     for name in ("researchers.js", "flow.js", "about.js"):                         # it plays wherever the site is hosted
         assert Path("site/assets", name).read_bytes() == (publisher.ASSETS / name).read_bytes()
@@ -309,8 +320,8 @@ def test_who_does_what_is_a_card_for_each_step_in_strip_order():
     about = render.about_html()
     cards = re.findall(r'<div class="card stepcard" id="step-(\w+)" data-kind="(\w+)" data-lab="\1"[^>]*>'
                        r'<div class="head"><span class="badge"><span class="ico"', about)
-    strip = [k for k, kind, _ in flowchart.FLOW if k not in flowchart.OUTREACH_STEPS]
-    told = {"theorist_check", "finder_check", "rating_check"}                    # on the Theorist's, finder's and rater's cards
+    strip = [k for k, kind, _ in flowchart.FLOW]                                 # outreach too: the About strip always has it
+    told = {"theorist_check", "finder_check", "outreach_check", "rating_check"}  # on the Theorist's, finder's, outreach's and rater's cards
     assert [k for k, _ in cards] == [k for k in strip if k not in told]
     assert dict(cards)["source_check"] == "check" and dict(cards)["brief_review"] == "human" and dict(cards)["writer"] == "agent"
     assert 'id="step-sources" data-kind="agent" data-lab="sources" data-worker="assistant"' in about   # its own crew mostly visits

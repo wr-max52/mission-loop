@@ -1,5 +1,5 @@
 """The sprite rulebook (SPRITES.md) in code: specs are data, checked before they join the cast."""
-import json, shutil, subprocess
+import json, re, shutil, subprocess
 from pathlib import Path
 import pytest
 import avatars
@@ -174,16 +174,45 @@ def test_every_cyborg_looks_the_same_with_its_back_piece_as_with_its_old_map():
 }""".replace("OLD", json.dumps(old)))
     assert r == {k: True for k in old}, r
 
-def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
-    """The About page's scene (#139): every beat is one the director knows, on a step the strip shows; played with
-    no clock (each actor until it waits on a signal), the work lights every step once, in strip order, and ends."""
+def about_strip():
     import sys
     sys.path.insert(0, str(ROOT))
     import flowchart
-    r = js("R => ({ tour: R.TOUR, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS) })")
-    tour, strip = r["tour"], [k for k, kind, _ in flowchart.FLOW if k not in flowchart.OUTREACH_STEPS]
-    reviews = [k for k, kind, _ in flowchart.FLOW if kind == "human"]
-    for who, beats in tour.items():
+    return [k for k, kind, _ in flowchart.FLOW], [k for k, kind, _ in flowchart.FLOW if kind == "human"]
+
+def play(script: dict, first: list, round_signals: bool = False):
+    """Play a storyboard with no clock: each actor until it waits on a signal it hasn't got. Returns the boxes it lit,
+    in order, with who lit them. With round_signals a signal belongs to the round it was given in (the loops)."""
+    lit, signals, queue, rounds = [], set(), [], {}
+    playing = {who: list(script[who]) for who in first}
+    while playing or queue:
+        if not playing:
+            who = queue.pop(0)
+            playing[who] = list(script[who])
+        moved = False
+        for who, beats in list(playing.items()):
+            key = lambda name: (rounds.get(who, 0), name) if round_signals else name
+            while beats:
+                op, *args = beats[0]
+                if op == "until" and key(args[0]) not in signals:
+                    break
+                beats.pop(0)
+                moved = True
+                if op == "light":
+                    lit.append((who, args[0]))
+                elif op == "signal":
+                    signals.add(key(args[0]))
+                elif op == "cue":
+                    queue.append(args[0])
+                elif op == "round":
+                    rounds[who] = rounds.get(who, 0) + 1
+            if not beats:
+                del playing[who]
+        assert moved or not playing, f"stuck: {playing}"
+    return lit
+
+def check_beats(script: dict, r: dict, strip: list):
+    for who, beats in script.items():
         for b in beats:
             assert b[0] in r["beats"], (who, b)
             if b[0] in ("enter", "go", "light", "approve"):
@@ -191,33 +220,52 @@ def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
             if b[0] == "do":
                 assert b[1] in r["bits"], (who, b)
             if b[0] in ("cue", "face"):
-                assert b[1] in tour, (who, b)
-    lit, signals, queue, at = [], set(), [], {}
-    playing = {"P": list(tour["P"]), "R": list(tour["R"])}
-    while playing or queue:
-        if not playing:
-            who = queue.pop(0)
-            playing[who] = list(tour[who])
-        moved = False
-        for who, beats in list(playing.items()):
-            while beats:
-                op, *args = beats[0]
-                if op == "until" and args[0] not in signals:
-                    break
-                beats.pop(0)
-                moved = True
-                if op == "light":
-                    lit.append(args[0])
-                elif op == "signal":
-                    signals.add(args[0])
-                elif op == "cue":
-                    queue.append(args[0])
-            if not beats:
-                del playing[who]
-        assert moved or not playing, f"stuck: {playing}"
-    assert lit == strip                                                # every box once, in the strip's order
+                assert b[1] in script, (who, b)
+            if b[0] == "go" and len(b) > 2 and "beside" in b[2]:
+                assert b[2]["beside"] in script, (who, b)
+            if b[0] == "say":
+                assert set(re.findall(r"\{(\w+)\}", b[1])) <= set(r["vars"]), (who, b)
+
+def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
+    """The About page's scene (#139): every beat is one the director knows, on a step the strip shows (outreach
+    included, #155); played with no clock (each actor until it waits on a signal), the work lights every step once,
+    in strip order, and ends."""
+    r = js("R => ({ tour: R.TOUR, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS) })")
+    tour, (strip, reviews) = r["tour"], about_strip()
+    check_beats(tour, r, strip)
+    assert [step for _, step in play(tour, ["P", "R"])] == strip      # every box once, in the strip's order
     for k in reviews:                                                  # every review is approved after it lights
         assert any(b[:2] == ["approve", k] for beats in tour.values() for b in beats)
+
+def test_the_about_page_loops_pass_work_between_neighbouring_stages():
+    """The loops beside the long storyboard (#155): each round passes the work forward along the strip and comes
+    back for more (Sources <-> Brief, Article <-> Rating), never gets stuck, and every reply line is a made-up name."""
+    r = js("""R => ({ loops: R.TOUR_LOOPS, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS),
+                     replier: R.TOUR_VARS.replier, compiled: Object.fromEntries(Object.entries(R.TOUR_LOOPS).map(([name, def]) => {
+                       const s = new R.Scene({}, name, def, 0); return [name, Object.fromEntries(Object.keys(def.cast).map(id => [id, s.beats(id)]))]; })) })""")
+    strip, reviews = about_strip()
+    assert set(r["loops"]) == {"sources", "outreach"}
+    on = {}
+    for name, loop in r["loops"].items():
+        script = r["compiled"][name]
+        assert set(script) == set(loop["cast"]) and set(loop["cast"].values()) == {"pi", "assistant"}   # one of each crew
+        check_beats(script, r, strip)
+        lit = play(script, list(loop["cast"]), round_signals=True)
+        steps = [step for _, step in lit]
+        rounds = loop.get("rounds", 1)
+        assert len(lit) and len(steps) % rounds == 0
+        one = steps[:len(steps) // rounds]
+        assert steps == one * rounds                                   # every round lights the same boxes
+        forward = sorted(set(one), key=strip.index)
+        assert [k for k in one if one.count(k) == 1] == [k for k in forward if one.count(k) == 1]   # passed on in strip order
+        on[name] = one
+        for k in set(one) & set(reviews):                              # a review it lights, it approves
+            assert any(b[:2] == ["approve", k] for beats in script.values() for b in beats)
+    assert on["sources"] == ["sources", "brief", "source_check"]      # handed over, back for one more source, then on
+    assert sum(b[0] == "until" for b in r["loops"]["sources"]["round"]["S"]) == 2
+    assert on["outreach"].count("article_rating") == 2 and on["outreach"].count("writer") == 2   # turned down once, then passed
+    assert on["outreach"][:3] == ["outreach", "outreach_check", "replies"] and on["outreach"][-1] == "publisher"
+    assert len(r["replier"]) >= 5                                      # a shuffle of made-up people
 
 
 def test_an_arm_keeps_its_length_wherever_the_hand_goes():

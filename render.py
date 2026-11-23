@@ -388,6 +388,7 @@ ABOUT_CSS = """
 #flow[data-tour] .flow-track[data-lab] { padding-top: 5.5rem; row-gap: max(4.4rem, calc(var(--u) * 1.3)); }
 .flow .now { font-size: .85rem; line-height: 1.5; color: var(--muted); min-height: 3em; }
 .flow .now strong { color: var(--fg); }
+#flow[data-tour] .now { min-height: 9em; }   /* room for every box at work, so the page below never jumps */
 .who { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .legend { font-size: .8rem; color: var(--muted); margin: 0 0 2rem; }
 .steps { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .75rem; margin: 1.2rem 0 0;
@@ -432,6 +433,12 @@ STEP_NOTES = [
      "brief. A failure goes back for another try, and after three the mission is set aside for a human."),
     ("brief_review", "Brief review", "a human",
      "A person approves every brief or sends it back with notes."),
+    ("outreach", "Outreach", "Principal Investigator",
+     "Where the desk has it switched on, finds a few people who know the subject first-hand and asks each one short "
+     "question. Code writes and checks every message: a real address, a first name, one question, nobody asked twice."),
+    ("replies", "Reply wait", "code, no model",
+     "Reads the replies for a day or two, thanks everyone who answered, and moves on once everyone has. The writer "
+     "may quote what they said."),
     ("writer", "Article writer", "Principal Investigator",
      "Writes the article from the approved brief in plain words: the claim up top, a short story, the evidence, "
      "the other side, then the fine print, labeling each possibility \u201cPossibility, not verified\u201d."),
@@ -453,7 +460,8 @@ def step_card(step: str, name: str, who: str, text: str) -> str:
     """A step's card under Who does what: the strip's icon for it, and room at the bottom for a visiting researcher
     (assets/researchers.js), who does that step's kind of work (data-lab)."""
     kind = "human" if step in flowchart.HUMAN_STEPS else "check" if step in flowchart.CHECKS else "agent"
-    ico = flowchart.TILES[step][0] if kind == "agent" else "person" if kind == "human" else "shield"
+    ico = (flowchart.TILES[step][0] if kind == "agent" else "person" if kind == "human"
+           else flowchart.CHECK_ICONS.get(step, "shield"))
     crew = f' data-worker="{CARD_CREW[who]}"' if who in CARD_CREW else ""
     return (f'<div class="card stepcard" id="step-{step}" data-kind="{kind}" data-lab="{step}"{crew}>'
             f'<div class="head"><span class="badge">{icon(ico)}</span><span><span class="name">{escape(name)}</span>'
@@ -463,10 +471,11 @@ def step_card(step: str, name: str, who: str, text: str) -> str:
 ABOUT_PACE = '<script>window.RESEARCHERS_PACE = {life: [7, 13], gap: [4, 9], first: [1, 4], entry: [3, 7], greet: 1};</script>'
 
 def english_track() -> str:
-    """The strip as the UI draws it, but always in English: the published site isn't translated."""
+    """The strip as the UI draws it, but always in English (the published site isn't translated) and always with
+    outreach: the About page shows the whole line, whatever this desk has switched on (#155)."""
     import i18n
     with i18n.english():
-        return flowchart.track({}, {}, {})
+        return flowchart.track({}, {}, {}, outreach=True)
 
 def about_html() -> str:
     """site/about/index.html: the pipeline strip playing one made-up mission from start to finish, carried by

@@ -22,7 +22,8 @@
  * one walks in for whatever started, at least 10 seconds after (GAP_MIN) and in its turn among the page's
  * arrivals. assets/flow.js says when that happens with a "flowchange" event.
  * On the published About page the strip plays a scene instead (Tour, #139): one made-up mission carried from box
- * to box by two researchers following a storyboard (TOUR), a third bringing it to Publish.
+ * to box by two researchers following a storyboard (TOUR), a third bringing it to Publish, while short loops
+ * (TOUR_LOOPS) keep other stages busy.
  * Purely decorative: canvases are aria-hidden, ignore the pointer, and nothing here talks to the server.
  */
 (() => {
@@ -3075,9 +3076,11 @@ class FlowStage extends Stage {
 // On the published About page (#flow[data-tour]) the strip plays a short scene instead of following real work.
 // One made-up mission runs the whole line, chased from box to box by two researchers: P, from the Principal
 // Investigator's crew, and R, from the Research Assistant's. A third, N, brings it to Publish once they have
-// gone, so the strip never holds more than two. Each box lights when an actor's "light" beat reaches it (a
-// "tourstep" event, which assets/about.js turns into Flow.apply), so the lights follow the sprites, never a clock.
-// A new pair plays every loop.
+// gone. Beside it, short loops (TOUR_LOOPS, #155) keep other stages busy: a pair passing a mission back and forth
+// between two neighbouring boxes, then on, so most of the strip is lit at any time. Each box lights when an actor's
+// "light" beat reaches it (a "tourstep" event, which assets/about.js turns into Flow.apply), so the lights follow
+// the sprites, never a clock: every actor lights one box at a time, and the strip shows them all. A new cast plays
+// every time round.
 //
 // TOUR is the storyboard: each actor's beats, played in order. A beat is data:
 //   ["enter", step, side, via]   walk in from the left or right edge (onto `via` first, if given) to the step
@@ -3090,6 +3093,8 @@ class FlowStage extends Stage {
 //   ["wait", seconds, bit]       stand there doing a hold bit: stand, tap, sleep or jitter
 //   ["until", signal, bit, lines] the same until another actor's ["signal", name]; lines: [[seconds, text], ...]
 //   ["signal", name]  ["face", actor]  ["cue", actor] (on once the others are gone)  ["exit", side]
+//   ["dark"]                     the work has left this actor's hands: their box goes dark
+// A say's {name} is filled from the scene's vars, one pick per round (a loop's made-up replier, a rater's reason).
 const TOUR_PACE = { walk: 42, run: 105, sprint: 175 };   // px per second
 const TOUR_GAP = 2.5;                                    // seconds of dark strip between loops
 const TOUR_CAST = { P: "pi", R: "assistant", N: "desk" };   // whose crew each actor comes from (desk: anyone)
@@ -3116,7 +3121,10 @@ const TOUR = {
     ["go", "source_check"], ["light", "source_check"], ["say", "Show me the source."],
     ["do", "search", { dur: 2.6, sniff: false, found: true }],
     ["go", "brief_review"], ["light", "brief_review"], ["say", "Brief's on your desk!", true], ["wait", 0.9],
-    ["approve", "brief_review"], ["say", "Approved! On to the article."], ["do", "cheer"],
+    ["approve", "brief_review"], ["say", "Approved! Who can we ask?"], ["do", "cheer"],
+    ["go", "outreach"], ["light", "outreach"], ["say", "Someone who was there."], ["do", "plane"],
+    ["go", "outreach_check"], ["light", "outreach_check"], ["say", "One short question. Sent!", true],
+    ["go", "replies"], ["light", "replies"], ["wait", 1.6, "tap"], ["say", "{replier} wrote back!", true],
     ["go", "writer"], ["light", "writer"], ["signal", "writing"], ["say", "Words, assemble!"], ["do", "typing", { dur: 4.8 }],
     ["go", "article_check"], ["light", "article_check"], ["say", "Fact or possibility?"],
     ["do", "search", { dur: 2.6, sniff: false, found: true }],
@@ -3156,6 +3164,77 @@ const TOUR = {
     ["enter", "publisher", "left"], ["light", "publisher"], ["say", "Hot off the press!"], ["do", "papers"],
     ["wait", 1.6, "stand"], ["say", "Extra, extra!"], ["exit", "left"],
   ],
+};
+const TOUR_VARS = {                                      // made-up people and reasons only: never a real person
+  replier: ["Dr. Okafor", "The harbour master", "Professor Lindqvist", "A county clerk", "Dr. Ruiz",
+            "The retired inspector", "Ms. Abara", "The town archivist", "A night-shift nurse", "Captain Ferreira"],
+  reason: ["Logic 6: the timeline doesn't hold.", "Sources 5: two blogs and a forum.", "Intrigue 4: I nodded off.",
+           "Logic 5: the quote doesn't say that.", "Sources 6: where's the filing?"],
+};
+
+// The loops beside the long storyboard (#155). Each is a scene of its own: its cast (id -> whose crew), who walks
+// on (enter), the round they play `rounds` times (its signals are that round's own), and how they go (leave). When
+// they have gone, a new cast walks on after LOOP_GAP. They start one at a time, LOOP_STAGGER apart, after the long one.
+const LOOP_GAP = 3;                                      // seconds between one cast walking off and the next walking on
+const LOOP_STAGGER = 6;                                  // seconds between the long storyboard's start and each loop's
+const TOUR_LOOPS = {
+  sources: {                                             // Sources <-> Brief: one more source, then on to the check (Sources stays lit)
+    cast: { S: "assistant", B: "pi" }, rounds: 2,
+    enter: { S: [["enter", "sources", "right"]], B: [["enter", "brief", "right"]] },
+    round: {
+      S: [
+        ["light", "sources"], ["say", "New lead. Let's dig!"], ["do", "dig", { dur: 3.4 }],
+        ["say", "Three good pages!"], ["do", "search", { dur: 2, sniff: false, found: true }],
+        ["go", "brief", { beside: "B" }], ["do", "hand"], ["say", "Pages for you.", true], ["signal", "pages"],
+        ["until", "more"], ["go", "sources"], ["say", "One more source, coming up."],
+        ["do", "read", { dur: 2.6, slam: false }], ["do", "search", { dur: 1.8, sniff: false, found: true }],
+        ["go", "brief", { beside: "B", pace: "sprint" }], ["do", "skid"], ["do", "hand"],
+        ["say", "Straight from the archive!", true], ["signal", "more_pages"],
+        ["go", "sources"], ["until", "checked"], ["dark"],
+      ],
+      B: [
+        ["until", "pages"], ["light", "brief"], ["do", "notes", { dur: 2.8, toss: false }],
+        ["say", "Need one more source!", true], ["signal", "more"],
+        ["until", "more_pages"], ["say", "Facts first."], ["do", "typing", { dur: 3 }],
+        ["go", "source_check"], ["light", "source_check"], ["say", "Every quote's on the page."],
+        ["do", "search", { dur: 2.2, sniff: false, found: true }], ["say", "Off to the editor!", true],
+        ["dark"], ["signal", "checked"], ["go", "brief"],
+      ],
+    },
+    leave: { S: [["say", "Next lead!"], ["exit", "right"]], B: [["exit", "left"]] },
+  },
+  outreach: {                                            // Outreach -> Publish, the rater turning the first draft down
+    cast: { O: "pi", T: "assistant" }, rounds: 1,
+    enter: { O: [["enter", "outreach", "left"]], T: [["enter", "article_rating", "right"]] },
+    round: {
+      O: [
+        ["light", "outreach"], ["say", "Who'd know first-hand?"], ["do", "typing", { dur: 2.4 }], ["do", "plane"],
+        ["go", "outreach_check"], ["light", "outreach_check"], ["say", "One short question. Sent!", true],
+        ["go", "replies"], ["light", "replies"], ["wait", 3.4, "tap", [[0.3, "Any replies yet?"]]],
+        ["say", "{replier} replied!", true], ["do", "cheer"], ["say", "We got the quote!"],
+        ["go", "writer"], ["light", "writer"], ["do", "typing", { dur: 3.4 }],
+        ["go", "article_check"], ["light", "article_check"], ["say", "Every quote matches."],
+        ["do", "search", { dur: 2, sniff: false, found: true }],
+        ["go", "article_rating", { beside: "T" }], ["dark"], ["face", "T"], ["say", "Draft one. Be gentle.", true],
+        ["signal", "draft"],
+        ["until", "rewrite"], ["go", "writer"], ["light", "writer"], ["say", "Fair. Rewriting."], ["do", "typing", { dur: 3 }],
+        ["go", "article_rating", { beside: "T" }], ["dark"], ["say", "Draft two!", true], ["signal", "draft2"],
+        ["until", "passed"], ["go", "article_review", { pace: "walk" }],
+        ["until", "approved"], ["go", "publisher"], ["light", "publisher"], ["say", "Another one out!"], ["do", "papers"],
+        ["dark"], ["exit", "left"],
+      ],
+      T: [
+        ["until", "draft"], ["light", "article_rating"], ["do", "read", { dur: 2.6, slam: false }],
+        ["say", "{reason}", true], ["do", "stamp", { ok: false }], ["dark"], ["say", "Back you go!"], ["signal", "rewrite"],
+        ["until", "draft2"], ["light", "article_rating"], ["do", "read", { dur: 2.2, slam: false }],
+        ["do", "stamp", { ok: true }], ["say", "Much better."],
+        ["go", "rating_check"], ["light", "rating_check"], ["say", "24 of 30. It passes!", true], ["signal", "passed"],
+        ["go", "article_review", { beside: "O" }], ["light", "article_review"], ["say", "Ready for the editor!", true],
+        ["wait", 1.2], ["approve", "article_review"], ["signal", "approved"], ["do", "cheer"], ["dark"],
+      ],
+    },
+    leave: { O: [], T: [["exit", "right"]] },
+  },
 };
 
 // The tour's own bits, beside the researchers' ACTIONS. A hold (wait, until) is a bit too.
@@ -3201,7 +3280,7 @@ const TOUR_BITS = {
     },
     run(r, s) {
       while (s.lines.length && s.t >= s.lines[0][0]) r.say(s.lines.shift()[1]);
-      const over = s.until ? r.tour.signals.has(s.until) : s.t >= (s.dur || 0);
+      const over = s.until ? r.scene.signals.has(s.until) : s.t >= (s.dur || 0);
       if (over) { s.done = true; if (s.bx != null) r.x = s.bx; }
       if (s.bit === "sleep") {
         zz(r, s);
@@ -3299,15 +3378,18 @@ const BEATS = {
   go(r, step, o = {}) {
     const t = r.tour;
     if (!t.el(step)) return false;
-    const beside = o.beside && t.actor(o.beside), legs = t.path(r.at, step, r, beside);
+    const beside = o.beside && r.scene.actor(o.beside), legs = t.path(r.at, step, r, beside);
     r.at = step;
     if (!legs.length) return false;
     r.begin("trek", { legs, speed: TOUR_PACE[o.pace || "run"], to: step, beside });
     return true;
   },
-  light(r, step) { r.tour.light(step, r.worker, 1); return false; },
-  approve(r, step) { r.tour.light(step, r.worker, 0); return false; },
+  light(r, step) { r.tour.light(step, r.worker, 1, r); return false; },
+  approve(r, step) { r.tour.light(step, r.worker, 0, r); return false; },
+  dark(r) { r.tour.light(null, r.worker, 0, r); return false; },
   say(r, text, hold) {
+    const vars = r.scene.vars(r.round);
+    text = text.replace(/\{(\w+)\}/g, (m, k) => vars[k] || m);
     r.say(text, readTime(text) + 0.4);
     if (!hold) return false;
     r.begin("hold", { dur: readTime(text) * 0.9 });
@@ -3321,13 +3403,15 @@ const BEATS = {
   },
   wait(r, dur, bit, lines) { r.begin("hold", { dur, bit, lines }); return true; },
   until(r, signal, bit, lines) {
-    if (r.tour.signals.has(signal)) return false;
-    r.begin("hold", { until: signal, bit, lines });
+    const key = r.sig(signal);
+    if (r.scene.signals.has(key)) return false;
+    r.begin("hold", { until: key, bit, lines });
     return true;
   },
-  signal(r, name) { r.tour.signals.add(name); return false; },
-  face(r, who) { const o = r.tour.actor(who); if (o) r.face = Math.sign(o.x - r.x) || r.face; return false; },
-  cue(r, who) { r.tour.queue.push(who); return false; },
+  signal(r, name) { r.scene.signals.add(r.sig(name)); return false; },
+  face(r, who) { const o = r.scene.actor(who); if (o) r.face = Math.sign(o.x - r.x) || r.face; return false; },
+  cue(r, who) { r.scene.queue.push(who); return false; },
+  round(r) { r.round++; return false; },         // a loop's next round: its signals and vars are that round's own
   exit(r, side) {
     r.leaving = true;
     r.begin("trek", { legs: [r.tour.edge(side)], speed: TOUR_PACE.walk * 1.4, exit: side });
@@ -3337,16 +3421,17 @@ const BEATS = {
 
 // A researcher who plays their beats instead of picking bits at random. The storyboard does all the talking.
 class Actor extends Researcher {
-  constructor(tour, id, rec) {
-    const slot = Object.create(tour);           // their own floor: the row they stand on, and its boxes to hop
+  constructor(scene, id, rec) {
+    const tour = scene.tour, slot = Object.create(tour);   // their own floor: the row they stand on, and its boxes to hop
     slot.ground = tour.ground; slot.platforms = null;
     super(slot, rec, { x: -EDGE, face: 1 });
-    this.tour = tour; this.id = id; this.worker = TOUR_CAST[id];
-    this.beats = (TOUR[id] || []).slice(); this.at = null;
+    this.tour = tour; this.scene = scene; this.id = id; this.key = scene.name + ":" + id; this.worker = scene.cast[id];
+    this.beats = scene.beats(id); this.at = null; this.round = 0;
     this.quipIn = Infinity; this.alpha = 0;
     this.play();
   }
   get acts() { return TOUR_ACTS; }
+  sig(name) { return this.round + ":" + name; }  // a signal belongs to the round it was given in
   quip() {}
   line() {}
   place(step, x) {                               // stand on this step's row, at x
@@ -3367,8 +3452,57 @@ class Actor extends Researcher {
   }
 }
 
+// One storyboard on the strip, with its own cast, signals and cues: the long one (TOUR) or a loop (TOUR_LOOPS).
+// It brings its first actors at startAt, the cued ones as the others go, and once all have gone it waits `gap`
+// and plays again with a new cast.
+class Scene {
+  constructor(tour, name, def, startAt) {
+    this.tour = tour; this.name = name; this.def = def; this.cast = def.cast;
+    this.gap = def.gap != null ? def.gap : LOOP_GAP; this.startAt = startAt;
+    this.actors = []; this.queue = []; this.signals = new Set(); this.picks = {}; this.running = false;
+  }
+  beats(id) {                                    // TOUR's own beats, or a loop's enter, its rounds and leave
+    const d = this.def;
+    if (d.beats) return (d.beats[id] || []).slice();
+    const out = (d.enter[id] || []).slice();
+    for (let i = 0; i < (d.rounds || 1); i++) out.push(["round"], ...(d.round[id] || []));
+    return out.concat(d.leave[id] || []);
+  }
+  vars(round) {                                  // one made-up replier (and reason) per round
+    if (!this.picks[round]) {
+      this.picks[round] = {};
+      for (const [k, list] of Object.entries(TOUR_VARS)) this.picks[round][k] = pick(Math.random, list);
+    }
+    return this.picks[round];
+  }
+  actor(id) { return this.actors.find(a => a.id === id); }
+  bring(id) {
+    const kind = nextCharacter(onStage(), crewKey(this.cast[id]));
+    const a = new Actor(this, id, { kind, seed: Math.floor(Math.random() * 2 ** 31) });
+    this.actors.push(a);
+    return a;
+  }
+  start(t) {
+    if (this.running || this.actors.length || t < this.startAt) return false;
+    this.running = true; this.signals = new Set(); this.queue = []; this.picks = {};
+    for (const id of this.def.first || Object.keys(this.cast)) this.bring(id);
+    return true;
+  }
+  settle(t) {                                    // after the actors moved: let the gone ones go, cue the next, or rest
+    for (const a of this.actors) if (a.gone) this.tour.light(null, a.worker, 0, a);
+    this.actors = this.actors.filter(a => !a.gone);
+    if (this.running && !this.actors.length) {
+      if (this.queue.length) this.bring(this.queue.shift());
+      else { this.running = false; this.startAt = t + this.gap; }
+    }
+  }
+}
+
 class Tour extends FlowStage {
-  constructor(host) { super(host); this.hold = 2; }   // the strip always counts as two on stage
+  // While it is in view the strip takes every seat on the page, so the step cards below wait their turn (#155);
+  // scrolled away it takes none.
+  seats() { return this.seen === false ? 0 : MAX_ON_STAGE; }
+  get actors() { return (this.scenes || []).flatMap(s => s.actors); }
   el(step) { return step && this.host.querySelector(`[data-step="${step}"]`); }
   keys() { return [...this.host.querySelectorAll("[data-step]")].map(e => e.dataset.step); }   // flow order
   groundOf(el) { return el.offsetTop - 1; }
@@ -3379,14 +3513,15 @@ class Tour extends FlowStage {
       .map(n => [n.offsetLeft, n.offsetLeft + n.offsetWidth]).sort((a, b) => a[0] - b[0]);
   }
   range() { return [6, (this.W || 200) - 6]; }   // the whole strip: they walk in and off its edges
-  actor(id) { return this.actors.find(a => a.id === id); }
+  actor(id) { return this.main && this.main.actor(id); }
   spot(step, r, beside) {                        // where to stop on a step: its middle, or next to someone there
     const el = this.el(step), m = this.mid(el);
     if (beside && beside.at === step && !beside.leaving) {
       const dir = Math.sign(beside.x - r.x) || 1;
       return beside.x - dir * 26;
     }
-    return el.classList.contains("step") ? m + between(r.rand, -6, 6) : m;
+    const spread = r.scene && r.scene !== this.main ? 16 : 6;   // a loop's actor stands a little aside, clear of the tour's
+    return el.classList.contains("step") ? m + between(r.rand, -spread, spread) : m;
   }
   // The legs from one step to another: along a row it's one run (the hops come with it); a box on another row is a
   // leap down to it, from wherever the run got to (in the wide strip that's the review where the lane turns).
@@ -3401,8 +3536,9 @@ class Tour extends FlowStage {
     }
     return legs;
   }
-  light(step, worker, waiting) {
-    document.dispatchEvent(new CustomEvent("tourstep", { detail: { step, worker, waiting } }));
+  // One actor's box (who: their key; step null: dark); with no actor, a dark strip for everyone.
+  light(step, worker, waiting, actor) {
+    document.dispatchEvent(new CustomEvent("tourstep", { detail: { step, worker, waiting, who: actor ? actor.key : null } }));
   }
   edge(side) { return { x: side === "right" ? this.W + EDGE + 4 : -EDGE - 4 }; }
   // A resize moves every box: whoever is on the way somewhere lands there at once, the rest step back onto their box.
@@ -3418,36 +3554,36 @@ class Tour extends FlowStage {
     }
   }
   schedule() {
-    this.actors = []; this.queue = []; this.signals = new Set(); this.leavers = []; this.crew = {};
-    this.running = false; this.startAt = now() + 1.2;
+    const t = now() + 1.2;
+    this.main = new Scene(this, "tour", { cast: TOUR_CAST, first: TOUR_FIRST, beats: TOUR, gap: TOUR_GAP }, t);
+    this.scenes = [this.main].concat(Object.entries(TOUR_LOOPS).map(([name, def], i) =>
+      new Scene(this, name, def, t + LOOP_STAGGER * (i + 1))));
+    this.leavers = []; this.crew = {}; this.begun = false;
     if (!this.listening) {
       this.listening = true;
       document.addEventListener("tourframe", e => this.still(e.detail));
+      if (window.IntersectionObserver) {
+        new IntersectionObserver(es => {
+          const seen = es[es.length - 1].isIntersecting;
+          if (seen && this.seen === false)       // back in view: the card visitors make room
+            for (const s of stages) if (s.kind === "card" && s.resident && !s.resident.leaving) s.resident.leave();
+          this.seen = seen;
+        }).observe(this.host);
+      }
     }
   }
-  cast() { return this.actors || []; }
+  cast() { return this.actors; }
   save() {}                                      // the scene starts over on every page
   admit() { return false; }                      // nobody walks in on the strip but the cast
   change() {}                                    // it makes the changes itself
-  bring(id) {
-    const kind = nextCharacter(onStage(), crewKey(TOUR_CAST[id]));
-    const a = new Actor(this, id, { kind, seed: Math.floor(Math.random() * 2 ** 31) });
-    this.actors.push(a);
-    return a;
-  }
+  bring(id) { return this.main.bring(id); }
   update(dt) {
     const t = now();
-    if (!this.running && !this.actors.length && t >= this.startAt && this.W) {
-      this.running = true; this.signals = new Set(); this.queue = [];
-      this.light(null);                          // a dark strip, and assets/about.js knows the scene drives it
-      for (const id of TOUR_FIRST) this.bring(id);
+    if (this.W) for (const s of this.scenes) {
+      if (s.start(t) && !this.begun) { this.begun = true; this.light(null); }   // a dark strip, and assets/about.js knows the scene drives it
     }
     for (const a of this.actors) a.update(dt);
-    this.actors = this.actors.filter(a => !a.gone);
-    if (this.running && !this.actors.length) {
-      if (this.queue.length) this.bring(this.queue.shift());
-      else { this.running = false; this.light(null); this.startAt = t + TOUR_GAP; }
-    }
+    for (const s of this.scenes) s.settle(t);
     this.tick(dt);
   }
   // Reduced motion: no scene. assets/about.js lights each step in turn and says so here; a still researcher
@@ -3587,7 +3723,7 @@ function wrapText(ctx, text, max) {
 // then the card stages, longest-waiting first. Arrivals come one at a time, a random 12-20 s apart, so two
 // never walk in together and a full page fills up over about a minute.
 let nextEntry = 0;
-const onPage = () => stages.reduce((n, s) => n + Math.max(s.cast().length, s.hold || 0), 0);   // the About strip holds two seats
+const onPage = () => stages.reduce((n, s) => n + (s.seats ? s.seats() : s.cast().length), 0);   // the About strip takes its own count
 function entered() { nextEntry = Math.max(nextEntry, now() + between(Math.random, ENTRY_MIN, ENTRY_MAX)); }
 function admit() {
   const t = now();
@@ -3902,7 +4038,7 @@ function boot() {
   document.addEventListener("chatguide", e => guides.forEach(g => g.show(e.detail)));
   rescan();
 }
-window.Researchers = { reach, ARM: [ARM_UP, ARM_FORE], stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Tour, TOUR, TOUR_ACTS, BEATS, Crew, Researcher, rescan, tick, QUIPS,
+window.Researchers = { reach, ARM: [ARM_UP, ARM_FORE], stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Tour, TOUR, TOUR_LOOPS, TOUR_VARS, Scene, TOUR_ACTS, BEATS, Crew, Researcher, rescan, tick, QUIPS,
   PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, BACKS, checkBack, CAST, CYBORGS, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

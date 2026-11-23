@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 919 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 921 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -434,22 +434,32 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     filters by tag (an approved epic is called a tag on the site; `?tag=` in the address, so an article's tag pill
     links to its list), and an article page has a link back and its newer and older article, read from
     `feed.json` so pages written once stay current. `site/about/` shows the pipeline strip (`flowchart.py`, the
-    same snake the UI draws, always with the human reviews: auto mode is the UI's own switch) playing one made-up
+    same snake the UI draws, always with the human reviews (auto mode is the UI's own switch) and always with
+    outreach, whatever this desk has on (`render.english_track`, `flowchart.track(outreach=True)`, #155)) playing one made-up
     mission from the Theorist to Publish as a short comic scene on a loop (#139): two researchers chase the work from
     box to box (one from each worker's crew; the Assistant waits ahead at Sources, oversleeps, gulps a coffee and
     makes it with two seconds to spare), hopping the gaps and leaping down where the strip turns, with a line at
-    every step, and a third walks in to Publish once they've gone ("Hot off the press!"), so the strip holds two at
-    a time. The scene is data: `TOUR` in `assets/researchers.js` is each actor's beats (enter, go, light, approve,
-    say, do a bit, wait, until/signal, cue, exit), played by `Tour` (a `FlowStage` on `#flow[data-tour]`) with
-    `Actor`s, researchers who follow beats instead of picking bits; `TOUR_BITS` adds the scene's own bits (the
-    leap, sleep and tap holds, jolt, shout, skid, cheer). A box lights only when a beat reaches it: `Tour` sends a
-    `tourstep` event and `assets/about.js` turns it into `Flow.apply` (`data-demo` means nothing is polled). A
+    every step, and a third walks in to Publish once they've gone ("Hot off the press!"). Beside it two short loops
+    keep other stages busy (#155, `TOUR_LOOPS`), each a pair, one from each crew: Sources <-> Brief (pages handed
+    over, "Need one more source!", back for it, then the source check; two rounds a pair) and Outreach -> Publish (a
+    question sent, a made-up person replies, the article written, turned down once at Rating with a reason, rewritten,
+    passed, approved and published). Names and reasons come from `TOUR_VARS` (made-up people only, one pick a round,
+    `{replier}` in a line). Loops start `LOOP_STAGGER` (6 s) apart after the long one, and a new pair walks on
+    `LOOP_GAP` (3 s) after the last goes; so up to six are on the strip. The scene is data: `TOUR` in
+    `assets/researchers.js` is each actor's beats (enter, go, light, approve, dark, say, do a bit, wait,
+    until/signal, cue, exit; a loop's `round`, whose signals are that round's own), played by `Tour` (a `FlowStage`
+    on `#flow[data-tour]`) as `Scene`s, one per storyboard, with `Actor`s, researchers who follow beats instead of
+    picking bits; `TOUR_BITS` adds the scene's own bits (the leap, sleep and tap holds, jolt, shout, skid, cheer). A
+    box lights only when a beat reaches it: each actor's `tourstep` event (`who`, its step, or none for dark) lights
+    its own box, and `assets/about.js` keeps one per actor and lights them all in one `Flow.apply` (a review counts
+    the actors waiting on it; `data-demo` means nothing is polled). A
     resize lands anyone mid-run on their box. With reduced motion there is no scene: `about.js` lights each box in
     turn and a `tourframe` event stands a still researcher on it. Below, Who does what is a card per strip step
-    (`render.STEP_NOTES`, `render.step_card`: the strip's icon, who runs it, what it does; the Theorist's, finder's
-    and rating checks are told on their agent's card), and two researchers drop into cards for a short visit, doing
+    (`render.STEP_NOTES`, `render.step_card`: the strip's icon, who runs it, what it does; the Theorist's, finder's,
+    outreach and rating checks are told on their agent's card), and two researchers drop into cards for a short visit, doing
     that step's kind of work (`data-lab`, mostly from the crew that runs it; `window.RESEARCHERS_PACE`), apart from
-    the scene: the strip counts as two of the page's four (`Stage.hold`). Rebuilding the index rewrites it and copies those three scripts to
+    the scene: while the strip is in view it takes every seat on the page (`Tour.seats`), so the cards wait; scrolled
+    away it takes none, and back in view the card visitors walk off. Rebuilding the index rewrites it and copies those three scripts to
     `site/assets/`, and starting the UI copies any that differ from the code's (`publisher.refresh_assets`), so an
     updated script reaches the site without waiting for the next article. The UI serves `/assets` and `/site` with
     `Cache-Control: no-cache` (`ui.FreshFiles`) and writes every script's address with a stamp of its contents
