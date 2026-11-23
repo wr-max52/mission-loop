@@ -1,5 +1,5 @@
 import httpx, pytest
-import agents, contacts, doctor, library, orchestrator, search_status, settings, store, wayback
+import agents, contacts, doctor, library, orchestrator, search_sources, search_status, settings, store, wayback
 from agents import bluesky, custom, f916, github, llm, providers, stubs, toolbox
 
 FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
@@ -10,6 +10,9 @@ FAKE_CONNECTION = {"host": "http://127.0.0.1:11434", "ok": True, "error": "",
 
 def _no_network(request):
     raise AssertionError(f"a test tried to reach the network: {request.method} {request.url}")
+
+def _no_ddg(*args):
+    raise AssertionError(f"a test tried to search DuckDuckGo: {args}")
 
 def _no_mail(*args, **kwargs):
     raise AssertionError(f"a test tried to reach a mail server: {args}")
@@ -44,10 +47,13 @@ def fresh(tmp_path, monkeypatch):
     monkeypatch.setattr(agents, "rate_article", stubs.rate_article)   # the rater never asks a real model (tests of
                                                                     # agents/rater.py patch llm.ask instead)
     monkeypatch.setattr(toolbox, "WHICH", lambda command: f"/usr/bin/{command}")  # npx and uvx, whatever this machine has
-    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(_no_network))   # the Brave key check
+    monkeypatch.setattr(search_sources, "TRANSPORT", httpx.MockTransport(_no_network))   # every web search source
+    monkeypatch.setattr(search_sources, "DDG", _no_ddg)                                 # and DuckDuckGo (ddgs)
+    monkeypatch.setattr(search_sources, "_ddg_times", [])                              # its per-minute cap starts fresh
     monkeypatch.setattr(doctor, "_probed", float("inf"))   # Settings → Setup never runs a real test search
     monkeypatch.setattr(search_status, "RATE_WAIT", 0)     # a rate-limited search retries at once
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)  # a real .env must not decide what the setup check sees
+    for var in ("BRAVE_API_KEY", "TAVILY_API_KEY", "EXA_API_KEY", "SERPER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)          # search sources' keys  # a real .env must not decide what the setup check sees
     for var in ("OLLAMA_HOST", "MISSION_LOOP_1F916_URL", "MISSION_LOOP_CHAT_MODEL", "MISSION_LOOP_GITHUB_URL",
                 "MISSION_LOOP_GITHUB_CLIENT_ID", "MISSION_LOOP_EMBED_MODEL", "MISSION_LOOP_OUTREACH"):
         monkeypatch.delenv(var, raising=False)           # nor may a real .env point tests at another server

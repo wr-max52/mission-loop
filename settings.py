@@ -556,35 +556,101 @@ def add_custom_channel(name: str, kind: str, target: str, fmt: str) -> dict:
 def remove_custom_channel(cid: str) -> None:
     save(custom_channels=[c for c in custom_channels() if c["id"] != cid])
 
-# ---------- web search: the Brave key the research tools need ----------
-# Saved on the home page's first-run card or the Settings page into data/search.json (mode 600, never committed),
-# which wins over BRAVE_API_KEY in .env. The MCP search server gets it through agents/toolbox.py.
+# ---------- web search: the sources the search tools use (search_tools.py, #106) ----------
+# An ordered list: each search goes to the first source that is on and working, and falls through to the next on an
+# outage. Keyed sources need a key, saved on the Settings page into data/search.json (mode 600, never committed), which
+# wins over the source's variable in .env. DuckDuckGo and GDELT need no key, so a fresh clone can always search.
+# Each source's public address lives here and nowhere else.
 
 SEARCH_FILE = Path("data/search.json")
 SEARCH_ENV = "BRAVE_API_KEY"
 SEARCH_API = "https://api.search.brave.com/res/v1/web/search"   # Brave's public API, used to check a key
+WIKI_API = "https://en.wikipedia.org/w/api.php"                 # Wikimedia's search API: wiki_search, no key
+SEARCH_SOURCES = {
+    "brave": {"name": "Brave Search", "key_env": "BRAVE_API_KEY", "url": "https://api.search.brave.com/res/v1",
+              "kinds": ("web", "news"), "keys": "https://brave.com/search/api/",
+              "blurb": "Its own web index. Paid per search, with free monthly credit."},
+    "tavily": {"name": "Tavily", "key_env": "TAVILY_API_KEY", "url": "https://api.tavily.com",
+               "kinds": ("web", "news"), "keys": "https://app.tavily.com/home",
+               "blurb": "Search built for AI agents. A free tier each month."},
+    "exa": {"name": "Exa", "key_env": "EXA_API_KEY", "url": "https://api.exa.ai", "kinds": ("web", "news"),
+            "keys": "https://dashboard.exa.ai/api-keys", "blurb": "Searches by meaning. Good for papers and essays."},
+    "serper": {"name": "Serper", "key_env": "SERPER_API_KEY", "url": "https://google.serper.dev",
+               "kinds": ("web", "news"), "keys": "https://serper.dev/api-key", "blurb": "Google results. Cheap per search."},
+    "ddgs": {"name": "DuckDuckGo", "key_env": "", "url": "", "kinds": ("web", "news"), "keys": "",
+             "blurb": "Free, no key. Unofficial, so it can be rate-limited."},
+    "gdelt": {"name": "GDELT", "key_env": "", "url": "https://api.gdeltproject.org/api/v2/doc/doc", "kinds": ("news",),
+              "keys": "", "blurb": "Free news search, no key. Covers about the last 3 months."},
+}
 
-def search_key() -> str:
+def _search_keys() -> dict:
     try:
-        found = str(json.loads(SEARCH_FILE.read_text()).get("key") or "")
-    except (OSError, ValueError, AttributeError):
-        found = ""
-    return found or _env(SEARCH_ENV)
+        data = json.loads(SEARCH_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keys = dict(data.get("keys") or {})
+    if data.get("key"):                    # the Brave key, saved before there were other sources
+        keys.setdefault("brave", data["key"])
+    return {k: str(v) for k, v in keys.items() if v}
 
-def search_key_saved() -> bool:
+def search_key(source: str = "brave") -> str:
+    """A search source's key: saved on the Settings page, else its variable in .env, else ""."""
+    env = SEARCH_SOURCES.get(source, {}).get("key_env", "")
+    return _search_keys().get(source) or (_env(env) if env else "")
+
+def search_key_saved(source: str = "brave") -> bool:
     """Saved here (so it can be removed here), not only in .env."""
-    return SEARCH_FILE.exists()
+    return bool(_search_keys().get(source))
 
-def save_search_key(key: str) -> None:
+def save_search_key(key: str, source: str = "brave") -> None:
     key = key.strip()
+    if source not in SEARCH_SOURCES or not SEARCH_SOURCES[source]["key_env"]:
+        raise ValueError("that source takes no key")
     if not key:
         raise ValueError("paste the key")
     if len(key) > 200 or any(c.isspace() for c in key):
-        raise ValueError("that doesn't look like a Brave API key")
-    _write_private(SEARCH_FILE, {"key": key})
+        raise ValueError("that doesn't look like an API key")
+    _write_private(SEARCH_FILE, {"keys": _search_keys() | {source: key}})
 
-def forget_search_key() -> None:
-    SEARCH_FILE.unlink(missing_ok=True)
+def forget_search_key(source: str = "brave") -> None:
+    keys = {k: v for k, v in _search_keys().items() if k != source}
+    if keys:
+        _write_private(SEARCH_FILE, {"keys": keys})
+    else:
+        SEARCH_FILE.unlink(missing_ok=True)
+
+def search_order() -> list[str]:
+    """Every search source, in the order searches try them (Settings → Web search), new ones last."""
+    saved_order = [s for s in saved().get("search_order") or [] if s in SEARCH_SOURCES]
+    return saved_order + [s for s in SEARCH_SOURCES if s not in saved_order]
+
+def search_switched_off(source: str) -> bool:
+    return source in (saved().get("search_off") or [])
+
+def search_on(source: str) -> bool:
+    """Used for searches: switched on, and holding a key if it needs one."""
+    spec = SEARCH_SOURCES.get(source)
+    return bool(spec) and not search_switched_off(source) and (not spec["key_env"] or bool(search_key(source)))
+
+def set_search_on(source: str, on: bool) -> None:
+    off = [s for s in saved().get("search_off") or [] if s != source and s in SEARCH_SOURCES]
+    save(search_off=off if on else off + [source])
+
+def move_search_source(source: str, step: int) -> None:
+    """Move a source up (-1) or down (+1) the order."""
+    order = search_order()
+    if source not in order:
+        return
+    i = order.index(source)
+    j = max(0, min(len(order) - 1, i + step))
+    order[i], order[j] = order[j], order[i]
+    save(search_order=order if order != list(SEARCH_SOURCES) else [])
+
+def search_sources_on(kind: str = "web") -> list[str]:
+    """The sources a search of this kind ("web" or "news") tries, in order."""
+    return [s for s in search_order() if kind in SEARCH_SOURCES[s]["kinds"] and search_on(s)]
 
 # ---------- sharing the tools on this network (mcp_share.py) ----------
 # Every tool Researcher Chat has, served as one MCP server to other apps on this network (Settings -> MCP server).

@@ -2,8 +2,8 @@
 
 Adding a research capability = adding an entry to mcp.json. No code change.
 
-A server this machine can't run is skipped, not fatal: its command isn't installed (npx, uvx), or a variable it
-lists under "requires" is empty (the search server's Brave key). `skipped` says which and why, so research carries
+A server this machine can't run is skipped, not fatal: its command isn't installed (uvx), or a variable it
+lists under "requires" is empty. `skipped` says which and why, so research carries
 on with the tools it has and the setup check (doctor.py) can say what to install.
 """
 import json, os, re, shutil, sys

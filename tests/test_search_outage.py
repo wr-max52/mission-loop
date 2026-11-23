@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx, pytest
 from ollama import Message
 from starlette.testclient import TestClient
-import activity, agents, checkpoint, doctor, orchestrator, search_status, settings, store, ui
+import activity, agents, checkpoint, doctor, orchestrator, search_sources, search_status, settings, store, ui
 from agents import finder, llm, researcher
 from contracts import Evidence, Mission, State
 
@@ -152,24 +152,35 @@ def test_setup_shows_one_failing_check_with_the_fix(monkeypatch):
     assert down[0].detail == "Web search is down: Brave Search is out of prepaid credit."
     assert "Top up" in down[0].fix
 
-@pytest.mark.parametrize("status, kind", [(402, "credit"), (401, "key"), (429, "rate"), (200, None)])
-def test_a_real_test_search_finds_a_spent_key(monkeypatch, status, kind):
+def only_brave(monkeypatch, status):
+    """Brave alone is on, answering with this status."""
+    settings.save_search_key("brave-key")
+    settings.set_search_on("ddgs", False)
+    monkeypatch.setattr(search_sources, "TRANSPORT", httpx.MockTransport(
+        lambda r: httpx.Response(status, json={"web": {"results": []}})))
+
+@pytest.mark.parametrize("status, reason", [(402, "Brave Search is out of prepaid credit"),
+                                            (401, "Brave Search refused the key"),
+                                            (429, "Brave Search is over its rate limit"), (200, None)])
+def test_a_real_test_search_finds_a_spent_key(monkeypatch, status, reason):
     monkeypatch.setattr(doctor, "_probed", 0.0)
-    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(lambda r: httpx.Response(status, json={})))
+    only_brave(monkeypatch, status)
     search_status.record(search_status.Outage("unreachable"))
-    found = doctor.probe_search("brave-key")
-    assert (found.kind if found else None) == kind
-    assert (search_status.current() or {}).get("kind") == kind
+    found = doctor.probe_search()
+    assert (found.reason if found else None) == reason
+    assert (search_status.current() or {}).get("reason") == reason
 
 def test_the_test_search_runs_at_most_every_ten_minutes(monkeypatch):
     asked = []
     monkeypatch.setattr(doctor, "_probed", 0.0)
-    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(lambda r: asked.append(1) or httpx.Response(200, json={})))
-    doctor.probe_search("k"), doctor.probe_search("k")
+    only_brave(monkeypatch, 200)
+    monkeypatch.setattr(search_sources, "TRANSPORT", httpx.MockTransport(
+        lambda r: asked.append(1) or httpx.Response(200, json={"web": {"results": []}})))
+    doctor.probe_search(), doctor.probe_search()
     assert asked == [1]
 
 def test_a_spent_key_is_saved_with_a_note(monkeypatch):
-    monkeypatch.setattr(doctor, "TRANSPORT", httpx.MockTransport(lambda r: httpx.Response(402, json={})))
+    monkeypatch.setattr(search_sources, "TRANSPORT", httpx.MockTransport(lambda r: httpx.Response(402, json={})))
     ok, note = doctor.check_search_key("brave-key")
     assert ok and "out of prepaid credit" in note
 

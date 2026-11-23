@@ -13,3 +13,4 @@ pytest-asyncio
 starlette
 uvicorn
 python-multipart
+ddgs>=9.6,<10

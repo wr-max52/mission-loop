@@ -10,6 +10,7 @@ from checks import validator
 from agents.toolbox import Toolbox
 
 MAX_TOOL_CALLS = 40                        # sources run
+NOT_WEB = {"wiki_search"}                  # on the search server, but its failure says nothing about web search
 MAX_REFUSED = 3                            # calls refused in a row (repeats, unreadable sites) before the run ends
 LOW_BUDGET = 10                            # from here on every result says how many calls are left
 SOURCE_TIME_LIMIT = 15 * 60                # seconds the source finder may run before it must stop
@@ -62,8 +63,10 @@ Rules:
 - When you attribute words or actions to a named person, cite a page that shows their own words
   or the official record, not a summary of it.
 - For events, use sources published close to the event and put dates in the claims.
-- Use the tools to search, then fetch pages. News search may cover only the last day unless you set
-  freshness, so set it when looking for older events.
+- Use web_search and news_search to find pages, then fetch them. Set freshness ("day", "week", "month",
+  "year") only for recent events; leave it empty when looking for older ones.
+- wiki_search gives background on a specific name, place or term, and the sources Wikipedia cites. It is
+  not reliable on its own: fetch and cite those sources, not Wikipedia, for anything that matters.
 - fetch shows only the start of a long page. Use find_in_page to search the whole page for what you need.
 - Use page_links on useful articles to find the bill, filing, vote record, report or rebuttal they
   point to, then read that page too.
@@ -167,7 +170,9 @@ class Guard:
         self.rate_retried = False          # a rate-limited search gets one retry per run
 
     def is_search(self, name: str) -> bool:
-        """A web search tool (not find_in_page or the library's search)."""
+        """A web search tool (not wiki_search, find_in_page or the library's search): its outage stops searching."""
+        if name in NOT_WEB:
+            return False
         return name in self.search_tools if self.search_tools else ("web_search" in name or "news_search" in name)
 
     def _instead(self) -> str:

@@ -142,7 +142,7 @@ def test_settings_switches_sharing_on_and_shows_how_to_connect(client, monkeypat
     token = settings.mcp_token()
     assert "http://192.168.1.20:8780/mcp" in page and token in page
     assert f'claude mcp add --transport http mission-loop http://192.168.1.20:8780/mcp' in page
-    assert "mcp-remote" in page and "Sharing 2 tools" in page and "no Brave Search key" in page
+    assert "mcp-remote" in page and "Sharing 2 tools" in page and "no web search source is on" in page
     client.post("/settings/mcp", data={"do": "token"})
     assert settings.mcp_token() != token
     assert "error=mcp_port" in client.post("/settings/mcp", data={"do": "port", "port": "80"},

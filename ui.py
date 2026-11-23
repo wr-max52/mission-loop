@@ -17,7 +17,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, search_status, settings, stopping, store
+import activity, agents, avatars, board, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
@@ -98,9 +98,10 @@ MESSAGES = {
     "email_saved": "Email saved.",
     "email_off": "Email removed.",
     "outreach_saved": "Outreach saved.",
-    "search_saved": "Web search key saved.",
-    "search_unchecked": "Web search key saved, but Brave didn't answer. If search fails, check the key.",
-    "search_off": "Web search key removed.",
+    "search_saved": "Search key saved.",
+    "search_unchecked": "Search key saved, but the source didn't answer. If search fails, check the key.",
+    "search_off": "Search key removed.",
+    "search_order": "Web search sources saved.",
     "mcp_on": "Sharing on. Copy a setup below into your app.",
     "mcp_off": "Sharing off. Nothing on the network can reach the tools.",
     "mcp_token": "New token made. Apps with the old one are refused.",
@@ -144,8 +145,8 @@ ERRORS = {
     "github_app": "That isn't a valid OAuth client ID.",
     "places": "Pick at least one place.",
     "notready": "The loop can't start yet",
-    "search_key": "Brave refused that key.",
-    "search_format": "That isn't a Brave API key. Paste it without spaces.",
+    "search_key": "That source refused the key.",
+    "search_format": "That isn't an API key. Paste it without spaces.",
     "publication": "Too long. Limits: name {name}, tagline {tagline}, About {about} characters.",
 }
 
@@ -309,7 +310,7 @@ def signature() -> str:
     working = ",".join(f'{e["worker"]}:{e["slug"]}:{e["agent"]}' for e in running_now())
     raw = ("".join(r["data"] for r in rows) + f"|{last}|{loop_running()}|{orchestrator.STOP_FLAG.exists()}|{working}"
            f"|{settings.auto_mode()}|{(doctor.waiting() or {}).get('reason', '')}|{settings.setup_dismissed()}"
-           f"|{bool(settings.search_key())}")
+           f"|{','.join(settings.search_sources_on('web'))}")
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 # ---------- page shell ----------
@@ -486,6 +487,19 @@ button.link { background:none; border:0; padding:0; color:var(--accent); cursor:
 .setup-more { margin:.8rem 0 0; color:var(--muted); font-size:.9rem; }
 ul.checks { list-style:none; padding:0; margin:.5rem 0; display:grid; gap:.45rem; }
 ul.checks li { display:flex; gap:.55rem; align-items:flex-start; }
+ol.sources { list-style:none; padding:0; margin:.6rem 0; display:grid; gap:.5rem; }
+ol.sources li.src { border:1px solid var(--rule); border-radius:10px; padding:.55rem .75rem; }
+ol.sources .src-head { display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+ol.sources .src-n { color:var(--muted); font-variant-numeric:tabular-nums; min-width:1.1rem; }
+ol.sources .src-tag { font-size:.75rem; color:var(--muted); border:1px solid var(--rule); border-radius:999px; padding:0 .45rem; }
+ol.sources .src-state { font-size:.85rem; color:var(--muted); font-weight:600; }
+ol.sources .src-state.on { color:#2f9e44; } ol.sources .src-state.rest { color:#b26b00; }
+ol.sources .src-ctl { margin-left:auto; display:inline-flex; gap:.3rem; }
+ol.sources .src-ctl form, ol.sources .src-key form { margin:0; }
+ol.sources .src-ctl button { padding:.15rem .5rem; }
+ol.sources p.hint { margin:.3rem 0; }
+ol.sources .src-key { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+ol.sources .src-key input { width:14rem; max-width:100%; }
 .actions .buttons { display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-start; }
 .actions details { margin-top:.8rem; }
 .rating { margin:.4rem 0 1rem; } .rating ul { list-style:none; padding:0; margin:.4rem 0 0; }
@@ -965,7 +979,7 @@ async function refresh() {{
             f"{body}</main>{js_strings()}{lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
 
-JS_STRINGS = ["(default)", "Web search off (set BRAVE_API_KEY in .env).", "Looking…",
+JS_STRINGS = ["(default)", "Web search off. Switch a source on in Settings → Web search.", "Looking…",
               "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
               "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed", "Show", "Hide", "Press Ctrl/Cmd-C",
               "just now", "{n}m ago", "{n}h ago"]
@@ -2571,13 +2585,6 @@ def _open_link(link: str) -> str:
 def _fixes(found: list) -> str:
     return "".join(f'<p class="hint">{escape(c.detail)} {escape(c.fix)}{_open_link(c.link)}</p>' for c in found if not c.ok)
 
-def search_form(back: str) -> str:
-    label = escape(_("Brave Search API key"), quote=True)
-    return (f'<form method="post" action="/settings/search" class="inline setup-form">'
-            f'<input type="hidden" name="back" value="{back}">'
-            f'<input type="password" name="key" autocomplete="off" placeholder="{label}" aria-label="{label}" required>'
-            f'<button>{_("Check and save")}</button></form>')
-
 def setup_card(found: list | None = None) -> str:
     """The home page's first run: connect a model, web search, something to work on, start. Shown until every
     check passes or the human hides it; it never blocks anything (Settings → Setup brings it back)."""
@@ -2604,14 +2611,11 @@ def setup_card(found: list | None = None) -> str:
                      f'<span class="hint">{_("free, runs on this computer. Pull a model, then come back.")}</span></p>')
         cloud = _("Or use a cloud model: {link}.").format(link=f'<a href="/settings#providers">{_("add an API key")}</a>')
         body += f'<p class="hint">{cloud}</p>'
-    tool_checks = [c for c in found if c.key in ("search", "npx", "uvx")]
+    tool_checks = [c for c in found if c.key in ("search", "uvx")]
     tools_ok = all(c.ok for c in tool_checks)
-    get_key = (f'<p class="hint"><a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a key")}</a>. '
-               f'{_("It stays on this machine.")}</p>')
     tools = (f'<p class="hint">{_("Research can search the web and read pages.")}</p>' if tools_ok else
-             f'<p class="hint">{_("Research searches the web with Brave Search (free tier available).")}</p>'
-             + (search_form("/") + get_key if not by["search"].ok else "")
-             + _fixes([c for c in tool_checks if c.key != "search"]))
+             f'<p class="hint">{_("Research searches the web with DuckDuckGo for free, or with a source you add a key for.")}</p>'
+             + _fixes(tool_checks))
     work_ok = by["work"].ok
     chips = "".join(f'<button type="button" class="chip" data-line="{escape(line, quote=True)}">{escape(line)}</button>'
                     for line in INSPIRATIONS)
@@ -2667,25 +2671,62 @@ def setup_section(conn: dict) -> str:
             f'{note}<ul class="checks">{rows}</ul>{again}</div>')
 
 def search_section() -> str:
-    key = settings.search_key()
-    if key and settings.search_key_saved():
-        state = (_("Brave Search key saved in {file}.").format(file="<code>data/search.json</code>")
-                 + '<form method="post" action="/settings/search" class="inline"><input type="hidden" name="remove" value="1">'
-                 f'<button>{_("Remove key")}</button></form>')
-    elif key:
-        state = _("Brave Search key set in {file}. Paste one here to use it instead.").format(file="<code>.env</code>")
-    else:
-        state = (_("No key. Research can read pages but not search the web.") + " "
-                 f'<a href="{doctor.BRAVE_KEYS}" target="_blank" rel="noopener">{_("Get a free key from Brave")}</a>.')
-    status = toolbox_status()
-    return (f'{part("search", _("Web search"), "search")}<div class="actions"><p>{state}</p>'
-            f'{search_form("/settings") if not settings.search_key_saved() else ""}{status}</div>')
+    """Settings → Web search: every source in the order searches try them, each with on/off, up/down, its key and how
+    it is doing. DuckDuckGo and GDELT need no key, so searching works on a fresh clone."""
+    rows = search_sources.status()
+    items = []
+    for i, src in enumerate(rows):
+        sid = src["id"]
+        if src["resting"]:
+            state = f'<span class="src-state rest">{escape(_("Resting: {reason}").format(reason=src["resting"]))}</span>'
+        elif src["on"]:
+            state = f'<span class="src-state on">{_("On")}</span>'
+        elif src["off"]:
+            state = f'<span class="src-state">{_("Off")}</span>'
+        else:
+            state = f'<span class="src-state">{_("Needs a key")}</span>'
+        tags = "" if src["keyed"] else f' <span class="src-tag">{_("no key")}</span>'
+        if src["kinds"] == ("news",):
+            tags += f' <span class="src-tag">{_("news only")}</span>'
+        hidden = f'<input type="hidden" name="source" value="{sid}">'
+        move = "".join(f'<form method="post" action="/settings/search/move" class="inline">{hidden}'
+                       f'<input type="hidden" name="step" value="{step}"><button title="{escape(label, quote=True)}" '
+                       f'aria-label="{escape(label, quote=True)}"{" disabled" if off_end else ""}>{arrow}</button></form>'
+                       for step, arrow, label, off_end in ((-1, "↑", _("Move up"), i == 0),
+                                                           (1, "↓", _("Move down"), i == len(rows) - 1)))
+        toggle = (f'<form method="post" action="/settings/search/toggle" class="inline">{hidden}'
+                  f'<input type="hidden" name="on" value="{"" if not src["off"] else "1"}">'
+                  f'<button>{_("Switch on") if src["off"] else _("Switch off")}</button></form>')
+        key = ""
+        if src["keyed"]:
+            if src["saved"]:
+                key = (f'<span class="hint">{_("Key saved in {file}.").format(file="<code>data/search.json</code>")}</span>'
+                       f'<form method="post" action="/settings/search" class="inline">{hidden}'
+                       f'<input type="hidden" name="remove" value="1"><button>{_("Remove key")}</button></form>')
+            else:
+                label = escape(_("{name} API key").format(name=src["name"]), quote=True)
+                env = (f'<span class="hint">{_("Key set in {file}. Paste one here to use it instead.").format(file="<code>.env</code>")}</span>'
+                       if src["key"] else "")
+                key = (f'{env}<form method="post" action="/settings/search" class="inline">{hidden}'
+                       f'<input type="password" name="key" autocomplete="off" placeholder="{label}" aria-label="{label}" required>'
+                       f'<button>{_("Check and save")}</button></form>'
+                       f'<a href="{escape(src["keys"], quote=True)}" target="_blank" rel="noopener">{_("Get a key")}</a>')
+        items.append(f'<li class="src"><div class="src-head"><span class="src-n">{i + 1}</span><strong>{escape(src["name"])}</strong>'
+                     f'{tags} {state}<span class="src-ctl">{move}{toggle}</span></div>'
+                     f'<p class="hint">{escape(_(src["blurb"]))}</p><div class="src-key">{key}</div></li>')
+    down = search_status.current()
+    note = (f'<p class="hint"><strong>{_("Web search is down: {reason}.").format(reason=escape(down["reason"]))}</strong> '
+            f'{escape(_(down.get("fix") or ""))}</p>' if down else "")
+    intro = _("Each search tries these in order and moves to the next when one is out of credit, refuses its key, "
+              "is rate-limited or can't be reached. Keys stay on this machine.")
+    return (f'{part("search", _("Web search"), "search")}<div class="actions"><p class="hint">{intro}</p>{note}'
+            f'<ol class="sources">{"".join(items)}</ol>{toolbox_status()}</div>')
 
 def toolbox_status() -> str:
     from agents import toolbox
-    found = toolbox.server_status(["search", "fetch"])
+    found = toolbox.server_status(["fetch"])
     bad = [f"{name}: {why}" for name, why in found.items() if why and "not installed" in why]
-    install = _("Install with {command}.").format(command="<code>brew install node uv</code>")
+    install = _("Install with {command}.").format(command="<code>brew install uv</code>")
     return f'<p class="hint">{escape("; ".join(bad))}. {install}</p>' if bad else ""
 
 MCP_COPY_JS = """<script>
@@ -2747,7 +2788,7 @@ def mcp_section() -> str:
         skipped = "".join(f'<li><strong>{escape(s)}</strong> <span class="hint">{not_shared.format(why=escape(why))}</span></li>'
                           for s, why in st["skipped"].items())
         search = ("" if "search" in servers or "search" in st["skipped"] else
-                  f'<li><strong>search</strong> <span class="hint">{not_shared.format(why=_("no Brave Search key (add one under Research)"))}</span></li>')
+                  f'<li><strong>search</strong> <span class="hint">{not_shared.format(why=_("no web search source is on (switch one on under Research)"))}</span></li>')
         sharing = _("Sharing {n} tools on port {port}.").format(n=len(st["tools"]), port=st["port"])
         state = (f'<p>{icon("check")}{sharing}</p>'
                  f'<details><summary>{_("The tools")}</summary><ul class="mcp-tools">{rows}{skipped}{search}</ul></details>')
@@ -2923,24 +2964,52 @@ async def save_email(request: Request) -> Response:
     settings.save_email_config(cfg)
     return go("/settings#outreach", done="email_saved")
 
+def _search_source(form) -> str:
+    source = str(form.get("source") or "brave")
+    return source if source in settings.SEARCH_SOURCES else ""
+
 async def save_search(request: Request) -> Response:
+    """Save or remove a search source's key, after one test search with it."""
     if not same_origin(request):
         return PlainTextResponse("Cross-site request refused.", status_code=403)
     form = await request.form()
-    back = _back(form) if form.get("back") else "/settings"
+    back = _back(form) if form.get("back") else "/settings#search"
+    source = _search_source(form)
+    if not source or not settings.SEARCH_SOURCES[source]["key_env"]:
+        return go(back, error="search_format")
     if form.get("remove"):
-        settings.forget_search_key()
-        await run_in_threadpool(mcp_share.restart)   # the search tool goes from what is shared
+        settings.forget_search_key(source)
+        await run_in_threadpool(mcp_share.restart)   # what is shared follows the sources that are on
         return go(back, done="search_off")
     key = str(form.get("key") or "").strip()
     if not key or len(key) > 200 or any(c.isspace() for c in key):
         return go(back, error="search_format")
-    ok, note = await run_in_threadpool(doctor.check_search_key, key)
+    ok, note = await run_in_threadpool(doctor.check_search_key, key, source)
     if not ok:
         return go(back, error="search_key")
-    settings.save_search_key(key)
-    await run_in_threadpool(mcp_share.restart)       # the search tool joins what is shared
+    settings.save_search_key(key, source)
+    await run_in_threadpool(mcp_share.restart)
     return go(back, done="search_unchecked" if note else "search_saved")
+
+async def move_search(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if source := _search_source(form):
+        settings.move_search_source(source, -1 if str(form.get("step")) == "-1" else 1)
+    return go("/settings#search", done="search_order")
+
+async def toggle_search(request: Request) -> Response:
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if source := _search_source(form):
+        on = bool(form.get("on"))
+        settings.set_search_on(source, on)
+        if on:
+            search_sources.wake(source)
+        await run_in_threadpool(mcp_share.restart)
+    return go("/settings#search", done="search_order")
 
 async def save_publication(request: Request) -> Response:
     if not same_origin(request):
@@ -3366,7 +3435,7 @@ CHAT_JS = """<script>
     if (data.models.includes(saved)) pickModel.value = saved;
     crews = data.crews || {};
     if (data.error) hint.textContent = data.error;
-    else if (data.web === false) hint.textContent += " " + t("Web search off. Add a Brave key in Settings → Web search.");
+    else if (data.web === false) hint.textContent += " " + t("Web search off. Switch a source on in Settings → Web search.");
     guide();
   }
   // Send in the picked model's researcher. The pixel researchers' script loads the first time the panel opens
@@ -4625,6 +4694,8 @@ app = Starlette(routes=[
     Route("/chat/answer", chat_answer),
     Route("/settings/site-url", save_site_url, methods=["POST"]),
     Route("/settings/search", save_search, methods=["POST"]),
+    Route("/settings/search/move", move_search, methods=["POST"]),
+    Route("/settings/search/toggle", toggle_search, methods=["POST"]),
     Route("/settings/mcp", save_mcp, methods=["POST"]),
     Route("/settings/outreach", save_outreach, methods=["POST"]),
     Route("/settings/email", save_email, methods=["POST"]),
