@@ -179,6 +179,17 @@ def test_a_published_postcard_carries_its_date_and_draws_from_thirty_stamps(clie
     stamps = js.split("const STAMPS = [", 1)[1].split("];", 1)[0]
     assert stamps.count('["') >= 30                                     # (#143) enough that the fridge rarely repeats
 
+def test_every_epic_postcard_scene_is_a_small_served_svg(client):
+    js = (Path(ui.__file__).parent / "assets" / "board.js").read_text()
+    scenes = [s.strip().strip('"') for s in js.split("const SCENES = [", 1)[1].split("];", 1)[0].split(",")]
+    assert len(scenes) >= 10 and len(set(scenes)) == len(scenes)        # (#145) ten pictures before any repeats
+    for name in scenes:
+        path = Path(ui.__file__).parent / "assets" / "postcards" / f"{name}.svg"
+        assert path.exists() and path.stat().st_size < 6000, name       # drawn in code, minimalist: kept small
+        assert "<script" not in path.read_text() and "href" not in path.read_text()   # pictures only, nothing loaded
+        r = client.get(f"/assets/postcards/{name}.svg")
+        assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg")
+
 def test_dragging_a_note_is_saved(client):
     store.save_mission(Mission(slug="q", topic="Queued topic"))
     r = client.post("/board/move", json={"id": "m:q", "x": 123.4, "y": -50, "size": 1.2})
