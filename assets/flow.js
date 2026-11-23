@@ -139,7 +139,28 @@ function relightCards(working) {
     if (worker) card.dataset.worker = worker; else delete card.dataset.worker;
     changed = true;
   });
-  if (changed && window.Researchers) window.Researchers.rescan();
+  if (relightDesk(working) || changed) { if (window.Researchers) window.Researchers.rescan(); }
+}
+
+// The Inspiration box is the desk's card (ui.finder_panel): the Theorist and the mission finder work for the
+// whole desk (no slug), so it lights while either does, and its visitor does that agent's kind of work.
+const DESK = ["theorist", "finder"];
+function relightDesk(working) {
+  const box = document.querySelector("[data-desk]");
+  if (!box) return false;
+  const e = working.find(w => !w.slug && DESK.includes(w.step));
+  box.classList.toggle("active", !!e);
+  const hint = box.querySelector(".hint[data-idle]");
+  if (hint) {
+    const text = e ? `${e.name} working now` : hint.dataset.idle;
+    if (hint.textContent !== text) hint.textContent = text;
+  }
+  if (!box.hasAttribute("data-lab-ok")) return false;   // animations off: no visitors
+  const lab = e ? e.step : null, worker = e && e.worker !== "desk" ? e.worker.split("-")[0] : null;
+  if ((box.dataset.lab || null) === lab && (box.dataset.worker || null) === worker) return false;
+  if (lab) box.dataset.lab = lab; else delete box.dataset.lab;
+  if (worker) box.dataset.worker = worker; else delete box.dataset.worker;
+  return true;
 }
 
 function arrive(h) {
