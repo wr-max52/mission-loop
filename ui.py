@@ -78,8 +78,6 @@ MESSAGES = {
     "auto_off": "Auto mode off.",
     "animations_on": "Animations on.",
     "animations_off": "Animations off.",
-    "cyborgs_on": "Cyborg sprites on.",
-    "cyborgs_off": "Cyborg sprites off.",
     "library_saved": "Library settings saved.",
     "library_indexing": "Indexing the library. Refresh in a minute.",
     "theme_saved": "Appearance saved.",
@@ -2151,13 +2149,6 @@ def settings_body(request: Request, error: str = "") -> str:
   <label class="switch"><input type="checkbox" role="switch" name="animations" value="on"{checked} onchange="this.form.requestSubmit()">
   {_("Animations")}</label>
   <noscript><p><button>{_("Save")}</button></p></noscript>
-</form>
-<form method="post" action="/settings/cyborgs" class="actions display">
-  <h3>{icon("bolt")}{_("Cyborg sprites")}</h3>
-  <p class="hint">{_("Every researcher visits as a cyborg: metal, lights and pipes.")}</p>
-  <label class="switch"><input type="checkbox" role="switch" name="cyborgs" value="on"{" checked" if settings.cyborgs() else ""} onchange="this.form.requestSubmit()">
-  {_("Cyborg sprites")}</label>
-  <noscript><p><button>{_("Save")}</button></p></noscript>
 </form>"""
     sections = "".join([
         settings_section("setup", setup_section(conn)),
@@ -2281,13 +2272,6 @@ async def save_animations(request: Request) -> Response:
     on = (await request.form()).get("animations") == "on"   # an unticked box sends nothing
     settings.set_animations(on)
     return go("/settings", done="animations_on" if on else "animations_off")
-
-async def save_cyborgs(request: Request) -> Response:
-    if not same_origin(request):
-        return PlainTextResponse("Cross-site request refused.", status_code=403)
-    on = (await request.form()).get("cyborgs") == "on"      # an unticked box sends nothing
-    settings.set_cyborgs(on)
-    return go("/settings", done="cyborgs_on" if on else "cyborgs_off")
 
 async def join_1f916(request: Request) -> Response:
     """The same registration as `python run.py join-1f916`, which saves the key before anything else."""
@@ -4641,7 +4625,8 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 def avatar_link() -> str:
     """The Settings page's way into the studio, with what is customised so far."""
     n, off = len(avatars.custom()), len(avatars.off())
-    bits = [_n("{n} of your own", "{n} of your own", n) if n else "", _n("{n} staying home", "{n} staying home", off) if off else ""]
+    bits = [_n("{n} of your own", "{n} of your own", n) if n else "", _n("{n} staying home", "{n} staying home", off) if off else "",
+            _("cyborgs visiting") if settings.cyborgs() else ""]
     now = " · ".join(b for b in bits if b) or _("built-in researchers only")
     return f"""<div class="actions display avatar-link">
   <h3>{icon("person")}{_("Avatars")}</h3>
@@ -4656,7 +4641,8 @@ async def avatars_page(request: Request) -> HTMLResponse:
              "Stored in {file}.").format(file="<code>data/sprites.json</code>")
     body = (f'<style>{AVATAR_CSS}</style><h1>{_("Avatar studio")}</h1>'
             f'<p class="hint lede">{lede}</p>'
-            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"><noscript>{_("The studio needs JavaScript.")}</noscript></div>'
+            f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"'
+            f'{" data-cyborgs" if settings.cyborgs() else ""}><noscript>{_("The studio needs JavaScript.")}</noscript></div>'
             f'{script("researchers.js")}{script_i18n("avatars.js")}{script("avatars.js")}')
     return page(_("Avatar studio"), body)
 
@@ -4743,6 +4729,19 @@ async def avatar_action(request: Request) -> JSONResponse:
     except avatars.AvatarError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({"ok": True})
+
+async def avatar_cyborgs(request: Request) -> JSONResponse:
+    """The Cyborgs row's one switch under Who visits: all 12 cyborgs join their crews, or none do."""
+    if not same_origin(request):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("on"), bool):
+        return JSONResponse({"error": _("Unknown action.")}, status_code=400)
+    settings.set_cyborgs(body["on"])
+    return JSONResponse({"ok": True, "on": settings.cyborgs()})
 
 AVATAR_CSS = """
 main:has(#studio) { max-width: 72rem; }
@@ -4841,6 +4840,9 @@ canvas.mini { background:var(--quote); border-radius:4px; }
 .visitor-acts { display:flex; gap:.3rem; }
 .visitor-acts button { font-size:.72rem; padding:.25rem .55rem; }
 .visitor-acts .danger:hover { border-color:#c92a2a; color:#c92a2a; }
+.borg-head { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+.borg-head .switch { font-size:.8rem; margin:0; }
+.crew-row.borgs.off canvas { opacity:.35; filter:grayscale(1); }
 .avatar-link .btn { text-decoration:none; }
 """
 
@@ -5114,6 +5116,7 @@ app = Starlette(routes=[
     Route("/avatars/models", avatar_models),
     Route("/avatars/ask", avatar_ask, methods=["POST"]),
     Route("/avatars/save", avatar_save, methods=["POST"]),
+    Route("/avatars/cyborgs", avatar_cyborgs, methods=["POST"]),
     Route("/avatars/{key}/{action}", avatar_action, methods=["POST"]),
     Route("/chat/models", chat_models),
     Route("/chat/ask", chat_ask, methods=["POST"]),
@@ -5129,7 +5132,6 @@ app = Starlette(routes=[
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
-    Route("/settings/cyborgs", save_cyborgs, methods=["POST"]),
     Route("/settings/theme", save_theme, methods=["POST"]),
     Route("/settings/language", save_language, methods=["POST"]),
     Route("/settings/chat-color", save_chat_color, methods=["POST"]),

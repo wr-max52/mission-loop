@@ -221,19 +221,25 @@ def test_code_fixes_the_drawing_slips_it_safely_can(monkeypatch):
     m = avatar.edit({"base": "mei", "name": "M"}, "devil horns", model="m")["change"]["maps"][0]
     assert m["pal"] == {"a": "#c0392b"} and m["rows"] == ["a...a", "aa.aa", "a...."]   # a free letter, rows padded
 
-# ---------- cyborg sprites: the switch on the Settings page ----------
+# ---------- cyborg sprites: one switch for the Cyborgs row under Who visits (#151) ----------
 
-def test_the_cyborg_switch_hands_every_page_the_cyborg_crew(client):
+def test_the_cyborg_row_s_switch_hands_every_page_the_cyborg_crew(client):
     assert "cyborgs" not in avatars.config() and not settings.cyborgs()
-    html = client.get("/settings").text
-    assert 'action="/settings/cyborgs"' in html and "Cyborg sprites" in html
-    r = client.post("/settings/cyborgs", data={"cyborgs": "on"}, follow_redirects=False)
-    assert r.status_code == 303 and settings.cyborgs()
+    assert "/settings/cyborgs" not in client.get("/settings").text                  # it lives in the studio now
+    assert "data-cyborgs" not in client.get("/avatars").text
+    r = client.post("/avatars/cyborgs", json={"on": True})
+    assert r.status_code == 200 and r.json() == {"ok": True, "on": True} and settings.cyborgs()
     cfg = avatars.config()
     assert len(cfg["cyborgs"]) == 12 and cfg["cyborgs"]["kenji-borg"]["base"] == "kenji" and "off" not in cfg
-    assert '"kenji-borg"' in client.get("/").text
-    client.post("/settings/cyborgs", data={})                                       # an unticked box sends nothing
+    assert '"kenji-borg"' in client.get("/").text and "data-cyborgs" in client.get("/avatars").text
+    assert "cyborgs visiting" in client.get("/settings").text
+    assert client.post("/avatars/cyborgs", json={"on": False}).json() == {"ok": True, "on": False}
     assert not settings.cyborgs() and "cyborgs" not in avatars.config() and "cyborgs" not in settings.saved()
+
+def test_the_cyborg_switch_refuses_anything_but_on_or_off(client):
+    assert client.post("/avatars/cyborgs", json={"on": "yes"}).status_code == 400
+    assert client.post("/avatars/cyborgs", content=b"nope", headers={"Content-Type": "application/json"}).status_code == 400
+    assert not settings.cyborgs()
 
 def test_an_avatar_saved_under_a_cyborg_s_name_wins(client):
     settings.set_cyborgs(True)

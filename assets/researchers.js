@@ -3886,15 +3886,14 @@ for (const [key, spec] of Object.entries(SPRITE_CONFIG.add || {})) {   // sprite
   const v = registerSprite(key, spec);
   if (!v.ok) console.warn(`researchers: sprite ${key} skipped:`, v.errors.join("; "));
 }
-// Cyborg sprites (assets/cyborgs.json, the Settings page's switch): each joins in place of the built-in it starts
-// from, which stays home; one whose original is switched off stays home too.
+// Cyborg sprites (assets/cyborgs.json, the Cyborgs row under Who visits): each joins its original's crew beside
+// everyone else; nobody is sent home for them.
 const CYBORGS = [];
 for (const [key, spec] of Object.entries(SPRITE_CONFIG.cyborgs || {})) {
   if (ROSTER[key]) continue;                      // a custom sprite already has the name
   const v = registerSprite(key, spec);
   if (!v.ok) { console.warn(`researchers: cyborg ${key} skipped:`, v.errors.join("; ")); continue; }
   CYBORGS.push(key);
-  if (OFF.has(spec.base)) OFF.add(key); else OFF.add(spec.base);
 }
 
 function boot() {

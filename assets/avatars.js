@@ -6,7 +6,7 @@
  * an image, if the model can see) to the designer (agents/avatar.py); its reply is checked here with validateSprite,
  * sent back with the problems for up to two repair rounds, and whatever still breaks a rule is dropped field by
  * field, so the avatar on screen always follows the rules. Saving writes data/sprites.json through the UI, and the
- * Who visits panel switches any researcher on or off. Nothing here runs a model or touches the loop.
+ * Who visits panel switches any researcher on or off, and the cyborg crew with one switch. Nothing here runs a model or touches the loop.
  */
 (() => {
 "use strict";
@@ -540,7 +540,7 @@ function cast() {
   castHost.replaceChildren();
   for (const [worker, title] of [["assistant", tr("Young crew · Research Assistant")], ["pi", tr("Tenured crew · Principal Investigator")]]) {
     const row = h("div", { class: "crew-row" });
-    for (const k of R.CAST.filter(k => R.ROSTER[k].worker === worker && !k.startsWith("__") && !R.CYBORGS.includes(k))) {
+    for (const k of R.CAST.filter(k => R.ROSTER[k].worker === worker && !k.startsWith("__") && !isBorg(k))) {
       const custom = !R.BUILT_IN.includes(k), on = !off.has(k);
       const sw = h("input", { type: "checkbox", role: "switch", checked: on, "aria-label": fill(tr("{name} visits"), { name: who(k) }), onchange: async e => {
         try { await post(`/avatars/${encodeURIComponent(k)}/${e.target.checked ? "on" : "off"}`, {}); }
@@ -567,9 +567,43 @@ function cast() {
     }
     castHost.append(h("h3", { text: title }), row);
   }
+  castHost.append(...cyborgRow());
+}
+
+// The cyborg crew as one more row: one switch for all of them, Remix on each. On, they join their crews beside
+// everyone else (researchers.js registers them on the next page; here they join straight away). A custom avatar
+// saved under a cyborg's name is a custom avatar, so the row leaves that one out.
+let cyborgsOn = root.hasAttribute("data-cyborgs");
+const borgKeys = () => Object.keys(borgs).filter(k => !saved[k]);
+const isBorg = k => R.CYBORGS.includes(k) || (!!borgs[k] && !saved[k]);
+function cyborgRow() {
+  const keys = borgKeys();
+  if (!keys.length) return [];
+  const label = h("span", { text: cyborgsOn ? tr("Visit") : tr("Stay home") });
+  const sw = h("input", { type: "checkbox", role: "switch", checked: cyborgsOn, "aria-label": tr("Cyborgs visit"), onchange: async e => {
+    const on = e.target.checked;
+    try { await post("/avatars/cyborgs", { on }); }
+    catch (err) { e.target.checked = !on; return note(err.message, true); }
+    cyborgsOn = on; label.textContent = on ? tr("Visit") : tr("Stay home");
+    for (const k of keys) {
+      if (on && !R.ROSTER[k]) { const v = R.registerSprite(k, borgs[k]); if (!v.ok) continue; }
+      if (R.ROSTER[k]) R.setSpriteEnabled(k, on);
+    }
+    row.classList.toggle("off", !on);
+  } });
+  const go = (url) => { if (!state.dirty || confirm(tr("Leave without saving?"))) { state.dirty = false; location.href = url; } };
+  const row = h("div", { class: "crew-row borgs" + (cyborgsOn ? "" : " off") }, keys.map(k =>
+    h("div", { class: "visitor" }, tile(borgs[k], "full", 3), h("strong", { text: borgs[k].name }), h("small", { text: k }),
+      h("div", { class: "visitor-acts" }, h("button", { type: "button", onclick: () => go(`/avatars?borg=${encodeURIComponent(k)}`) }, tr("Remix"))))));
+  return [h("div", { class: "borg-head" }, h("h3", { text: tr("Cyborgs") }), h("label", { class: "switch" }, sw, label)), row];
 }
 
 layout(); render(); cast(); models();
-fetch("/assets/cyborgs.json").then(r => r.ok ? r.json() : {}).then(d => { borgs = d || {}; render(); }).catch(() => {});
+fetch("/assets/cyborgs.json").then(r => r.ok ? r.json() : {}).then(d => {
+  borgs = d || {};
+  const k = params.get("borg");                   // Remix on the Cyborgs row: start from that cyborg's whole spec
+  if (k && borgs[k] && !editKey) state.spec = Object.assign(clone(borgs[k]), { name: `${borgs[k].name.replace(/^(Dr\.|Prof\.|Det\.|Intern) /, "")} 2` });
+  render(); cast();
+}).catch(() => {});
 if (reduce) frame(performance.now()); else requestAnimationFrame(frame);
 })();

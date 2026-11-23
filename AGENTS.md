@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 918 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 919 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -798,11 +798,14 @@ most bits pass without a word. They work through about 40 bits weighted by mood 
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
-Its Cyborg sprites switch (`settings.cyborgs`, off by default, saved only while on) sends every built-in researcher's
-cyborg in its place: `assets/cyborgs.json` holds the 12 (`aris-borg` ... `pip-borg`), each a sprite spec, never code,
-with its original's clothes, colors, crew, quirk and every animation; `avatars.config` hands them to the page as
-`RESEARCHER_SPRITES.cyborgs` and `researchers.js` sends each original home (one switched off under Who visits keeps
-its cyborg home too; an avatar saved under a cyborg's name wins). What makes them machines is in the spec format for
+The avatar studio's Who visits has a Cyborgs row (#151) under the two crews: one switch for all 12
+(`settings.cyborgs`, off by default, saved only while on; `POST /avatars/cyborgs` with `{"on": true|false}`) and
+Remix on each tile (`/avatars?borg=<key>`). `assets/cyborgs.json` holds the 12 (`aris-borg` ... `pip-borg`), each a
+sprite spec, never code, with its original's clothes, colors, crew, quirk and every animation; with the switch on,
+`avatars.config` hands them to the page as `RESEARCHER_SPRITES.cyborgs` and `researchers.js` adds each to its crew
+beside everyone else: nobody is sent home for them, and an original's own switch never touches its cyborg. Custom
+avatars are never touched by it: one saved under a cyborg's name is a custom avatar, and the row leaves that cyborg
+out. What makes them machines is in the spec format for
 anyone's sprite: `metal` (a metal in place of skin) and `glow` (lit eyes), both in the avatar studio's Body tab with
 Start from a cyborg, and the sprite studio's Cyborgs list opens any of the 12 as a spec. The published site's About
 page keeps the originals.
@@ -817,7 +820,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't) |
-| Have the researchers visit as cyborgs | Settings → Display → Cyborg sprites |
+| Have the cyborg researchers visit too | the Cyborgs row's switch under Who visits in the avatar studio (Settings → Avatars) |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |

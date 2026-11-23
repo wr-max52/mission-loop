@@ -106,12 +106,13 @@ def test_kenji_borg_is_black_with_grey_armor_and_red_lights():
     assert all(p["r"] == "#ff2a2a" for p in pals)                                    # red buttons on every plate
     assert all(len({p[c][1:3], p[c][3:5]}) == 1 or abs(int(p[c][1:3], 16) - int(p[c][5:7], 16)) < 24 for p in pals for c in "ieE")   # grey armor
 
-def test_cyborg_sprites_send_each_cyborg_in_place_of_its_original():
+def test_cyborgs_join_their_crews_beside_everyone_else():
     r = js("R => ({ borgs: R.CYBORGS.length, on: R.enabled(), pi: R.crewOf('pi'), assistant: R.crewOf('assistant') })",
            {"cyborgs": CYBORGS, "add": {"custom-sprite-1": EXAMPLE}, "off": ["pip"]})
     assert r["borgs"] == 12
-    assert sorted(r["on"]) == sorted([f"{k}-borg" for k in avatars.BUILT_IN if k != "pip"] + ["custom-sprite-1"])   # pip is off, so pip-borg is too
-    assert "kenji-borg" in r["pi"] and "kenji" not in r["pi"] and "mei-borg" in r["assistant"]
+    assert sorted(r["on"]) == sorted([k for k in avatars.BUILT_IN if k != "pip"] + [f"{k}-borg" for k in avatars.BUILT_IN]
+                                     + ["custom-sprite-1"])                     # pip stays home; pip-borg still comes
+    assert {"kenji", "kenji-borg"} <= set(r["pi"]) and {"mei", "mei-borg", "custom-sprite-1"} <= set(r["assistant"])
 
 def test_without_the_switch_no_cyborg_is_in_the_cast():
     assert js("R => [R.CYBORGS, R.CAST.length]") == [[], 12]
