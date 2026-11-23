@@ -11,7 +11,7 @@ to fit and relights it; assets/researchers.js puts researchers on it, each on it
 from html import escape
 import activity, settings
 from i18n import _
-from contracts import Mission
+from contracts import Mission, State
 from icons import icon, CSS as ICON_CSS
 
 # (key, kind, label on the strip), in runtime order
@@ -27,7 +27,7 @@ FLOW = [
     ("brief_review", "human", "Review brief"),
     ("outreach", "agent", "Outreach"),     # only while outreach is on (OUTREACH_STEPS)
     ("outreach_check", "check", "check"),  # contacts.send's checks on each message
-    ("replies", "agent", "Replies"),       # the reply wait
+    ("replies", "check", "replies"),       # the reply wait: code reads replies and thanks; no model
     ("writer", "agent", "Article"),
     ("article_check", "check", "check"),
     ("article_rating", "agent", "Rating"), # the Research Assistant rates the checked article (agents/rater.py)
@@ -38,7 +38,6 @@ FLOW = [
 TILES = {   # key -> (icon, the line under its name on the strip)
     "theorist": ("bulb", "connects the dots"), "finder": ("compass", "finds missions"),
     "sources": ("book", "searches and reads"), "outreach": ("send", "asks people"),
-    "replies": ("clock", "waits for answers"),
     "brief": ("write", "writes the brief"), "writer": ("newspaper", "writes the article"),
     "article_rating": ("scale", "rates the article"),
     "publisher": ("broadcast", "site and channels"),
@@ -61,20 +60,46 @@ CHECKS = {   # every code check on the strip: what it holds the step before it t
     "source_check": "Source check (code): every claim cited, quotes on the page, 3 sites, 1+ fact, a counterpoint.",
     "outreach_check": "Outreach check (code): a set-up channel, a real address, a first name, a short topic, one "
                       "question; nobody asked twice or twice a week. Failures aren't sent; the agent is told why.",
+    "replies": "Reply check (code): reads replies every 10 minutes, thanks each person who answered once, and "
+               "moves on when everyone has answered or the wait ends.",
     "article_check": "Article check (code): every paragraph cited to the brief's sources, exact quotes, no outside "
                      "links, opposing view cited.",
     "rating_check": "Rating check (code): the Research Assistant scores the claim and logic, intrigue and sources "
                     "1-10 each; 20 or less goes back to the writer with the reasons.",
 }
 PARKS = {"source_check", "article_check", "rating_check"}   # the checks that retry and then park; the rest drop
+CHECK_ICONS = {"replies": "clock"}      # a check that waits rather than judges; every other check is a shield
+HELD = "Missions at this step: {n}"     # the badge on a tile: missions there now, worked on or waiting their turn
 
 OUTREACH_STEPS = ("outreach", "outreach_check", "replies")
 
+def outreach_shown() -> bool:
+    """Whether the loop runs outreach, so the strip draws it: switched on and a channel ready (orchestrator.step)."""
+    import agents                          # here, not at the top: agents pulls in the whole loop
+    return settings.outreach_on() and bool(agents.outreach_channels())
+
 def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
-    """The strip's steps for this setup: outreach, its check and the reply wait only while outreach is on, and with
-    auto (the UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
+    """The strip's steps for this setup: outreach, its check and the reply wait only while the loop runs outreach
+    (outreach_shown), and with auto (the UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
+    outreach = outreach_shown()
     return [(k, "auto", _(AUTO_STEPS[k][0])) if auto and k in AUTO_STEPS else (k, kind, _(text))
-            for k, kind, text in FLOW if k not in OUTREACH_STEPS or settings.outreach_on()]
+            for k, kind, text in FLOW if k not in OUTREACH_STEPS or outreach]
+
+def step_of(m: Mission) -> str | None:
+    """The tile a mission in progress is at: the agent working on it or next in line for it, or the reply wait.
+    None for a mission at a review, parked, published or combined, and for one only passing through a code step.
+    Publish counts its own queue (ui.flow_state), so it isn't here."""
+    if m.state == State.QUEUED:
+        return "sources"
+    if m.state == State.RESEARCHING:
+        return "brief" if m.gathered or m.interrupted_brief else "sources"
+    if m.state == State.OUTREACH:
+        return "outreach"
+    if m.state == State.AWAITING_COMMENTS:
+        return "replies"
+    if m.state == State.WRITING:
+        return "article_rating" if m.checked_article else "writer"
+    return None
 
 def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, str]]], list[tuple[str, str, str]]]:
     """Cut the steps into lanes at each human review: lane 0, review 0, lane 1, review 1, ... Each review is the end
@@ -89,13 +114,19 @@ def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, 
     return out, ends
 
 def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], review_href: str = "",
-          auto: bool = False) -> str:
+          auto: bool = False, held: dict[str, int] | None = None) -> str:
     """The strip's track: its lanes and the reviews between them. lit: step -> the worker on it right now; waiting:
-    missions at each human review; parked: missions parked at each check. review_href links the human reviews (a
-    span without it). auto draws the reviews auto mode takes over as automatic."""
+    missions at each human review; parked: missions parked at each check; held: missions at each tile now
+    (step_of). review_href links the human reviews (a span without it). auto draws the reviews auto mode takes over
+    as automatic."""
     steps = flow_steps(auto)
     runs, ends = lanes(steps)
     parked_n = Mission.model_fields["max_attempts"].default
+    held = held or {}
+
+    def badge(key: str) -> str:
+        n = held.get(key, 0)
+        return f'<b class="held" title="{escape(_(HELD).format(n=n))}"{"" if n else " hidden"}>{n}</b>'
 
     def tile(key: str, kind: str, text: str) -> str:
         on = " on" if key in lit else ""
@@ -104,11 +135,11 @@ def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], 
             n = parked.get(key, 0)
             title = escape(_(CHECKS[key]) + (" " + _(RETRY).format(n=parked_n) if key in PARKS else ""))
             return (f'<span class="check{on}" data-step="{key}" title="{title}"{cur}>'
-                    f'{icon("shield")}<span class="label">{text}</span>'
+                    f'{icon(CHECK_ICONS.get(key, "shield"))}<span class="label">{text}</span>{badge(key)}'
                     f'<b class="parked-count" title="{escape(_("{n} parked here").format(n=n))}"{"" if n else " hidden"}>{n}</b></span>')
         name, sub = TILES[key]
         return (f'<span class="step{on}" data-step="{key}" title="{escape(_(activity.AGENTS[key]))}"{cur}>{icon(name)}'
-                f'<span class="text"><span class="name">{text}</span><span class="sub">{_(sub)}</span></span></span>')
+                f'<span class="text"><span class="name">{text}</span><span class="sub">{_(sub)}</span></span>{badge(key)}</span>')
 
     def review(key: str, kind: str, text: str, place: str) -> str:
         if kind == "auto":
@@ -159,19 +190,20 @@ CSS = ICON_CSS + """/* the pipeline strip: a snake. Each lane runs between two h
    column in flow order, lanes wrapping, every arrow pointing on. */
 .flow { flex-basis:100%; min-width:0; margin-top:.3rem; --line:color-mix(in srgb, var(--muted) 60%, transparent); }
 .flow-scroll { overflow:hidden; padding-bottom:.25rem; }
-.flow-track { --s:1; --u:calc(1rem * var(--s)); --tile:calc(var(--u) * 3.1); --cap:calc(var(--u) * 7.6);
+.flow-track { --s:1; --u:calc(1rem * var(--s)); --tile:calc(var(--u) * 3.1); --cap:calc(var(--u) * 6.6);
               display:grid; grid-template-columns:var(--cap) minmax(min-content, 1fr) var(--cap);
               row-gap:calc(var(--u) * 1.3); width:100%; position:relative; }
 .flow-track[data-lab] { padding-top:5rem; row-gap:max(3.4rem, calc(var(--u) * 1.3)); }   /* room for the researchers */
 .flow .lane { display:flex; align-items:center; min-width:0; }
 .flow .lane.rtl { flex-direction:row-reverse; }
 .flow .unit { display:contents; }
-.flow .step { flex:none; display:flex; align-items:center; gap:calc(var(--u) * .55); box-sizing:border-box;
-              height:var(--tile); min-width:calc(var(--u) * 8.4); padding:0 calc(var(--u) * .8);
+.flow .step { flex:none; position:relative; display:flex; align-items:center; gap:calc(var(--u) * .6); box-sizing:border-box;
+              height:var(--tile); min-width:calc(var(--u) * 8.4); padding:0 calc(var(--u) * .95);
               border-radius:calc(var(--u) * .55); border:1px solid var(--rule); background:var(--quote); color:var(--muted); }
 .flow .step .ico { width:calc(var(--u) * 1.35); height:calc(var(--u) * 1.35); }
 .flow .step .name { display:block; font-size:calc(var(--u) * .86); font-weight:700; line-height:1.15; white-space:nowrap; }
-.flow .step .sub { display:block; font-size:calc(var(--u) * .68); line-height:1.2; white-space:nowrap; opacity:.85; }
+.flow .step .text { max-width:calc(var(--u) * 8.6); }   /* a long line (another language) wraps instead of spilling */
+.flow .step .sub { display:block; font-size:calc(var(--u) * .68); line-height:1.15; opacity:.85; }
 .flow .step.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
 .flow .join { flex:1 0 calc(var(--u) * 1.6); height:var(--tile); position:relative; }   /* stretch to fill the lane */
 .flow .join::before { content:""; position:absolute; left:2px; right:4px; top:calc(50% - 1px); border-top:2px solid var(--line); }
@@ -182,18 +214,25 @@ CSS = ICON_CSS + """/* the pipeline strip: a snake. Each lane runs between two h
 .flow .join.short { flex:none; width:calc(var(--u) * .6); }
 .flow .join.short::after { display:none; }
 .flow .join.short::before, .flow .lane.rtl .join.short::before { left:1px; right:1px; }
-.flow .check { flex:none; position:relative; box-sizing:border-box; width:calc(var(--u) * 2.5); height:var(--tile);
+.flow .check { flex:none; position:relative; box-sizing:border-box; min-width:calc(var(--u) * 2.5); height:var(--tile);
+               padding:0 calc(var(--u) * .3);   /* widens to its label in any language */
                border-radius:calc(var(--u) * .4); border:1px solid var(--line); color:var(--muted);
                display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(var(--u) * .15);
                background:repeating-linear-gradient(-45deg, var(--quote) 0 4px, var(--bg) 4px 8px); }
 .flow .check .ico { width:calc(var(--u) * 1.1); height:calc(var(--u) * 1.1); }
-.flow .check .label { font-size:calc(var(--u) * .54); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.flow .check .label { font-size:calc(var(--u) * .54); font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+                      white-space:nowrap; }
 .flow .check.on { background:#237a35; border-color:#237a35; color:#fff; animation:working 2s ease-out infinite; }
 .flow .check.on::after { content:""; position:absolute; left:1px; right:1px; height:3px; border-radius:2px;
                          background:#b2f2bb; animation:scan 1.1s ease-in-out infinite alternate; }
 .flow .parked-count { position:absolute; top:calc(var(--u) * -.5); right:calc(var(--u) * -.5); min-width:var(--u);
                       height:var(--u); border-radius:999px; background:#c92a2a; color:#fff; font-size:calc(var(--u) * .62);
                       line-height:var(--u); text-align:center; padding:0 calc(var(--u) * .2); }
+/* missions at a tile now (flowchart.step_of): calm, unlike the red parked count; on a check it sits top left */
+.flow .held { position:absolute; top:calc(var(--u) * -.5); right:calc(var(--u) * -.5); min-width:var(--u);
+              height:var(--u); border-radius:999px; background:var(--fg); color:var(--bg); font-size:calc(var(--u) * .62);
+              line-height:var(--u); text-align:center; padding:0 calc(var(--u) * .2); box-sizing:border-box; }
+.flow .check .held { right:auto; left:calc(var(--u) * -.5); }
 /* a human review: the square end of a lane, where the snake turns. In auto mode the two it takes over are green. */
 .flow .human { position:relative; align-self:stretch; box-sizing:border-box; min-height:var(--tile);
                display:flex; flex-direction:column; align-items:center; justify-content:center; gap:calc(var(--u) * .3);

@@ -131,6 +131,40 @@ def test_every_code_check_and_human_review_is_on_the_flow_chart(client, monkeypa
         "brief_review", "outreach", "outreach_check", "replies", "writer", "article_check", "article_rating",
         "rating_check"]
 
+def test_the_reply_wait_is_a_code_check_shown_only_when_outreach_runs(client, monkeypatch):
+    """Replies is code, not a model, so it is a check right after the outreach check; outreach shows on the strip
+    only when the loop runs it: switched on and a channel ready (#136)."""
+    import agents
+    found = steps(client.get("/").text)
+    assert found[found.index(("outreach", "agent")):found.index(("writer", "agent"))] == [
+        ("outreach", "agent"), ("outreach_check", "check"), ("replies", "check")]
+    assert "Reply check (code): reads replies every 10 minutes" in track(client.get("/").text)
+    monkeypatch.setattr(agents, "outreach_channels", lambda: [])     # on, but nowhere to send: the loop skips it
+    assert not {"outreach", "outreach_check", "replies"} & {k for k, _ in steps(client.get("/").text)}
+
+def test_each_tile_counts_the_missions_at_it(client, monkeypatch):
+    """Every agent tile and the reply wait count the missions there now, worked on or waiting their turn; Publish
+    counts the articles still queued; the Theorist and finder work for the whole desk and count nothing (#136)."""
+    import flowchart
+    done = T0 + timedelta(hours=24)
+    for m in (Mission(slug="q", topic="Queued"), Mission(slug="r", topic="Searching", state=State.RESEARCHING),
+              Mission(slug="g", topic="Gathered", state=State.RESEARCHING, gathered=True),
+              Mission(slug="o", topic="Asking", state=State.OUTREACH),
+              Mission(slug="w1", topic="Wait one", state=State.AWAITING_COMMENTS, wait_until=done),
+              Mission(slug="w2", topic="Wait two", state=State.AWAITING_COMMENTS, wait_until=done),
+              Mission(slug="a", topic="Writing", state=State.WRITING),
+              Mission(slug="p", topic="Reviewed", state=State.ARTICLE_READY, reviewed=True),
+              Mission(slug="b", topic="Brief", state=State.BRIEF_READY)):
+        store.save_mission(m)
+    rated = Mission(slug="c", topic="Checked", state=State.WRITING).model_copy(update={"checked_article": True})
+    assert flowchart.step_of(rated) == "article_rating"
+    assert client.get("/api/flow").json()["held"] == {"sources": 2, "brief": 1, "outreach": 1, "replies": 2,
+                                                       "writer": 1, "publisher": 1}
+    html = track(client.get("/").text)
+    assert re.search(r'data-step="replies".*?<b class="held" title="Missions at this step: 2">2</b>', html)
+    assert re.search(r'data-step="theorist".*?<b class="held" title="Missions at this step: 0" hidden>0</b>', html)
+    assert 'class="held" title="Missions at this step: 1">1</b></span><span class="join short"' in html   # a tile, not a review
+
 def test_the_flow_chart_snakes_with_a_review_at_every_turn(client, monkeypatch):
     """Lane 0 runs left to right from the top left to the first review, a square end on the right that spans the
     two lanes it joins; lane 1 comes back right to left one level lower to the next review on the left; and so on."""

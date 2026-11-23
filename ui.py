@@ -6,6 +6,7 @@ runs agents itself. Work happens in the loop, which the UI can start, stop and w
 127.0.0.1 only; nothing here is reachable from another machine.
 """
 import asyncio, concurrent.futures, hashlib, json, os, re, subprocess, sys, threading, time
+from collections import Counter
 from html import escape
 from datetime import datetime
 from pathlib import Path
@@ -1043,7 +1044,7 @@ async function refresh() {{
     return HTMLResponse(html)
 
 JS_STRINGS = ["(default)", "Web search off. Switch a source on in Settings → Web search.", "Looking…",
-              "No answer. Is the UI still running?", "{n} parked here", "Answer lost when the UI restarted. Ask again.",
+              "No answer. Is the UI still running?", "{n} parked here", flowchart.HELD, "Answer lost when the UI restarted. Ask again.",
               "You", "Researcher Chat", "Copy", "Nothing to copy", "Copied", "Copy failed", "Show", "Hide", "Press Ctrl/Cmd-C",
               "just now", "{n}m ago", "{n}h ago", "Thinking", "1 tool", "{n} tools", "No tools", "{n}s", "{m}m {s}s"]
 
@@ -1143,7 +1144,8 @@ def flow_status(now: list[dict], running: bool, topics: dict[str, str] | None = 
 
 def flow_state() -> dict:
     """What the strip shows: the steps working right now (one per busy worker, while the loop runs), how
-    many missions wait at each human review, and how many each check has parked. /api/flow serves it to
+    many missions wait at each human review, how many each check has parked, and how many missions are at each
+    tile (flowchart.step_of; Publish counts the articles still queued somewhere). /api/flow serves it to
     the page every few seconds, with every mission's state, so the page can tell where a mission went
     when a worker's step ends."""
     running = loop_running()
@@ -1153,6 +1155,8 @@ def flow_state() -> dict:
     parked = [m for m in missions if m.state == State.PARKED]
     writing = [m for m in parked if orchestrator.parked_while_writing(m)]
     rated = sum(bool(m.rejected_article and m.rejected_article.rating) for m in writing)
+    held = Counter(k for m in missions if (k := flowchart.step_of(m)))
+    held["publisher"] = len({slug for _k, _n, entries in publish_queue(missions) for slug, _t, _a in entries})
     return {
         "running": running, "stopping": running and orchestrator.STOP_FLAG.exists(),
         "working": [{"worker": e["worker"], "step": strip_step(e["agent"]), "slug": e["slug"], "since": float(e["since"]),
@@ -1163,6 +1167,7 @@ def flow_state() -> dict:
                     "article_review": sum(m.state == State.ARTICLE_READY and not m.reviewed for m in missions)},
         "parked": {"source_check": len(parked) - len(writing), "article_check": len(writing) - rated,
                    "rating_check": rated},
+        "held": {k: n for k, n in held.items() if n},
         "states": {m.slug: m.state.value for m in missions},
         "now": flow_status(now, running, {m.slug: m.topic for m in missions}),
     }
@@ -1175,7 +1180,8 @@ def flow_strip(state: dict) -> str:
     page (and stacks it on a narrow screen), and the pixel researchers stand on its tiles."""
     auto = settings.auto_mode()
     steps, lit = flow_steps(auto), {e["step"]: settings.seat_worker(e["worker"]) for e in state["working"]}
-    track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you", auto=auto)
+    track = flowchart.track(lit, state["waiting"], state["parked"], review_href="/#needs-you", auto=auto,
+                            held=state.get("held"))
     lab = " data-lab" if settings.animations() else ""
     working = json.dumps([{k: e[k] for k in ("worker", "step", "slug")} for e in state["working"]])
     attrs = f'data-shape="{",".join(k + ("*" if kind == "auto" else "") for k, kind, _ in steps)}" ' \
