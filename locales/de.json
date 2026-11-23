@@ -1239,5 +1239,18 @@
  "Hazard tank": "Gefahrgutbehälter",
  "Power cell": "Energiezelle",
  "Smokestack": "Schornstein",
- "Jet pack": "Jetpack"
+ "Jet pack": "Jetpack",
+ "Any file in {folder} shows up here. Kept on this machine.": "Jede Datei in {folder} erscheint hier. Bleibt auf diesem Rechner.",
+ "Copy to edit": "Zum Bearbeiten kopieren",
+ "Edit {file} to change it.": "Bearbeite {file}, um es zu ändern.",
+ "Headings not used: {headings}.": "Nicht verwendete Überschriften: {headings}.",
+ "Pick a profile from the list.": "Wähle ein Profil aus der Liste.",
+ "Primary sources": "Primärquellen",
+ "Profile": "Profil",
+ "Profile copied and in use. Edit the file named under Profile.": "Profil kopiert und in Gebrauch. Bearbeite die Datei, die unter Profil steht.",
+ "Profile saved. Applies at the next agent step.": "Profil gespeichert. Gilt ab dem nächsten Agentenschritt.",
+ "Researcher": "Rechercheur",
+ "The words the agents use for what kind of desk this is. The checks are the same in every profile.": "Die Worte, mit denen die Agenten beschreiben, was für eine Redaktion dies ist. Die Prüfungen sind in jedem Profil gleich.",
+ "Uses the investigative profile's words for: {blocks}.": "Verwendet die Worte des investigativen Profils für: {blocks}.",
+ "applies at the next agent step": "gilt ab dem nächsten Agentenschritt"
 }

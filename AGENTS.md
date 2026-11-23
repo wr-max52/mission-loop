@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 919 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 929 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -122,6 +122,23 @@ The written issue is what Will approves; nothing after it waits on him until the
   "Mission Loop"), a tagline (under the index's heading and as the feeds' description) and an About statement (its
   paragraphs open the About page, else the built-in line). Saving redraws every published page, the index, the About
   page and the feeds (`orchestrator.refresh_site`). Nothing is stored at the defaults.
+- Desk profiles (`desk_profiles.py`, #122): the words that say what kind of desk this is live in files, not in the
+  prompts. A profile is `profiles/<name>.md` with a `## ` heading per block (`desk_profiles.BLOCKS`): Desk (what the
+  finder and the Theorist work for, "an independent investigative desk"), Researcher (the search prompt's opening
+  lines), Primary sources (the researcher's rule on which primary material to go beneath the coverage for), Writer
+  (the writer's opening line) and Rater (what the rater counts as a credible source). Text before the first block is
+  for people: the `# ` title names it in the picker and the first paragraph is its hint. Built in: investigative
+  (the default, today's words exactly; `tests/fixtures/investigative_prompts.json` holds every template as it was and
+  `tests/test_profiles.py` checks each prompt is byte for byte the same), explainer, literature review and market
+  scan. Settings → Research → Profile picks one (saved as `profile` in settings.json only when not investigative;
+  `settings.profile()`); "Copy to edit" copies the one in use to `data/profiles/my-<name>.md` (`my-<name>-2` if taken),
+  switches to the copy and names its file. Any `data/profiles/<name>.md` (lowercase letters, digits and dashes, so a
+  name never leaves the folder; a built-in's name is ignored) shows up in the picker; a block it leaves out or leaves
+  empty uses investigative's, and the page says which, and lists headings that are no block. The prompts are built
+  when each agent step starts (`researcher.prompt`, `finder.prompt`, `theorist.prompt`, `writer.prompt`,
+  `rater.messages`), so a switch applies at the next step. Only those words change: the source check, the article
+  check, "It is possible that", 3 supporting sites, the rating bar and every other rule in the prompts are in the code
+  and the same in every profile. The board turn's prompt and Researcher Chat don't use a profile.
 - `MISSION_LOOP_STUBS=1` runs every agent on stubs (no Ollama, no network) and turns the 1F916 and Bluesky channels off.
 - Specs for how it was built: `milestone1.md`, `milestone2.md`.
 
@@ -735,7 +752,7 @@ the Published page. Published articles are not listed there, only the Published 
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
 order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
-between looks for work, Model providers, Research (web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
+between looks for work, Model providers, Research (the desk profile, web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
 channel (1F916, the same `f916.register` as the CLI; Bluesky; custom); a fresh clone needs no settings. `ui.py`

@@ -1239,5 +1239,18 @@
  "Hazard tank": "危险品罐",
  "Power cell": "能量电池",
  "Smokestack": "烟囱",
- "Jet pack": "喷气背包"
+ "Jet pack": "喷气背包",
+ "Any file in {folder} shows up here. Kept on this machine.": "{folder} 中的任何文件都会显示在这里。只保存在本机。",
+ "Copy to edit": "复制以编辑",
+ "Edit {file} to change it.": "编辑 {file} 即可修改。",
+ "Headings not used: {headings}.": "未使用的标题：{headings}。",
+ "Pick a profile from the list.": "请从列表中选择一个配置。",
+ "Primary sources": "一手资料",
+ "Profile": "配置",
+ "Profile copied and in use. Edit the file named under Profile.": "配置已复制并启用。请编辑“配置”下列出的文件。",
+ "Profile saved. Applies at the next agent step.": "配置已保存。从下一个智能体步骤起生效。",
+ "Researcher": "研究员",
+ "The words the agents use for what kind of desk this is. The checks are the same in every profile.": "智能体用来描述这是什么样的编辑部的措辞。每个配置的检查都相同。",
+ "Uses the investigative profile's words for: {blocks}.": "以下部分使用调查配置的措辞：{blocks}。",
+ "applies at the next agent step": "从下一个智能体步骤起生效"
 }

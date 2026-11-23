@@ -23,7 +23,7 @@ MAX_NEW_MISSIONS new ones, MIN_EPIC_MISSIONS in all, and only while no other pro
 import asyncio, math, re
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
-import board, claim_tags, library, settings, store, trail
+import board, claim_tags, desk_profiles, library, settings, store, trail
 from contracts import (Mission, State, ResearchBrief, Article, CLAIM_TAGS, COMBINABLE, VERDICTS, epic_title, is_open,
                        words)
 from agents import llm
@@ -60,7 +60,7 @@ STAGES = {State.QUEUED: "queued", State.RESEARCHING: "researching", State.BRIEF_
           State.AWAITING_COMMENTS: "writing next", State.WRITING: "writing", State.ARTICLE_READY: "article in review",
           State.DONE: "published", State.PARKED: "parked", State.COMBINED: "combined", State.DEAD_LEAD: "dead lead"}
 
-SYSTEM = """You are the Theorist of an independent investigative desk: its mastermind. You do not research or
+SYSTEM = """You are the Theorist of {the_desk}: its mastermind. You do not research or
 write stories. You step back, look across everything the desk has done and is doing, and see what nobody
 working on a single mission can see.
 {today}
@@ -275,7 +275,8 @@ def prompt(line: str, history: list[dict], missions: list[Mission], now=None) ->
     today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
     return SYSTEM.format(today=today, patterns=MAX_PATTERNS, questions=MAX_QUESTIONS, max_line=MAX_LINE,
                          members=MAX_MEMBERS, links=MAX_LINKS, dead=MAX_DEAD, tags=MAX_TAGS,
-                         line=line, history=history_text(history), desk=desk_text(missions))
+                         line=line, history=history_text(history), desk=desk_text(missions),
+                         the_desk=desk_profiles.block("desk"))
 
 # ---------- what code holds it to ----------
 
