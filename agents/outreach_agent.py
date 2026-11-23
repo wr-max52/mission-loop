@@ -54,12 +54,8 @@ When {n} people have been asked, or nobody else fits, stop calling tools and rep
 {asked}"""
 
 class OutreachGuard(Guard):
-    """The search's Guard, plus: an email address the run never saw on a page or in a search result is refused
-    before send_outreach runs, and the agent is told to find one first."""
-    def __init__(self, tool_names: list[str]):
-        super().__init__(tool_names)
-        self.seen = ""                     # every tool result so far, lower-cased
-
+    """The search's Guard, plus: an email address the run never saw on a page or in a search result (the Guard's
+    seen record) is refused before send_outreach runs, and the agent is told to find one first."""
     def refuse(self, name: str, args: dict) -> str | None:
         if name == "send_outreach" and str(args.get("channel", "")).strip().lower() == "email":
             address = str(args.get("address", "")).strip().removeprefix("mailto:").lower()
@@ -70,8 +66,8 @@ class OutreachGuard(Guard):
         return super().refuse(name, args)
 
     def explain(self, name: str, args: dict, result: str) -> str:
-        if name != "send_outreach":
-            self.seen += "\n" + result.lower()
+        if name == "send_outreach":        # our own tool's reply shows no one's address
+            return result
         return super().explain(name, args, result)
 
 def _asked(done: list[OutreachRecord]) -> str:

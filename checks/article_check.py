@@ -43,6 +43,36 @@ def quote_problem(where: str, q: str, allowed: list[tuple[str, str]]) -> str | N
     return (f"{where} quotes words not found in any source quote: \"{q[:80]}\" (best match {best:.0f}%).{hint} "
             "Quote exactly or paraphrase without quotation marks")
 
+MD_LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]*)\)")     # [text](address)
+BARE = re.compile(r"(?:https?://|www\.)[^\s<>\]]*[^\s<>\].,;:!?'\"”’)]")   # an address, without the punctuation after it
+EMPTY = re.compile(r"[(\[]\s*(?:(?:see|at|via|source|from|here)\s*:?\s*)?[)\]]", re.I)  # "( )", "(see )" left behind
+
+def strip_links(p: str, ids: set[str]) -> str:
+    """A paragraph with its links taken out: [text](address) keeps its text (a citation like [s1](...) stays a
+    citation), a bare address goes, and the brackets or "see" it leaves behind go with it."""
+    out = MD_LINK.sub(lambda m: f"[{m.group(1)}]" if m.group(1).strip() in ids else m.group(1), p)
+    out = EMPTY.sub("", BARE.sub("", out))
+    out = re.sub(r"\s+([.,;:!?])", r"\1", out)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+def settle_section(sec: Section, brief: ResearchBrief) -> tuple[Section, list[str]]:
+    """Code's fixes for a section still failing after its fix rounds: links taken out of each cited paragraph, and a
+    paragraph with no citation dropped while the section keeps another. Returns the section and what was done."""
+    ids, fixes, linked, paragraphs = {s.id for s in brief.sources}, [], 0, []
+    for p in sec.paragraphs:
+        clean = strip_links(p, ids) if URL.search(p) and cited_ids(p) else p
+        linked += clean != p
+        if clean:
+            paragraphs.append(clean)
+    if linked:
+        fixes.append(f"took links out of {linked} paragraph{'s' if linked > 1 else ''}")
+    cited = [p for p in paragraphs if cited_ids(p)]
+    if cited and len(cited) < len(paragraphs):
+        n = len(paragraphs) - len(cited)
+        fixes.append(f"dropped {n} uncited paragraph{'s' if n > 1 else ''}")
+        paragraphs = cited
+    return sec.model_copy(update={"paragraphs": paragraphs}), fixes
+
 def paragraph_problems(where: str, p: str, ids: set[str], allowed: list[tuple[str, str]]) -> list[str]:
     problems = []
     cited = cited_ids(p)

@@ -125,3 +125,15 @@ def test_the_review_shows_the_rating():
     assert "Rated 24/30</strong> by the Research Assistant" in page and "Credibility of the sources" in page
     assert "Rated 24/30 by the Research Assistant (claim and logic 8, intrigue 8, sources 8)." in page
     assert "Rated 24/30" in client.get("/").text                     # on the review card under Needs you
+
+def test_what_code_fixed_in_the_article_is_on_the_history_line(monkeypatch):
+    m = writing()
+    def write(m, brief, records):                                   # the writer took a link out of one section
+        from contracts import ArticleDraft, ArticlePlan, PlannedSection
+        plan = ArticlePlan(title="t", dek="d", sections=[PlannedSection(heading=h, point="p") for h in "ABC"])
+        m.article_draft = ArticleDraft(plan=plan,
+                                       fixes=["'Finding': took links out of 1 paragraph"])
+        return stubs.write(m, brief, records)
+    monkeypatch.setattr(agents, "write", write)
+    note = orchestrator.step(m, T0)
+    assert "passed check on attempt 1 (code 'Finding': took links out of 1 paragraph); the rating is next" in note

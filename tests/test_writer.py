@@ -155,6 +155,30 @@ async def test_a_section_citing_a_source_by_its_url_is_given_the_id(monkeypatch,
     assert "[s1]" in a.sections[0].paragraphs[0] and "https://" not in a.sections[0].paragraphs[0]
     assert len(seen) == 4                  # fixed by code, so no round of feedback was needed
 
+async def test_after_its_last_round_code_takes_out_links_and_drops_uncited_paragraphs(monkeypatch, m):
+    cited = "The record shows heat pumps hold up in the cold [s1] (see https://x.example.com/a). " * 12
+    messy = Section(heading="Finding", paragraphs=[cited, "Nobody cites this paragraph at all."])
+    fake(monkeypatch, [PLAN, messy, messy, messy, section("The record"), section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert a.sections[0].paragraphs == [("The record shows heat pumps hold up in the cold [s1]. " * 12).strip()]
+    assert m.article_draft.fixes == ["'Finding': took links out of 1 paragraph", "'Finding': dropped 1 uncited paragraph"]
+    from checks import article_check
+    assert article_check.check_article(m, BRIEF, a) == (True, "")                 # the article now passes
+
+async def test_a_section_left_with_no_cited_paragraph_is_not_settled(monkeypatch, m):
+    bare = Section(heading="Finding", paragraphs=["Nobody cites this, see www.x.example.com."])
+    fake(monkeypatch, [PLAN, bare, bare, bare, section("The record"), section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert a.sections[0] == bare and m.article_draft.fixes == []          # the article check still has the last word
+
+def test_links_come_out_and_citations_stay():
+    ids = {"s1", "s2"}
+    strip = writer.article_check.strip_links
+    assert strip("Pumps work [s1] (see https://x.example.com/a?b=1).", ids) == "Pumps work [s1]."
+    assert strip("The [utility report](https://u.example.com) says so [s2].", ids) == "The utility report says so [s2]."
+    assert strip("It held up [s1](https://a.example.com).", ids) == "It held up [s1]."
+    assert strip("Read more at www.x.example.com, then [s2].", ids) == "Read more at, then [s2]."
+
 # --- the claim at the top, the story first, the fine print last, bold key words -----------------------------
 
 async def test_the_article_carries_the_plans_claim_box(monkeypatch, m):

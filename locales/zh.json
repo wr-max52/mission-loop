@@ -1132,5 +1132,10 @@
  "Searches by meaning. Good for papers and essays.": "按语义搜索。适合查找论文和文章。",
  "Google results. Cheap per search.": "Google 搜索结果。每次搜索很便宜。",
  "Free, no key. Unofficial, so it can be rate-limited.": "免费，无需密钥。非官方接口，可能会被限速。",
- "Free news search, no key. Covers about the last 3 months.": "免费新闻搜索，无需密钥。覆盖约最近 3 个月。"
+ "Free news search, no key. Covers about the last 3 months.": "免费新闻搜索，无需密钥。覆盖约最近 3 个月。",
+ "Merge into": "合并到",
+ "Epic merged.": "专题已合并。",
+ "Epic deleted.": "专题已删除。",
+ "A worker is busy with one of its missions. Try again once that task ends.": "有工作者正在处理其中一个任务。请在该任务结束后再试。",
+ "That epic still has missions. Merge it into another instead.": "该专题仍有任务。请将其合并到另一个专题。"
 }

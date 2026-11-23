@@ -140,9 +140,9 @@ def get_epic(slug: str) -> Epic | None:
     return Epic(**dict(row)) if row else None
 
 def find_epic(name: str) -> Epic | None:
-    """An epic by slug or by title, ignoring case and spacing."""
-    name = " ".join(name.split()).lower()
-    return next((e for e in all_epics() if name in (e.slug, e.title.lower())), None) if name else None
+    """An epic by slug or by title, ignoring case and spacing (tech_influence finds "Tech influence")."""
+    names = {n for n in (" ".join(name.split()).lower(), epic_title(name).lower()) if n}
+    return next((e for e in all_epics() if {e.slug, e.title.lower()} & names), None) if names else None
 
 def save_epic(e: Epic):
     with conn() as c:

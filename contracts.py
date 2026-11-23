@@ -123,8 +123,11 @@ class Epic(BaseModel):
 MAX_EPIC_WORDS = 4
 
 def epic_title(text: str) -> str:
-    """The title cleaned to one line, or "" if it isn't a usable epic title (1 to MAX_EPIC_WORDS words)."""
-    title = " ".join(text.split()).strip(" .,:;-")
+    """The title cleaned to one line, or "" if it isn't a usable epic title (1 to MAX_EPIC_WORDS words). Underscores
+    are spaces, and an all-lower-case title gets a capital first letter: tech_influence -> "Tech influence"."""
+    title = " ".join(text.replace("_", " ").split()).strip(" .,:;-")
+    if title.islower():
+        title = title[0].upper() + title[1:]
     return title if title and len(title.split()) <= MAX_EPIC_WORDS and len(title) <= 48 else ""
 
 class MissionIdea(BaseModel):
@@ -251,6 +254,7 @@ class ArticleDraft(BaseModel):
     """What the writer has so far: its plan, and the sections written and checked, in plan order."""
     plan: ArticlePlan
     sections: list[Section] = []
+    fixes: list[str] = []                  # what code cleaned up in the sections as they stand ("'Heading': ...")
 
 RATING_FACTORS = {                         # ArticleRating field -> what it rates, as shown to people
     "logic": "Strength of the claim and its logic",

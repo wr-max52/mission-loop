@@ -194,9 +194,10 @@ def _section_ask(brief, records, plan: ArticlePlan, i: int, previous: Section | 
                           revise=revise, quotes=quotes or "(none)", words=words)
 
 async def _section(base, brief, records, plan: ArticlePlan, done: list[Section], i: int,
-                   previous: Section | None = None, notes: list[str] = ()) -> Section:
+                   previous: Section | None = None, notes: list[str] = ()) -> tuple[Section, list[str]]:
     """One section, checked as soon as it is written; up to SECTION_ROUNDS - 1 rounds of fixes, then the
-    version with the fewest problems is kept and the article check has the last word."""
+    version with the fewest problems is kept, code takes out what it safely can (article_check.settle_section),
+    and the article check has the last word. Returns the section and what code fixed in it."""
     ps = plan.sections[i]
     trail.record("note", f"article step {i + 2}: section {i + 1} of {len(plan.sections)}, {ps.heading}")
     so_far = "".join(f"\n## {s.heading}\n" + "\n\n".join(s.paragraphs) for s in done)
@@ -218,7 +219,14 @@ async def _section(base, brief, records, plan: ArticlePlan, done: list[Section],
             trail.record("note", f"section {i + 1}: {len(problems)} problem(s); asking for a fix")
             messages += [{"role": "assistant", "content": sec.model_dump_json()},
                          {"role": "user", "content": _fix(problems, "the section")}]
-    return best[0]
+    sec, problems = best
+    if problems:                           # what code can fix itself: stray links, uncited paragraphs
+        settled, fixes = article_check.settle_section(sec, brief)
+        left = article_check.section_problems(settled, brief, records, possibilities, ps.counterpoint)
+        if fixes and len(left) < len(problems):
+            trail.record("note", f"section {i + 1}: code {'; '.join(fixes)}")
+            return settled, [f"'{ps.heading}': {f}" for f in fixes]
+    return sec, []
 
 def _to_redo(m: Mission, draft: ArticleDraft) -> dict[int, list[str]]:
     """After a failed article check: the saved sections to write again, each with its own problems. A
@@ -255,10 +263,12 @@ async def run_writer(m: Mission, brief: ResearchBrief, records: list[OutreachRec
             if stopping.requested():       # don't start a section only for the grace to cut it off
                 raise stopping.Interrupted(None)
             previous = sections[i] if i < len(sections) else None
-            sec = await _section(base, brief, records, draft.plan, sections[:i], i, previous, redo.get(i, []))
+            sec, fixed = await _section(base, brief, records, draft.plan, sections[:i], i, previous, redo.get(i, []))
             sections[i:i + 1] = [sec]
             redo.pop(i, None)
-            draft = m.article_draft = draft.model_copy(update={"sections": list(sections)})
+            tag = f"'{draft.plan.sections[i].heading}': "
+            fixes = [f for f in draft.fixes if not f.startswith(tag)] + fixed   # this section's are its latest
+            draft = m.article_draft = draft.model_copy(update={"sections": list(sections), "fixes": fixes})
             checkpoint.save(m)             # every finished section is on disk before the next one starts
     except stopping.Interrupted:
         raise stopping.Interrupted(None)   # the plan and finished sections are on the mission; writing resumes there
