@@ -693,7 +693,7 @@ replies) only while outreach is on and a channel is ready;
   `assets/board.js`, institution satire and light memes, never a real person, one line each and not translated,
   since a stamp is artwork; the stamp, stripes, card, paper, ink and handwriting are drawn from the slug, so a
   mission always looks the same), and an epic is the postcard's front (#145): "Greetings from" over a minimalist
-  1920s Art Deco scene with the epic's name in big poster letters, its mission count, and a Proposed stamp while it
+  1920s Art Deco scene with the epic's name in big poster letters (shrunk until they fit the card as drawn, whatever the language: `fitFront` measures them, so a word never breaks), its mission count, and a Proposed stamp while it
   waits. The scenes are SVG files drawn in code (`assets/postcards/`, flat shapes, under 6 KB each), named in
   `SCENES` in `assets/board.js` (a new one is a file and a line); each epic, oldest first, takes its slug's scene
   unless an older epic has it, so ten epics get ten scenes and they repeat only past that; or hologram

@@ -4491,9 +4491,9 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap.cards-magnets .front::before { content:""; position:absolute; inset:0;    /* a soft band so the words read on any scene */
   background:linear-gradient(180deg, transparent 18%, rgba(20,30,55,.32) 42% 62%, transparent 85%); }
 .board-wrap.cards-magnets .front > span { position:relative; }
-.board-wrap.cards-magnets .front .greet { font:italic 400 calc(17px * var(--s))/1 "Snell Roundhand", "Brush Script MT", "Segoe Script", cursive;
+.board-wrap.cards-magnets .front .greet { white-space:nowrap; font:italic 400 calc(17px * var(--s) * var(--gfit, 1))/1 "Snell Roundhand", "Brush Script MT", "Segoe Script", cursive;
   color:#fff8e6; text-shadow:0 1px 2px rgba(0,0,0,.6); margin-bottom:calc(2px * var(--s)); }
-.board-wrap.cards-magnets .front .place { max-width:94%; overflow-wrap:break-word; text-transform:uppercase; letter-spacing:.03em;
+.board-wrap.cards-magnets .front .place { max-width:92%; overflow-wrap:normal; word-break:normal; text-transform:uppercase; letter-spacing:.03em;
   font:800 calc(34px * var(--s) * var(--fit, 1))/.92 "Futura", "Avenir Next Condensed", "Arial Narrow", Impact, system-ui, sans-serif; font-stretch:condensed;
   color:#fff3d1; -webkit-text-stroke:calc(.8px * var(--s)) #1d2b4a;
   text-shadow:1px 1px 0 #1d2b4a, 2px 2px 0 #1d2b4a, 3px 3px 0 #e0664a, 4px 4px 0 #e0664a, 5px 6px 6px rgba(0,0,0,.45); }

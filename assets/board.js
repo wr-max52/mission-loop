@@ -125,9 +125,7 @@
   }
   function magnetHtml(n) {                         // missions go from notebook paper to word tiles to a postcard's back
     if (n.kind === "epic") {                       // the postcard's front: greetings from the epic, over an Art Deco scene
-      const words = String(n.title).split(/\s+/), long = Math.max(...words.map(w => w.length)), all = String(n.title).length;
-      const fit = Math.min(1, 10 / long, all > 28 ? .62 : all > 18 ? .8 : 1);   // the big letters shrink to stay whole
-      return `<div class="front" style="--fit:${fit.toFixed(2)};background-image:url('/assets/postcards/${sceneOf(n.slug)}.svg')">`
+      return `<div class="front" style="background-image:url('/assets/postcards/${sceneOf(n.slug)}.svg')">`   // fitFront sizes its words
         + `<span class="greet">${tr("Greetings from")}</span><span class="place">${esc(n.title)}</span>`
         + `<span class="n">${esc(n.count_text)}</span>${n.proposed ? `<span class="proposed">${tr("Proposed")}</span>` : ""}</div>`;
     }
@@ -151,6 +149,23 @@
     const tiles = words.map((w, i) => `<i style="--r:${((i * 53) % 7) - 3}deg">${esc(w)}</i>`).join("");
     const tag = n.dead ? tr("Dead lead") : n.paper === "parked" ? tr("Parked") : n.faded ? tr("Combined") : n.stage;
     return `<div class="tiles">${tiles}<i class="tag">${esc(tag)}</i></div>${live}${grip}`;
+  }
+  function fitFront(el) {                          // a postcard's words shrink until they fit it, measured as drawn, so a
+    const front = el.querySelector(".front");      // long word, a long title or another language's "Greetings from"
+    if (!front || !front.clientWidth) return;      // never runs off the card or under its count. --s scales the whole
+    const greet = front.querySelector(".greet"), place = front.querySelector(".place"), n = front.querySelector(".n");
+    let gfit = 1, fit = 1;                         // card, so the ratios hold at any size
+    const set2 = () => { front.style.setProperty("--gfit", gfit.toFixed(3)); front.style.setProperty("--fit", fit.toFixed(3)); };
+    set2();
+    const room = front.clientWidth * .92;
+    if (greet.scrollWidth > room) { gfit = room / greet.scrollWidth; set2(); }
+    for (let i = 0; i < 8; i++) {                  // wrapping changes as the letters shrink, so measure again
+      const tall = front.clientHeight - 2 * (n ? n.offsetHeight + 4 : 0) - greet.offsetHeight;
+      const w = room / Math.max(1, place.scrollWidth), h = tall / Math.max(1, place.offsetHeight);
+      const k = Math.min(w, h);
+      if (k >= 1) break;
+      fit *= Math.max(.5, k * .98); set2();
+    }
   }
   function noteHtml(n) {
     if (data.style && data.style.cards === "magnets") return magnetHtml(n);
@@ -179,6 +194,7 @@
         const visitor = el.querySelector("canvas.lab-stage");      // a researcher standing on it stays
         el.innerHTML = html; el.dataset.html = html;
         if (visitor) el.appendChild(visitor);
+        el.refit = true;
       }
       if (n.live && data.animations) {                              // assets/researchers.js sends someone over
         el.dataset.lab = "busy";
@@ -192,6 +208,7 @@
         set(el, "left", n.x + "px"); set(el, "top", n.y + "px"); set(el, "--s", String(n.size));
       }
       set(el, "--r", (n.kind === "unsorted" ? 0 : tilt(n.id)) + "deg");
+      if (el.refit) { el.refit = false; fitFront(el); }            // measured once it has its size and classes
       el.pinH = null;                                               // its height may have changed: measure again
     }
     for (const [id, el] of els) if (!seen.has(id)) { el.remove(); els.delete(id); }
@@ -538,7 +555,7 @@
   window.addEventListener("resize", () => { fill(); placePop(); });
   window.addEventListener("load", () => { if (window.Researchers) window.Researchers.rescan(); });
   if (document.fonts) document.fonts.ready.then(() => {   // a late font changes the notes' heights, so their pins
-    for (const el of els.values()) el.pinH = null;
+    for (const el of els.values()) { el.pinH = null; fitFront(el); }
     strings();
   });
   setInterval(poll, data.poll || 4000);
