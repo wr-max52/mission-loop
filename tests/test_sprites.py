@@ -2,6 +2,7 @@
 import json, shutil, subprocess
 from pathlib import Path
 import pytest
+import avatars
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "assets" / "researchers.js"
@@ -77,6 +78,42 @@ def test_a_bad_spec_says_what_to_fix(patch, says):
 def test_register_keeps_built_in_names_and_tidy_keys():
     r = js("""R => [R.registerSprite("pip", EX).errors, R.registerSprite("Custom Sprite!", EX).errors]""".replace("EX", json.dumps(EXAMPLE)))
     assert "built-in" in r[0][0] and "lowercase" in r[1][0]
+
+# ---------- the cyborg crew (assets/cyborgs.json) ----------
+
+CYBORGS = json.loads((ROOT / "assets" / "cyborgs.json").read_text())
+
+def test_every_built_in_has_a_cyborg_that_follows_the_rulebook():
+    assert sorted(CYBORGS) == sorted(f"{k}-borg" for k in avatars.BUILT_IN)
+    assert all(spec["base"] == key[:-5] and spec["metal"] and spec["glow"] and spec["maps"] for key, spec in CYBORGS.items())
+    errors = js("R => Object.fromEntries(Object.entries(BORGS).map(([k, s]) => [k, R.validateSprite(s).errors]))".replace("BORGS", json.dumps(CYBORGS)))
+    assert all(e == [] for e in errors.values()), errors
+
+def test_a_cyborg_keeps_its_original_s_clothes_crew_and_quirk():
+    r = js("""R => { R.registerSprite("ben-borg", BORG); const a = R.makeLook("ben", 5), b = R.makeLook("ben-borg", 5);
+               return { same: ["top", "pants", "shoes", "hair", "outfit", "worker", "legs", "torso"].every(k => a[k] === b[k]),
+                        skin: b.skin, metal: b.metal, eye: b.eye, base: b.base, rosy: b.rosy, human: [a.metal, a.glow] }; }"""
+           .replace("BORG", json.dumps(CYBORGS["ben-borg"])))
+    assert r == {"same": True, "skin": CYBORGS["ben-borg"]["metal"], "metal": CYBORGS["ben-borg"]["metal"],
+                 "eye": CYBORGS["ben-borg"]["glow"], "base": "ben", "rosy": False, "human": [None, None]}
+
+def test_kenji_borg_is_black_with_grey_armor_and_red_lights():
+    k = CYBORGS["kenji-borg"]
+    dark = lambda c: max(int(c[i:i + 2], 16) for i in (1, 3, 5)) < 48
+    assert all(dark(k[f]) for f in ("metal", "hair", "top", "pants", "shirt")) and k["glow"] == "#ff2a2a"
+    pals = [m["pal"] for m in k["maps"]]
+    assert all(p["r"] == "#ff2a2a" for p in pals)                                    # red buttons on every plate
+    assert all(len({p[c][1:3], p[c][3:5]}) == 1 or abs(int(p[c][1:3], 16) - int(p[c][5:7], 16)) < 24 for p in pals for c in "ieE")   # grey armor
+
+def test_cyborg_sprites_send_each_cyborg_in_place_of_its_original():
+    r = js("R => ({ borgs: R.CYBORGS.length, on: R.enabled(), pi: R.crewOf('pi'), assistant: R.crewOf('assistant') })",
+           {"cyborgs": CYBORGS, "add": {"custom-sprite-1": EXAMPLE}, "off": ["pip"]})
+    assert r["borgs"] == 12
+    assert sorted(r["on"]) == sorted([f"{k}-borg" for k in avatars.BUILT_IN if k != "pip"] + ["custom-sprite-1"])   # pip is off, so pip-borg is too
+    assert "kenji-borg" in r["pi"] and "kenji" not in r["pi"] and "mei-borg" in r["assistant"]
+
+def test_without_the_switch_no_cyborg_is_in_the_cast():
+    assert js("R => [R.CYBORGS, R.CAST.length]") == [[], 12]
 
 def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
     """The About page's scene (#139): every beat is one the director knows, on a step the strip shows; played with

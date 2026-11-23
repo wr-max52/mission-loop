@@ -297,6 +297,13 @@ def animations() -> bool:
 def set_animations(on: bool) -> None:
     save(animations="" if on else "off")   # nothing stored while on, so a fresh install has them
 
+def cyborgs() -> bool:
+    """Cyborg sprites: each pixel researcher's cyborg (assets/cyborgs.json) visits in its place. Off unless switched on."""
+    return saved().get("cyborgs") == "on"
+
+def set_cyborgs(on: bool) -> None:
+    save(cyborgs="on" if on else "")       # nothing stored while off
+
 # The UI's language (i18n.py). English is the default and stores nothing; the published site stays English.
 LANGUAGES = {"en": "English", "zh": "中文", "fr": "Français", "es": "Español", "pt": "Português", "de": "Deutsch"}
 LANGUAGE_NAMES = {"en": "English", "zh": "Chinese", "fr": "French", "es": "Spanish", "pt": "Portuguese",
