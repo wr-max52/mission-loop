@@ -112,6 +112,7 @@ const memory = {
 // ---------- the cast ----------
 
 const INK = "#1d1b22", MOUTH = "#7a3434", WHITE = "#ffffff", BLUSH = "#ff8f9e";
+const LINE = INK, LIPS = MOUTH;                  // drawFace swaps its own ink and mouth color for a cyborg's
 const SKIN = ["#ffe1c6", "#f5cba3", "#e8b38a", "#d49a6a", "#b97c4e", "#9a6038", "#7a4628", "#58321d"];
 const BOOKS = ["#d63a3a", "#1f8fc4", "#1fa67f", "#f0a030", "#a02c7a", "#5a55c8"];
 const NATURAL_HAIR = ["#17110e", "#2e1f17", "#4b3021", "#6e4527", "#93602f", "#c08d4a", "#a3a3a3"];
@@ -178,9 +179,17 @@ function makeLook(kind, seed) {
   const one = v => { const c = Array.isArray(v) ? pick(r, v) : v; return typeof c === "string" && c[0] === "#" ? vivid(c) : c; };
   const a = { kind, seed, name: (LINES.names || {})[kind] || t.name, fav: t.fav || {}, worker: t.worker };
   a.skin = vivid(SKIN[r() < 0.7 ? one(t.skin) : Math.floor(r() * SKIN.length)], 1.18);
+  const raw = v => Array.isArray(v) ? pick(r, v) : v;            // a metal or a light is used as given, never made more vivid
+  a.metal = raw(t.metal) || null; a.glow = raw(t.glow) || null;  // a cyborg: metal where skin would be, eyes that glow
+  if (a.metal) a.skin = a.metal;
   const deep = lum(a.skin) < 125;                                // darker skin: warmer shade, eyes that still read
   a.skinD = mix(shade(a.skin, 0.84), "#8a2f3c", 0.14); a.skinL = mix(a.skin, "#fff3dc", deep ? 0.3 : 0.45);
   a.cheek = mix(a.skin, "#ff5a6e", deep ? 0.2 : 0.28);
+  if (a.metal) {                                                 // metal shades cool and shines; a mouth is a seam in it
+    const black = lum(a.metal) < 60;
+    a.skinD = black ? shade(a.metal, 0.6) : shade(a.metal, 0.72); a.skinL = black ? mix(a.metal, "#aab4c8", 0.42) : mix(a.metal, "#ffffff", 0.5);
+    a.mouthC = black ? mix(a.metal, "#aab4c8", 0.6) : mix(shade(a.metal, 0.4), INK, 0.35);
+  }
   a.hair = one(t.hair) || "#17110e";
   const dark = lum(a.hair) < 48;                                 // black hair shines blue, the manga way
   a.hairD = dark ? shade(a.hair, 0.55) : shade(a.hair, 0.7); a.hairL = dark ? mix(a.hair, "#7f95d6", 0.42) : shade(a.hair, 1.32);
@@ -188,9 +197,10 @@ function makeLook(kind, seed) {
   a.eye = pick(r, IRIS); a.lash = !!t.lash; a.lids = !!t.lids; a.bushy = !!t.bushy; a.ahoge = !!t.ahoge;
   if (deep) a.eye = "#3a2114";                                   // dark eyes read best on dark skin
   a.eyeD = mix(a.eye, INK, deep ? 0.75 : 0.5); a.eyeW = deep ? a.skinL : "#ffffff"; a.lashC = INK;
+  if (a.glow) { a.eye = a.eyeD = a.glow; a.eyeW = mix(a.glow, "#ffffff", 0.65); a.lid = mix(shade(a.glow, 0.5), INK, 0.3); }   // lit all through, lids that still show on black
   a.brow = t.brow || "flat"; a.mouth = t.mouth || "none"; a.grin = !!t.grin;
   a.freckles = !!t.freckles; a.pencil = !!t.pencil; a.frame = one(t.frame) || INK;
-  a.rosy = a.worker !== "pi" || !!t.lash;                        // the young ones, and anyone with lashes, get rosy cheeks
+  a.rosy = !a.metal && (a.worker !== "pi" || !!t.lash);                       // the young ones, and anyone with lashes, get rosy cheeks
   a.nose = !!a.facial;                                           // a mustache needs a nose to sit under
   a.outfit = t.outfit;
   a.top = one(t.top) || "#7d8691"; a.topD = shade(a.top, 0.78);
@@ -209,7 +219,7 @@ function makeLook(kind, seed) {
   const over = { cap: a.cap, beanie: a.beanie, hardhat: "#e0a800", deerstalker: "#75512f", propeller: "#c79d0a" }[a.head] || a.hair;
   a.fringe = a.head ? 10 : { bob: 8, receding: 13, bigcurly: 9 }[a.style] || 9;
   a.browC = a.bushy ? a.hairL : mix(shade(a.hair, 0.6), a.skin, a.lash ? 0.4 : 0.22);
-  if (Math.abs(lum(a.browC) - lum(a.skin)) < 45) a.browC = deep ? "#120c0c" : shade(a.skin, 0.45);
+  if (Math.abs(lum(a.browC) - lum(a.skin)) < 45) a.browC = a.metal && lum(a.skin) < 60 ? a.skinL : deep ? "#120c0c" : shade(a.skin, 0.45);
   a.browHi = lum(over) < 42 ? mix(over, "#ffffff", 0.32) : shade(over, 0.5);
   a.prop = one(t.prop) || null;
   a.sleeve = { labcoat: a.coat, suit: a.top, hoodie: a.top, sweater: a.top, cardigan: a.top, jacket: a.top,
@@ -517,6 +527,10 @@ function drawHead(P, a, g, p, t) {
   P(-5, y + 3, 12, 7, a.skin); P(-4, y + 2, 10, 1, a.skin); P(-2, y + 1, 7, 1, a.skin); P(-4, y + 10, 10, 1, a.skin); P(-3, y + 11, 8, 1, a.skin);
   if (hair.bald && !hat) { P(-1, y + 12, 4, 1, a.skin); P(-1, y + 11, 5, 1, a.skinL); P(0, y + 12, 2, 1, a.skinL); P(3, y + 10, 2, 1, a.skinL); }
   if (!veil) { P(-5, y + 3, 1, 7, a.skinD); P(-4, y + 2, 2, 1, a.skinD); P(-4, y + 3, 1, 2, a.skinD); P(-2, y + 1, 2, 1, a.skinD); }
+  if (a.metal) {                                                 // plate: a seam behind the face, a rivet on the jaw, a shine on the brow
+    if (!veil) { P(-2, y + 2, 1, 8, a.skinD); P(-4, y + 2, 1, 1, a.skinL); P(-4, y + 8, 1, 1, a.skinL); }
+    P(5, y + 10, 2, 1, a.skinL); P(6, y + 9, 1, 1, a.skinL); P(-1, y + 1, 5, 1, a.skinD);
+  }
   if (veil) art(P, a, HIJAB, -8, y + 14, a.veilPal);
   drawFace(P, a, y, eyes, mouth, p);
   if (!veil) {
@@ -534,7 +548,7 @@ function drawHead(P, a, g, p, t) {
 
 // Eyes are at x 0 and x 4, three rows tall; the mouth sits between and below them.
 function drawFace(P, a, y, eyes, mouth, p) {
-  const e = a.eye, ed = a.eyeD, small = a.face === "round" || a.face === "browline";
+  const e = a.eye, ed = a.eyeD, INK = a.lid || LINE, MOUTH = a.mouthC || LIPS, WHITE = a.glow ? a.eyeW : "#ffffff", small = a.face === "round" || a.face === "browline";
   for (const front of [false, true]) {
     const ex = front ? 4 : 0, out = front ? ex + 2 : ex - 1;
     switch (eyes) {
@@ -558,7 +572,7 @@ function drawFace(P, a, y, eyes, mouth, p) {
   const lip = mix(a.skin, MOUTH, 0.5), line = mix(a.skin, MOUTH, 0.75);
   switch (mouth) {
     case "smile": P(2, y + 3, 1, 1, line); P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, line); break;
-    case "grin": P(2, y + 2, 4, 1, MOUTH); P(3, y + 1, 2, 1, MOUTH); P(3, y + 2, 2, 1, WHITE); break;   // open, teeth showing
+    case "grin": P(2, y + 2, 4, 1, MOUTH); P(3, y + 1, 2, 1, MOUTH); P(3, y + 2, 2, 1, "#ffffff"); break;   // open, teeth showing
     case "o": P(3, y + 1, 2, 2, MOUTH); break;
     case "flat": P(2, y + 2, 3, 1, MOUTH); break;
     case "smirk": P(3, y + 2, 2, 1, MOUTH); P(5, y + 3, 1, 1, line); break;
@@ -3239,7 +3253,7 @@ const PARTS = {
   layer: ["back", "body", "behindHead", "head"],
   icon: Object.keys(ICONS),
 };
-const COLOR_KEYS = ["hair", "top", "shirt", "pants", "shoes", "pack", "tie", "bow", "hijab", "cap", "beanie", "pom", "skirt", "frame"];
+const COLOR_KEYS = ["hair", "top", "shirt", "pants", "shoes", "pack", "tie", "bow", "hijab", "cap", "beanie", "pom", "skirt", "frame", "metal", "glow"];
 const FLAG_KEYS = ["lash", "lids", "bushy", "ahoge", "grin", "freckles", "pencil", "rolled"];
 const ENUM_KEYS = ["worker", "style", "head", "outfit", "face", "facial", "legs", "brow", "mouth"];
 const SPEC_KEYS = new Set(["base", "name", "skin", "prop", "fav", "maps", "propMap", "quirk", ...COLOR_KEYS, ...FLAG_KEYS, ...ENUM_KEYS]);
@@ -3417,6 +3431,16 @@ for (const [key, spec] of Object.entries(SPRITE_CONFIG.add || {})) {   // sprite
   const v = registerSprite(key, spec);
   if (!v.ok) console.warn(`researchers: sprite ${key} skipped:`, v.errors.join("; "));
 }
+// Cyborg sprites (assets/cyborgs.json, the Settings page's switch): each joins in place of the built-in it starts
+// from, which stays home; one whose original is switched off stays home too.
+const CYBORGS = [];
+for (const [key, spec] of Object.entries(SPRITE_CONFIG.cyborgs || {})) {
+  if (ROSTER[key]) continue;                      // a custom sprite already has the name
+  const v = registerSprite(key, spec);
+  if (!v.ok) { console.warn(`researchers: cyborg ${key} skipped:`, v.errors.join("; ")); continue; }
+  CYBORGS.push(key);
+  if (OFF.has(spec.base)) OFF.add(key); else OFF.add(spec.base);
+}
 
 function boot() {
   addEventListener("pagehide", () => stages.forEach(s => s.save()));
@@ -3425,6 +3449,6 @@ function boot() {
   rescan();
 }
 window.Researchers = { stages, crews, guides, guideFor, ROSTER, makeLook, ACTIONS, Stage, FlowStage, Crew, Researcher, rescan, tick, QUIPS,
-  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
+  PARTS, SLOTS, MAP_BOX, PROP_BOX, FACE_BOX, CAST, CYBORGS, SKIN, BUILT_IN: [...BUILT_IN], FLAG_KEYS, COLOR_KEYS, enabled, crewOf, validateSprite, registerSprite, renderSprite, setSpriteEnabled };   // see SPRITES.md
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();

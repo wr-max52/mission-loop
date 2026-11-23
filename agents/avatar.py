@@ -31,7 +31,7 @@ ENUMS = ("worker", "style", "head", "outfit", "face", "facial", "legs", "brow", 
 POSE = ("eyes", "arm", "layer", "icon")
 # The order fields may appear in an answer. Ollama writes a schema's properties in order and can't go back, so each
 # part sits next to its own colors (the hat, then the hat's color), the way a person describes a look.
-ORDER = ("name", "worker", "skin", "style", "hair", "ahoge", "head", "cap", "beanie", "pom", "hijab", "face", "frame",
+ORDER = ("name", "worker", "skin", "metal", "glow", "style", "hair", "ahoge", "head", "cap", "beanie", "pom", "hijab", "face", "frame",
          "facial", "brow", "mouth", "lash", "lids", "bushy", "freckles", "grin", "outfit", "top", "shirt", "tie", "bow",
          "legs", "pants", "skirt", "shoes", "pack", "rolled", "pencil", "prop", "maps", "propMap", "quirk")
 
@@ -49,7 +49,8 @@ How to work:
   and suggest something that fits.
 - reply: one or two friendly sentences saying what you changed (or why not), matching `change` exactly.
 - Colors: `top` is the outfit's main color, `shirt` what shows under it, plus `hair`, `pants`, `shoes`, and the hat's
-  own (`cap`, `beanie`, `pom`, `hijab`) or the glasses' `frame`.
+  own (`cap`, `beanie`, `pom`, `hijab`) or the glasses' `frame`. A robot or cyborg: `metal` (the metal in place of
+  skin) and `glow` (the light its eyes glow with).
 
 Examples (the avatar is a researcher in a lab coat unless its spec says otherwise):
 - "a red beanie and a green hoodie" -> {"refused": false, "change": {"head": "beanie", "beanie": "#c0392b",

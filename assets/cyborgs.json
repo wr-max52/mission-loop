@@ -1,0 +1,184 @@
+{
+  "aris-borg": {
+    "base": "aris", "name": "Dr. Aris-borg", "metal": "#c9973f", "glow": "#ffb238",
+    "maps": [
+      { "layer": "behindHead", "at": [-9, -3], "fps": 3,
+        "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "u": "#c0703a", "U": "#8a4a26" },
+        "frames": [
+          ["..w.", ".w..", "....", "yybB", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb."],
+          [".w..", "..w.", ".w..", "yybB", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb."],
+          ["w...", "....", "..w.", "yybB", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".uU.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb.", ".yb."]
+        ] },
+      { "layer": "back", "at": [-11, 2], "fps": 2,
+        "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "u": "#c0703a", "U": "#8a4a26", "r": "#ff5a3c", "a": "#ffd27a" },
+        "frames": [
+          [".bbb.", "byybB", "byybB", "buuUB", "byrbB", "byybB", ".bBB."],
+          [".bbb.", "byybB", "byybB", "buuUB", "byabB", "byybB", ".bBB."]
+        ] },
+      { "layer": "body", "at": [-5, 5], "fps": 2,
+        "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "r": "#e03131", "e": "#fff7e0" },
+        "frames": [
+          [".yb.", "yerb", "beeB", ".BB."],
+          [".yb.", "yeeb", "breB", ".BB."]
+        ] },
+      { "layer": "head", "at": [-5, 4], "rows": [".B.", "ByB", ".B."], "pal": { "y": "#f3d27a", "B": "#8f6522" } }
+    ]
+  },
+  "aisha-borg": {
+    "base": "aisha", "name": "Aisha-borg", "metal": "#d5dce6", "glow": "#b79cff",
+    "maps": [
+      { "layer": "head", "at": [-3, 10], "fps": 2, "pal": { "v": "#c9b5ff", "i": "#f4f1ff" },
+        "frames": [["v.i.v.i.v"], ["i.v.i.v.i"]] },
+      { "layer": "body", "at": [1, -1], "fps": 4, "pal": { "v": "#e2d6ff", "V": "#8a6fe0" },
+        "frames": [
+          ["v.", "V.", "VV", "v.", "V.", "V.", "vV", "V.", "V.", "v."],
+          ["V.", "v.", "VV", "V.", "v.", "V.", "VV", "v.", "V.", "V."],
+          ["V.", "V.", "vV", "V.", "V.", "v.", "VV", "V.", "v.", "V."]
+        ] }
+    ]
+  },
+  "ben-borg": {
+    "base": "ben", "name": "Ben-borg", "metal": "#b4bcc8", "glow": "#6dff9a", "ahoge": false,
+    "maps": [
+      { "layer": "head", "at": [0, 15], "fps": 2, "pal": { "g": "#6dff9a", "G": "#1f7a45", "E": "#6f7885", "i": "#e6ebf1" },
+        "frames": [[".g.", ".E.", ".E.", "EiE"], [".G.", ".E.", ".E.", "EiE"]] },
+      { "layer": "head", "at": [-4, 4], "rows": ["iE", "Ei"], "pal": { "E": "#6f7885", "i": "#e6ebf1" } },
+      { "layer": "body", "at": [-3, 5], "fps": 2, "pal": { "g": "#6dff9a", "G": "#1f7a45", "E": "#59616e", "a": "#ffb238" },
+        "frames": [
+          ["EEEEE", "EgGaE", "EGgGE", "EEEEE"],
+          ["EEEEE", "EGgGE", "EgGaE", "EEEEE"]
+        ] }
+    ]
+  },
+  "mei-borg": {
+    "base": "mei", "name": "Mei-borg", "metal": "#e6ebf2", "glow": "#5ee1ff",
+    "maps": [
+      { "layer": "head", "at": [-6, 3], "pal": { "E": "#7d8794", "i": "#dfe5ec", "n": "#5ee1ff" },
+        "rows": ["....EiiE", "..Ei....", ".Ei.....", ".E......", ".E......", ".E......", ".E......", ".EE.....", "EinE....", "EnnE....", "EinE....", ".EE....."] },
+      { "layer": "body", "at": [-5, 5], "fps": 2, "pal": { "E": "#7d8794", "n": "#5ee1ff", "i": "#d8f8ff" },
+        "frames": [
+          [".EE.", "EnnE", "EnnE", ".EE."],
+          [".EE.", "EiiE", "EiiE", ".EE."]
+        ] }
+    ]
+  },
+  "sam-borg": {
+    "base": "sam", "name": "Sam-borg", "metal": "#5d6675", "glow": "#ff9d2e",
+    "maps": [
+      { "layer": "head", "at": [-4, 12], "fps": 4, "pal": { "a": "#ffb04d", "A": "#8a4a10" },
+        "frames": [["aAAaA"], ["AaAAa"], ["AAaAA"]] },
+      { "layer": "head", "at": [-4, 4], "rows": ["iE", "Ei"], "pal": { "E": "#3b424e", "i": "#aab3bf" } },
+      { "layer": "body", "at": [-3, 5], "fps": 4, "pal": { "a": "#ff9d2e" },
+        "frames": [
+          ["..a..", "a.a..", "a.a.a", "a.a.a"],
+          ["a....", "a...a", "a.a.a", "a.a.a"],
+          ["....a", "..a.a", "a.a.a", "a.a.a"]
+        ] }
+    ]
+  },
+  "evelyn-borg": {
+    "base": "evelyn", "name": "Prof. Evelyn-borg", "metal": "#d87a45", "glow": "#5ee6d0",
+    "maps": [
+      { "layer": "back", "at": [-12, 1], "fps": 2, "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "u": "#e0925a", "U": "#8a4a26" },
+        "frames": [
+          [".yy...", "y..b..", "y..bBB", "y..b..", ".bb...", "....uU", "....uU", "...uuU", "...uU."],
+          ["......", "..y...", "..ybBB", "..b...", "......", "....uU", "....uU", "...uuU", "...uU."]
+        ] },
+      { "layer": "head", "at": [-5, 10], "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522", "n": "#5ee6d0", "U": "#6b4326" },
+        "rows": ["....bbb.bbb.", "UUUbynbbynb.", "....BBB.BBB."] },
+      { "layer": "body", "at": [-5, 6], "fps": 2, "pal": { "b": "#c8963e", "n": "#5ee6d0", "i": "#d9fff8" },
+        "frames": [[".b.", "bnb", ".b."], [".b.", "bib", ".b."]] }
+    ]
+  },
+  "david-borg": {
+    "base": "david", "name": "David-borg", "metal": "#8d97a6", "glow": "#4fc3ff",
+    "maps": [
+      { "layer": "head", "at": [-6, 4], "fps": 2, "pal": { "E": "#566070", "i": "#dfe5ec", "n": "#4fc3ff", "N": "#1f5f8a" },
+        "frames": [
+          ["n.", "E.", "E.", "E.", "iE", "nE", "iE", ".E"],
+          ["N.", "E.", "E.", "E.", "iE", "nE", "iE", ".E"]
+        ] },
+      { "layer": "body", "at": [-5, 8], "fps": 3, "pal": { "n": "#7fd6ff", "N": "#1f5f8a" },
+        "frames": [["nNN"], ["NnN"], ["NNn"]] }
+    ]
+  },
+  "javier-borg": {
+    "base": "javier", "name": "Javier-borg", "metal": "#958a7c", "glow": "#ffd43b",
+    "maps": [
+      { "layer": "back", "at": [-11, 3], "pal": { "d": "#ffd43b", "D": "#3a3a40", "E": "#6f6a62" },
+        "rows": ["EEEE", "ddDD", "dDDd", "DDdd", "DddD", "ddDD", "EEEE"] },
+      { "layer": "head", "at": [-5, 10], "pal": { "d": "#ffd43b", "E": "#55504a" },
+        "rows": [".........dd.", "EEEEEEEEEdwd", ".........dd."] },
+      { "layer": "body", "at": [-2, 4], "fps": 2, "pal": { "d": "#ffd43b", "D": "#7a5f10", "E": "#55504a" },
+        "frames": [["EEEE", "EdDE", "EEEE"], ["EEEE", "EDdE", "EEEE"]] }
+    ]
+  },
+  "hanna-borg": {
+    "base": "hanna", "name": "Hanna-borg", "metal": "#9cc5b0", "glow": "#63e6ff",
+    "maps": [
+      { "layer": "head", "at": [-1, 17], "fps": 2, "pal": { "n": "#63e6ff", "i": "#e9fcff", "E": "#6f7885" },
+        "frames": [[".nn.", "niin", "niin", "EEEE"], [".nn.", "nnnn", "nnnn", "EEEE"]] },
+      { "layer": "back", "at": [-10, 9], "fps": 2, "pal": { "n": "#63e6ff", "N": "#1f6f8a", "E": "#6f7885" },
+        "frames": [["n", "E", "E", "E"], ["N", "E", "E", "E"]] },
+      { "layer": "body", "at": [1, 3], "fps": 3, "pal": { "n": "#b8f4ff", "N": "#1f8fb0" },
+        "frames": [["n", ".", "N", ".", "N"], ["N", ".", "n", ".", "N"], ["N", ".", "N", ".", "n"]] }
+    ]
+  },
+  "kenji-borg": {
+    "base": "kenji", "name": "Kenji-borg", "metal": "#18181c", "glow": "#ff2a2a", "hair": "#101014", "face": null, "brow": "stern",
+    "outfit": "jacket", "top": "#1b1b20", "shirt": "#26262c", "pants": "#1b1b20", "shoes": "#5a5f69",
+    "maps": [
+      { "layer": "head", "at": [-6, 3], "fps": 2, "pal": { "i": "#a4abb6", "e": "#7b828d", "E": "#565c66", "r": "#ff2a2a", "R": "#7a1414" },
+        "frames": [
+          ["...eiiiiie....", ".eiiiiiiiiiE..", "eiiieeeeeeeeE.", "eiieeeeeeeeeeE", "eieeeeeeeeeeEE", "eeE...........", "erE...........", "eeE...........", "eeE...........", "eRE...........", "eEE...........", ".EE..........."],
+          ["...eiiiiie....", ".eiiiiiiiiiE..", "eiiieeeeeeeeE.", "eiieeeeeeeeeeE", "eieeeeeeeeeeEE", "eeE...........", "eRE...........", "eeE...........", "eeE...........", "erE...........", "eEE...........", ".EE..........."]
+        ] },
+      { "layer": "body", "at": [-5, 4], "fps": 2, "pal": { "i": "#a4abb6", "e": "#7b828d", "E": "#565c66", "r": "#ff2a2a", "R": "#7a1414" },
+        "frames": [
+          [".eiiiiie.", "eiieeeeeE", "eireReeeE", "eieeeeeeE", "eiRereeeE", "eieeeeeeE", ".EEEEEEE."],
+          [".eiiiiie.", "eiieeeeeE", "eiRereeeE", "eieeeeeeE", "eireReeeE", "eieeeeeeE", ".EEEEEEE."]
+        ] },
+      { "layer": "body", "at": [-6, 0], "pal": { "i": "#a4abb6", "e": "#7b828d", "E": "#565c66", "r": "#ff2a2a" },
+        "rows": ["EeeeeireeeE"] },
+      { "layer": "back", "at": [-10, 4], "fps": 2, "pal": { "i": "#a4abb6", "e": "#7b828d", "E": "#565c66", "r": "#ff2a2a", "R": "#7a1414" },
+        "frames": [
+          [".eE.", "eirE", "eieE", "eiRE", "eieE", ".EE."],
+          [".eE.", "eiRE", "eieE", "eirE", "eieE", ".EE."]
+        ] }
+    ]
+  },
+  "quill-borg": {
+    "base": "quill", "name": "Det. Quill-borg", "metal": ["#b08d57", "#9c7a3c", "#a8794a"], "glow": "#9be564",
+    "maps": [
+      { "layer": "head", "at": [-7, 9], "fps": 3, "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522" },
+        "frames": [
+          [".b.b.", "bbybb", ".yBy.", "bbybb", ".b.b."],
+          ["b...b", ".byb.", ".yBy.", ".byb.", "b...b"]
+        ] },
+      { "layer": "back", "at": [-10, 8], "fps": 3, "pal": { "y": "#f3d27a", "b": "#c8963e", "B": "#8f6522" },
+        "frames": [
+          ["....", "....", ".w..", "yb..", "yb..", "ybbB", ".BBB"],
+          ["....", "w...", "....", "yb..", "yb..", "ybbB", ".BBB"],
+          [".w..", "....", "....", "yb..", "yb..", "ybbB", ".BBB"]
+        ] },
+      { "layer": "body", "at": [-5, 6], "fps": 2, "pal": { "b": "#c8963e", "g": "#9be564", "i": "#eaffd0" },
+        "frames": [[".b.", "bgb", ".b."], [".b.", "bib", ".b."]] }
+    ]
+  },
+  "pip-borg": {
+    "base": "pip", "name": "Intern Pip-borg", "metal": ["#e8c35a", "#9fd0f5", "#c4b3f2", "#f2a57a"], "glow": "#7cf5ff",
+    "maps": [
+      { "layer": "head", "at": [-7, 2], "rows": ["EE", "iE"], "pal": { "E": "#6f7885", "i": "#e6ebf1" } },
+      { "layer": "body", "at": [-3, 5], "fps": 2, "pal": { "i": "#e6ebf1", "n": "#7cf5ff", "N": "#2a9db0" },
+        "frames": [
+          [".iii.", "innni", "innni", ".iii."],
+          [".iii.", "iNNNi", "iNNNi", ".iii."]
+        ] },
+      { "layer": "back", "at": [-10, 3], "fps": 6, "pal": { "E": "#6f7885", "i": "#e6ebf1", "a": "#ff9d2e", "y": "#ffe066" },
+        "frames": [
+          [".iE", "EiE", "EiE", "EEE", ".a.", ".y."],
+          [".iE", "EiE", "EiE", "EEE", "yay", ".a."]
+        ] }
+    ]
+  }
+}

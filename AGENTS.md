@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 899 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 906 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -778,6 +778,14 @@ most bits pass without a word. They work through about 40 bits weighted by mood 
 typing, plus lab life like a chemistry poof, a model rocket, a rubber duck, a reviewer's stamp, a bird landing on
 a head or the office cat; naps are rare.
 The Settings page's Animations switch (on by default, saved in `data/settings.json` only while off) removes them.
+Its Cyborg sprites switch (`settings.cyborgs`, off by default, saved only while on) sends every built-in researcher's
+cyborg in its place: `assets/cyborgs.json` holds the 12 (`aris-borg` ... `pip-borg`), each a sprite spec, never code,
+with its original's clothes, colors, crew, quirk and every animation; `avatars.config` hands them to the page as
+`RESEARCHER_SPRITES.cyborgs` and `researchers.js` sends each original home (one switched off under Who visits keeps
+its cyborg home too; an avatar saved under a cyborg's name wins). What makes them machines is in the spec format for
+anyone's sprite: `metal` (a metal in place of skin) and `glow` (lit eyes), both in the avatar studio's Body tab with
+Start from a cyborg, and the sprite studio's Cyborgs list opens any of the 12 as a spec. The published site's About
+page keeps the originals.
 The Settings page's Display section also holds the Language (English, Chinese, French, Spanish, Portuguese or German; `settings.language()`, saved only when not English). Every UI string is English in the code, wrapped in `i18n._()`, and looked up in `locales/<code>.json`; `tests/test_i18n.py` fails if any locale misses one. Page scripts get theirs as `window.I18N`: the shared few in `ui.JS_STRINGS`, and the board's and avatar studio's from every string literal inside their `tr(...)` calls (`ui.script_strings`, so no list to keep). The setup checks (`doctor.py`) are wrapped too; `run.py doctor` and Researcher Chat's `setup_status` read them in English. Labels stay short and plain: say what a thing is or does, no narration. The published site, prompts and agents stay English (`i18n.english()` draws the About page's strip), but Researcher Chat answers in the UI's language. The pixel researchers' lines are written per language, not translated (`assets/lines/<code>.js`, loaded before `assets/researchers.js`; anything missing falls back to English). It also holds the Appearance (System, Light or Dark; `settings.theme()`, saved only
 when not System) and the chat colour (the app's red, seven pastels in `settings.CHAT_COLORS`, or any colour picked;
 `settings.chat_color()`). Both go on the UI's `<html>` from the server (`ui.html_attrs`: `data-theme` and the
@@ -789,6 +797,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
 | Open the UI | `python run.py ui` → opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't) |
+| Have the researchers visit as cyborgs | Settings → Display → Cyborg sprites |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |

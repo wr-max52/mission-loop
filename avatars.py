@@ -8,8 +8,10 @@ a JSON object that starts from a built-in sprite, a size limit. Every UI page ha
 window.RESEARCHER_SPRITES (ui.page), so a saved avatar can turn up anywhere a researcher can."""
 import json, re
 from pathlib import Path
+import settings
 
 SPRITES_FILE = Path("data/sprites.json")
+CYBORGS_FILE = Path(__file__).parent / "assets" / "cyborgs.json"   # the built-ins as cyborgs, one spec each (SPRITES.md)
 BUILT_IN = ("aris", "aisha", "ben", "mei", "sam", "evelyn", "david", "javier", "hanna", "kenji", "quill", "pip")
 KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")    # the same rule as registerSprite
 MAX_SPEC = 24_000                                  # bytes of JSON one spec may take
@@ -40,14 +42,27 @@ def off() -> list[str]:
     """Sprites switched off: they never visit (a crew switched off entirely is kept on by the page)."""
     return _read()["off"]
 
+def cyborgs() -> dict[str, dict]:
+    """The cyborg crew: every built-in researcher drawn again in metal, by key ("kenji-borg"). {} if the file is gone."""
+    try:
+        data = json.loads(CYBORGS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if KEY.match(k) and isinstance(v, dict) and v.get("base") in BUILT_IN}
+
 def config() -> dict:
-    """What a page hands to assets/researchers.js: {} when nothing is customised."""
+    """What a page hands to assets/researchers.js: {} when nothing is customised. With Cyborg sprites on
+    (settings.cyborgs), `cyborgs` holds the cyborg crew, and the page sends each in place of its original."""
     data = _read()
     out = {}
     if data["sprites"]:
         out["add"] = data["sprites"]
     if data["off"]:
         out["off"] = data["off"]
+    if settings.cyborgs():
+        borgs = {k: v for k, v in cyborgs().items() if k not in data["sprites"]}
+        if borgs:
+            out["cyborgs"] = borgs
     return out
 
 def script_tag() -> str:

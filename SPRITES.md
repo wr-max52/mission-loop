@@ -84,8 +84,10 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 | `facial` | (`null`, or a list: one per visit) | `walrus mustache` |
 | `brow`, `mouth` | resting expression | brow: `flat raise stern worry skeptic`; mouth: `none smile grin o flat smirk` |
 | flags | `true`/`false` | `lash lids bushy ahoge grin freckles pencil rolled` |
-| colors | `#rrggbb`, or a list of up to 8 (one per visit) | `hair top shirt pants shoes pack tie bow hijab cap beanie pom skirt frame` |
+| colors | `#rrggbb`, or a list of up to 8 (one per visit) | `hair top shirt pants shoes pack tie bow hijab cap beanie pom skirt frame metal glow` |
 | `skin` | tones to pick from | list of 0 (lightest) to 7 (darkest) |
+| `metal` | a cyborg: this metal in place of skin (head, neck, hands) | `#rrggbb`, or a list of up to 8 (one per visit) |
+| `glow` | eyes lit in this color, with no white | `#rrggbb`, or a list of up to 8 |
 | `prop` | built-in signature prop (`null`, or a list) | `tablet laptop phone book briefcase camera magnifier mug` |
 | `fav` | how much they like an action | action name to weight 0 to 5, e.g. `{ "dig": 3 }` |
 | `maps` | up to 8 pinned pixel maps | see Maps |
@@ -94,6 +96,25 @@ Anything else (a new kind of motion, a new action) is a code change in `research
 
 Flags: `lash` a lash flick on each eye, `lids` half-lidded eyes, `bushy` thick brows, `ahoge` one strand of hair
 standing up, `grin` an open smile with a fang, `freckles`, `pencil` behind the ear, `rolled` rolled-up sleeves.
+
+## Cyborgs
+
+`metal` and `glow` turn any sprite into a machine, and the face still acts: `metal` is used as given (never made
+more vivid), shaded cool, with a plate seam behind the face, a rivet on the jaw and a shine on the brow; no rosy
+cheeks, and the mouth is a seam in the metal. A near-black metal gets a pale shine and pale brows so the face still
+reads. `glow` lights the eyes all through and tints their lids, so they show on black. In a map, `s` and `S` are
+then the metal and its shade. Lights are map pixels in a bright `pal` color; a light that blinks is a map with two
+`frames` that swap a bright letter for a dim one.
+
+`assets/cyborgs.json` is the cyborg crew: each of the 12 built-ins drawn again as a spec (`aris-borg` ... `pip-borg`),
+with their own clothes, colors, crew and quirk, and every animation unchanged. The tenured ones are steampunk (brass
+and copper, a smokestack and boiler, a wind-up key, goggles, an exhaust pipe, gauges); the young ones are newer
+machines (steel, ceramic and graphite, antennae, headphones, status lights, a jet pack). Kenji-borg is black all
+through, in grey armor, with red eyes and red buttons. They are the worked examples for this section: open one from
+the sprite studio's Cyborgs list, or start an avatar from one in the avatar studio (Body → Start from a cyborg).
+The Settings page's Cyborg sprites switch sends each cyborg in place of its original (`RESEARCHER_SPRITES.cyborgs`).
+
+![The cyborg crew: each original, then its cyborg resting, walking, cheering and doing its quirk](tools/cyborgs.png)
 
 ## Maps
 
@@ -162,6 +183,10 @@ the key moves the front arm).
 ```js
 window.RESEARCHER_SPRITES = { add: { "custom-sprite-1": spec }, off: ["pip"] };   // before researchers.js loads
 ```
+
+- `cyborgs`: `{ "kenji-borg": spec, ... }` (the contents of `assets/cyborgs.json`). Each one joins in place of the
+  built-in it starts from, which stays home; one whose original is in `off` stays home too. `Researchers.CYBORGS`
+  lists the ones that joined.
 
 - `add`: sprites to register, by key (lowercase letters, digits, dashes, up to 32; built-in names are taken).
   A spec that fails the check is skipped with a console warning.

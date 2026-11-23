@@ -3,7 +3,7 @@ import asyncio, base64, json
 from pathlib import Path
 import ollama, pytest
 from starlette.testclient import TestClient
-import agents, avatars, ui
+import agents, avatars, settings, ui
 from agents import avatar, llm
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,6 +80,7 @@ def test_the_sprite_studio_opens_in_the_app(client):
     assert f'<script src="{ui.asset("researchers.js")}"></script>' in page.text and "../assets" not in page.text
     assert 'href="/settings"' in page.text and page.headers["cache-control"] == "no-cache"
     assert client.get("/sprites/example.json").json()["base"] == "mei"
+    assert 'fetch("/assets/cyborgs.json")' in page.text and len(client.get("/assets/cyborgs.json").json()) == 12
     assert 'href="/sprites"' in client.get("/settings").text
 
 def test_a_script_address_changes_when_the_script_does(tmp_path, monkeypatch):
@@ -201,3 +202,23 @@ def test_code_fixes_the_drawing_slips_it_safely_can(monkeypatch):
         {"layer": "head", "at": [-3, 12], "rows": ["h...h", "hh.hh", "h"], "pal": {"h": "#c0392b"}}]}})
     m = avatar.edit({"base": "mei", "name": "M"}, "devil horns", model="m")["change"]["maps"][0]
     assert m["pal"] == {"a": "#c0392b"} and m["rows"] == ["a...a", "aa.aa", "a...."]   # a free letter, rows padded
+
+# ---------- cyborg sprites: the switch on the Settings page ----------
+
+def test_the_cyborg_switch_hands_every_page_the_cyborg_crew(client):
+    assert "cyborgs" not in avatars.config() and not settings.cyborgs()
+    html = client.get("/settings").text
+    assert 'action="/settings/cyborgs"' in html and "Cyborg sprites" in html
+    r = client.post("/settings/cyborgs", data={"cyborgs": "on"}, follow_redirects=False)
+    assert r.status_code == 303 and settings.cyborgs()
+    cfg = avatars.config()
+    assert len(cfg["cyborgs"]) == 12 and cfg["cyborgs"]["kenji-borg"]["base"] == "kenji" and "off" not in cfg
+    assert '"kenji-borg"' in client.get("/").text
+    client.post("/settings/cyborgs", data={})                                       # an unticked box sends nothing
+    assert not settings.cyborgs() and "cyborgs" not in avatars.config() and "cyborgs" not in settings.saved()
+
+def test_an_avatar_saved_under_a_cyborg_s_name_wins(client):
+    settings.set_cyborgs(True)
+    avatars.save("pip-borg", EXAMPLE)
+    cfg = avatars.config()
+    assert "pip-borg" not in cfg["cyborgs"] and cfg["add"]["pip-borg"] == EXAMPLE and len(cfg["cyborgs"]) == 11
