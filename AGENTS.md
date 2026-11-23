@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 850 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 851 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -676,7 +676,9 @@ brief": green, a bolt, no count); every check and the article review stay as the
 marks the automatic ones, so an open page redraws the strip when the switch flips. The steps working right now are lit, one per
 busy worker, read from `data/activity.json` (written by `activity.py`). `assets/flow.js` polls `/api/flow` every 2
 s and relights the strip in place, and the mission cards below with it (green outline, "working on this now",
-researcher visitors), one per busy worker, so they never wait on the page refresh, which holds off while you type or
+researcher visitors), one per busy worker; the Inspiration box is the desk's card (`ui.finder_panel`, `data-desk`), lit
+the same way while the Theorist or the mission finder works (they have no mission), its visitor doing that agent's kind
+of work. None of them wait on the page refresh, which holds off while you type or
 chat; the rest of the page refreshes by swapping in fresh HTML around the live strip, never by reloading. Small pixel researchers (`assets/researchers.js`, decorative only) live on the cards of
 missions a model is working on right now (none while no model runs) and on the strip, never more than four on the
 page at once (one on each busy worker's lit step, one on each busy card). Each character is in one worker's crew (`worker` in
