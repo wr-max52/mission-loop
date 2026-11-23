@@ -3,7 +3,7 @@ import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
-import activity, agents, clock, doctor, notify, orchestrator, settings, store
+import activity, agents, claim_tags, clock, doctor, notify, orchestrator, settings, store
 from agents import llm
 from contracts import Mission, SITE_FOLDERS
 
@@ -14,9 +14,14 @@ WAIT_RETRY = 30                            # seconds between checks while the lo
 @app.callback()
 def _start():
     """Every command finds the database ready, so a fresh clone's first command never crashes, and epic titles saved
-    before they were cleaned (tech_influence) get their clean title."""
+    before they were cleaned (tech_influence) get their clean title, and missions with a brief but no claim tag get
+    code's (claim_tags.backfill)."""
     store.init()
     orchestrator.tidy_epic_titles(clock.now())
+    try:
+        claim_tags.backfill(clock.now())
+    except Exception as e:                 # display only: never stops a command
+        print(f"claim tags: {e}")
 
 def _lock():
     """Only one run/loop at a time, so a manual `run` can't race the background loop."""
