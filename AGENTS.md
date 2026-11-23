@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 911 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 912 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -692,7 +692,11 @@ replies) only while outreach is on and a channel is ready;
   (#143: the title as the message, "To" its epic, a postmark with the date, and a stamp from `STAMPS` in
   `assets/board.js`, institution satire and light memes, never a real person, one line each and not translated,
   since a stamp is artwork; the stamp, stripes, card, paper, ink and handwriting are drawn from the slug, so a
-  mission always looks the same), and an epic is a souvenir magnet; or hologram
+  mission always looks the same), and an epic is the postcard's front (#145): "Greetings from" over a minimalist
+  1920s Art Deco scene with the epic's name in big poster letters, its mission count, and a Proposed stamp while it
+  waits. The scenes are SVG files drawn in code (`assets/postcards/`, flat shapes, under 6 KB each), named in
+  `SCENES` in `assets/board.js` (a new one is a file and a line); each epic, oldest first, takes its slug's scene
+  unless an older epic has it, so ten epics get ten scenes and they repeat only past that; or hologram
   panels glowing in their stage's colour; or pixel cards in flat 8-bit stage colours with stepped borders), and what
   joins them (string, laser, wire, or pixel: right-angle elbows) in a preset or any colour (the gear and Settings → Display → Board both have the picker). A card's colour is its
   stage in every style but magnets, whose shape is; an epic's colour comes from its name. With Animations on, a note

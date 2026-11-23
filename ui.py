@@ -4452,41 +4452,60 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
   letter-spacing:.35em; text-transform:uppercase; color:#555; padding-right:calc(40px * var(--s)); }
 .board-wrap.cards-magnets .postcard .msg { font-size:1.02em; line-height:1.28; font-weight:600; padding-top:calc(4px * var(--s)); }
 .board-wrap.cards-magnets .postcard .addr { position:relative; border-left:1.5px dashed rgba(0,0,0,.28); padding-left:calc(7px * var(--s));
-  display:flex; flex-direction:column; justify-content:flex-end; gap:calc(5px * var(--s)); padding-top:calc(46px * var(--s)); }
+  display:flex; flex-direction:column; justify-content:flex-end; gap:calc(5px * var(--s)); padding-top:calc(52px * var(--s)); }
 .board-wrap.cards-magnets .postcard .to { font-size:.9em; border-bottom:1px dotted rgba(0,0,0,.4); padding-bottom:1px; line-height:1.15;
   overflow-wrap:anywhere; }
 .board-wrap.cards-magnets .postcard .to span { font:400 .8em "Courier New", monospace; color:#555; }
 .board-wrap.cards-magnets .postcard .line { border-bottom:1px dotted rgba(0,0,0,.4); height:calc(9px * var(--s)); }
-.board-wrap.cards-magnets .postcard .stamp { position:absolute; right:calc(-3px * var(--s)); top:calc(-14px * var(--s)); width:calc(38px * var(--s));
-  height:calc(46px * var(--s)); display:flex; flex-direction:column; align-items:center; justify-content:space-between; text-align:center;
-  padding:calc(3px * var(--s)) calc(2px * var(--s)) calc(2px * var(--s)); box-sizing:border-box; transform:rotate(2deg);
-  background:hsl(var(--sh) 55% 86%); outline:calc(2.5px * var(--s)) dotted var(--card); outline-offset:calc(-1px * var(--s));
-  box-shadow:0 0 0 calc(2px * var(--s)) var(--card), 0 1px 3px calc(2px * var(--s)) rgba(0,0,0,.18);
-  border:1px solid hsl(var(--sh) 45% 55%); }
-.board-wrap.cards-magnets .postcard .stamp i { font-style:normal; font-size:calc(17px * var(--s)); line-height:1; }
-.board-wrap.cards-magnets .postcard .stamp b { font:700 calc(4.6px * var(--s))/1.05 system-ui, sans-serif; text-transform:uppercase;
-  color:hsl(var(--sh) 50% 22%); letter-spacing:.02em; }
-.board-wrap.cards-magnets .postcard .stamp em { font:800 calc(5px * var(--s))/1 system-ui, sans-serif; font-style:normal; color:hsl(var(--sh) 60% 30%); }
-.board-wrap.cards-magnets .postcard .postmark { position:absolute; right:calc(24px * var(--s)); top:calc(4px * var(--s)); display:flex;
-  align-items:center; color:rgba(28,52,110,.62); transform:rotate(-12deg); pointer-events:none; }
-.board-wrap.cards-magnets .postcard .postmark .waves { width:calc(30px * var(--s)); height:auto; fill:none; stroke:currentColor; stroke-width:1.4; }
+/* a stamp: paper with perforated edges (a mask punches half-holes all round), its picture inset in a coloured frame */
+.board-wrap.cards-magnets .postcard .stampw { position:absolute; right:calc(-3px * var(--s)); top:calc(-17px * var(--s)); transform:rotate(1.5deg);
+  filter:drop-shadow(0 .5px 1px rgba(0,0,0,.35)); }                   /* the shadow sits outside the mask that punches the holes */
+.board-wrap.cards-magnets .postcard .stamp { --hole:calc(1.7px * var(--s)); --gap:calc(5px * var(--s)); width:calc(46px * var(--s));
+  height:calc(55px * var(--s)); box-sizing:border-box; padding:calc(3.5px * var(--s)); margin:0; border:none; border-radius:0; opacity:1;
+  transform:none; background:#fffefb; display:flex;
+  -webkit-mask:radial-gradient(circle, #0000 var(--hole), #000 calc(var(--hole) + .4px)) calc(var(--gap) / -2) calc(var(--gap) / -2) / var(--gap) var(--gap) round,
+    linear-gradient(#000 0 0) center / calc(100% - var(--gap)) calc(100% - var(--gap)) no-repeat;
+  mask:radial-gradient(circle, #0000 var(--hole), #000 calc(var(--hole) + .4px)) calc(var(--gap) / -2) calc(var(--gap) / -2) / var(--gap) var(--gap) round,
+    linear-gradient(#000 0 0) center / calc(100% - var(--gap)) calc(100% - var(--gap)) no-repeat; }
+.board-wrap.cards-magnets .postcard .stamp .art { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:space-between;
+  text-align:center; padding:calc(2px * var(--s)) calc(1.5px * var(--s)) calc(1.5px * var(--s)); background:hsl(var(--sh) 52% 62%);
+  box-shadow:inset 0 0 0 calc(1px * var(--s)) hsl(var(--sh) 40% 92%); }
+.board-wrap.cards-magnets .postcard .stamp i { font-style:normal; font-size:calc(20px * var(--s)); line-height:1; }
+.board-wrap.cards-magnets .postcard .stamp b { font:800 calc(5.2px * var(--s))/1.05 Georgia, "Times New Roman", serif; text-transform:uppercase;
+  color:hsl(var(--sh) 45% 97%); letter-spacing:.02em; }
+.board-wrap.cards-magnets .postcard .stamp em { font:800 calc(5.6px * var(--s))/1 Georgia, serif; font-style:normal; color:hsl(var(--sh) 45% 97%); }
+/* the cancel: a round date stamp beside it, its wavy lines running across the stamp */
+.board-wrap.cards-magnets .postcard .postmark { position:absolute; right:calc(-8px * var(--s)); top:calc(-6px * var(--s)); display:flex;
+  align-items:center; color:rgba(28,40,80,.68); transform:rotate(-5deg); pointer-events:none; }
+.board-wrap.cards-magnets .postcard .postmark .waves { width:calc(56px * var(--s)); height:auto; fill:none; stroke:currentColor; stroke-width:1.3;
+  margin-left:calc(-3px * var(--s)); }
 .board-wrap.cards-magnets .postcard .postmark .ring { display:flex; flex-direction:column; align-items:center; justify-content:center;
-  width:calc(34px * var(--s)); height:calc(34px * var(--s)); border:1.5px solid currentColor; border-radius:50%; margin-left:-2px; }
+  width:calc(34px * var(--s)); height:calc(34px * var(--s)); border:1.5px solid currentColor; border-radius:50%; flex:none; }
 .board-wrap.cards-magnets .postcard .postmark b { font:800 calc(5px * var(--s))/1.1 system-ui, sans-serif; text-transform:uppercase; letter-spacing:.04em; }
 .board-wrap.cards-magnets .postcard .postmark small { font:700 calc(4.5px * var(--s))/1.1 "Courier New", monospace; }
-.board-wrap.cards-magnets .souvenir { width:calc(190px * var(--s)); padding:calc(10px * var(--s)) calc(12px * var(--s)) calc(12px * var(--s));
-  text-align:center; color:#fff; border-radius:calc(22px * var(--s)); border:calc(4px * var(--s)) solid #fff;
-  background:radial-gradient(circle at 30% 20%, hsl(var(--h) 80% 62%), hsl(var(--h) 70% 38%));
-  box-shadow:0 0 0 1px rgba(0,0,0,.15), 2px 10px 16px -4px rgba(0,0,0,.5), inset 0 2px 0 rgba(255,255,255,.35); }
-.board-wrap.cards-magnets .souvenir .horseshoe { width:calc(34px * var(--s)); height:auto; fill:#e23b3b; stroke:#fff; stroke-width:1.5; }
-.board-wrap.cards-magnets .souvenir .horseshoe .tip { fill:#d9dde2; }
-.board-wrap.cards-magnets .souvenir .k { font:700 .6em/1 system-ui, sans-serif; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin-top:.3em; }
-.board-wrap.cards-magnets .souvenir .t { font:900 1.5em/1.05 "Arial Black", Impact, system-ui, sans-serif; margin-top:.25em;
-  text-shadow:0 2px 0 rgba(0,0,0,.25); }
-.board-wrap.cards-magnets .souvenir .n { font-size:.8em; color:#fff; opacity:.9; margin-top:.3em; }
+/* an epic: the front of a postcard, "Greetings from" over a 1920s scene and the epic in big poster letters */
+.board-wrap.cards-magnets .front { position:relative; width:calc(236px * var(--s)); height:calc(156px * var(--s)); box-sizing:border-box;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; overflow:hidden;
+  background:#1d2b4a center / cover no-repeat; border:calc(5px * var(--s)) solid #fbf6e8; border-radius:2px;
+  box-shadow:0 1px 1px rgba(0,0,0,.2), 2px 9px 15px -4px rgba(0,0,0,.5); }
+.board-wrap.cards-magnets .front::before { content:""; position:absolute; inset:0;    /* a soft band so the words read on any scene */
+  background:linear-gradient(180deg, transparent 18%, rgba(20,30,55,.32) 42% 62%, transparent 85%); }
+.board-wrap.cards-magnets .front > span { position:relative; }
+.board-wrap.cards-magnets .front .greet { font:italic 400 calc(17px * var(--s))/1 "Snell Roundhand", "Brush Script MT", "Segoe Script", cursive;
+  color:#fff8e6; text-shadow:0 1px 2px rgba(0,0,0,.6); margin-bottom:calc(2px * var(--s)); }
+.board-wrap.cards-magnets .front .place { max-width:94%; overflow-wrap:break-word; text-transform:uppercase; letter-spacing:.03em;
+  font:800 calc(34px * var(--s) * var(--fit, 1))/.92 "Futura", "Avenir Next Condensed", "Arial Narrow", Impact, system-ui, sans-serif; font-stretch:condensed;
+  color:#fff3d1; -webkit-text-stroke:calc(.8px * var(--s)) #1d2b4a;
+  text-shadow:1px 1px 0 #1d2b4a, 2px 2px 0 #1d2b4a, 3px 3px 0 #e0664a, 4px 4px 0 #e0664a, 5px 6px 6px rgba(0,0,0,.45); }
+.board-wrap.cards-magnets .front .n { position:absolute !important; bottom:calc(5px * var(--s)); right:calc(7px * var(--s));
+  font:700 calc(8px * var(--s))/1 system-ui, sans-serif; letter-spacing:.12em; text-transform:uppercase; color:#1d2b4a;
+  background:#fbf6e8; padding:calc(3px * var(--s)) calc(6px * var(--s)); }
+.board-wrap.cards-magnets .front .proposed { position:absolute !important; top:calc(8px * var(--s)); left:calc(6px * var(--s)); transform:rotate(-12deg);
+  font:800 calc(9px * var(--s))/1 system-ui, sans-serif; letter-spacing:.14em; text-transform:uppercase; color:#e0664a;
+  border:calc(2px * var(--s)) solid #e0664a; padding:calc(3px * var(--s)) calc(5px * var(--s)); background:rgba(251,246,232,.85); }
 .board-wrap.cards-magnets .note.epic { padding:0; background:none; }
 .board-wrap.cards-magnets .note.epic::before { display:none; }
-.board-wrap.cards-magnets .note.epic.proposed .souvenir { border-style:dashed; }
+.board-wrap.cards-magnets .note.epic.proposed .front { border-style:dashed; }
 .board-wrap.cards-magnets .note.epic.proposed { outline:none; }
 .board-wrap.cards-magnets .note.live { outline:none; }
 .board-wrap.cards-magnets .note.live > :first-child { outline:2.5px solid #2f8a4a; outline-offset:5px; border-radius:4px; }
