@@ -36,4 +36,4 @@ fi
 command -v uvx >/dev/null 2>&1 || echo "Note: uvx isn't installed, so research reads pages with fewer tools. Install it: brew install uv"
 command -v ollama >/dev/null 2>&1 || echo "Note: Ollama isn't installed. Get it at https://ollama.com/download, or use a cloud model's API key in the app."
 
-exec .venv/bin/python run.py ui --open "$@"
+exec .venv/bin/python run.py ui "$@"

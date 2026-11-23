@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
 import activity, agents, clock, doctor, notify, orchestrator, settings, store
+from agents import llm
 from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
@@ -212,6 +213,7 @@ def run():
         n = orchestrator.run_until_idle(clock.now)
         print(f"{n} task(s) ran")
     status()
+    llm.release()                          # its models unload IDLE_UNLOAD from now (#107)
     held.close()
 
 @app.command()
@@ -221,38 +223,57 @@ def loop(every: float = typer.Option(15, help="Minutes to rest when there is not
     orchestrator.STOP_FLAG.unlink(missing_ok=True)
     doctor.clear_waiting()                 # a reason left by a refused play or a killed loop: this loop logs its own
     seen: set[tuple[str, str]] = set()
+    llm.KEEP_ALIVE = max(llm.KEEP_ALIVE, every * 60 + 60)   # a rest never unloads a model; `rested` below unloads after one
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop started; it rests up to {every:g} min when nothing is left to do", flush=True)
 
     def announce():                        # after every model task, so a ready brief never waits on the others
         for line in notify.announce(store.all_missions(), seen):
             print(f"[{clock.now():%Y-%m-%d %H:%M}] notice: {line}", flush=True)
 
+    rested = False                         # the last rest ran its full length, not cut short by a human
     while not orchestrator.STOP_FLAG.exists():
         ready = _ready(quiet_repeat=True)
         if ready:
+            began = time.monotonic()
             n = orchestrator.run_until_idle(clock.now, after_task=announce)
             if n:
                 print(f"[{clock.now():%Y-%m-%d %H:%M}] {n} task(s) ran", flush=True)
                 status()
+            if gone := _unload_after_rest(rested, began):
+                print(f"[{clock.now():%Y-%m-%d %H:%M}] nothing for a model after a full rest: unloaded "
+                      f"{', '.join(gone)}", flush=True)
         announce()
         deadline = time.monotonic() + (every * 60 if ready else WAIT_RETRY)   # not ready: look again soon
+        rested = ready
         while time.monotonic() < deadline and not orchestrator.STOP_FLAG.exists():
             if orchestrator.WAKE_FLAG.exists():  # a human acted in the UI: look for work now
                 orchestrator.WAKE_FLAG.unlink(missing_ok=True)
+                rested = False
                 break
             time.sleep(2)
+    llm.release()                          # its models unload IDLE_UNLOAD from now, unless play is pressed again (#107)
     doctor.clear_waiting()
     print(f"[{clock.now():%Y-%m-%d %H:%M}] loop stopped", flush=True)
     held.close()
 
+def _unload_after_rest(rested: bool, began: float) -> list[str]:
+    """A sweep that followed a full rest and asked no model anything (code steps only) unloads the loop's models
+    (#107); they load again for the next model task. A rest cut short by a human keeps them."""
+    return llm.unload(llm.ours()) if rested and llm.LAST_CALL < began else []
+
 @app.command()
 def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
-       open_browser: bool = typer.Option(False, "--open", help="Open the UI in your browser once it is up")):
+       open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in your browser once it is up")):
     """The local web UI: missions, briefs, articles, approve/reject/publish, start/stop the loop."""
     import uvicorn
     import ui as web
     from agents import publisher
     if not _port_free(port):
+        if _our_ui(port):                  # already running: show it instead of refusing
+            print(f"Mission Loop UI is already running at http://127.0.0.1:{port}", flush=True)
+            if open_browser:
+                webbrowser.open(f"http://127.0.0.1:{port}")
+            return
         print(f"Port {port} is already in use: the UI may already be open at http://127.0.0.1:{port}, or another "
               f"app has the port. Pick another: python run.py ui --port {port + 1}", flush=True)
         raise typer.Exit(1)
@@ -267,9 +288,19 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
         import mcp_share
         threading.Thread(target=lambda: print(f"MCP server: {mcp_share.start() or mcp_share.url()}", flush=True),
                          daemon=True).start()
+    threading.Thread(target=web.idle_unloader, name="idle-unload", daemon=True).start()
     if open_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
+
+def _our_ui(port: int) -> bool:
+    """Whether a Mission Loop UI answers on this port (its /api/flow), not some other app."""
+    import httpx
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/api/flow", timeout=1.0)
+        return r.status_code == 200 and "now" in r.json()
+    except Exception:
+        return False
 
 def _port_free(port: int) -> bool:
     """Like uvicorn, reuse an address a just-closed UI left in TIME_WAIT; only a live listener counts as taken."""

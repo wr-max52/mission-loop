@@ -17,6 +17,13 @@ def _no_ddg(*args):
 def _no_mail(*args, **kwargs):
     raise AssertionError(f"a test tried to reach a mail server: {args}")
 
+class _NoOllama:
+    def ps(self):
+        raise ConnectionError("tests never reach Ollama")
+
+    def generate(self, **kwargs):
+        raise ConnectionError("tests never reach Ollama")
+
 @pytest.fixture(autouse=True)
 def fresh(tmp_path, monkeypatch):
     """Every test gets its own database, stop flag and working folder."""
@@ -43,6 +50,8 @@ def fresh(tmp_path, monkeypatch):
     for var in ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_SERVICE"):
         monkeypatch.delenv(var, raising=False)           # a real .env must never switch Bluesky on in tests
     monkeypatch.setattr(llm, "connection", lambda timeout=2: FAKE_CONNECTION)   # never asks a real Ollama
+    monkeypatch.setattr(llm, "CLIENT", _NoOllama())               # nor unloads a real one's models (#107)
+    monkeypatch.setattr(llm, "USED", set())
     monkeypatch.setattr(agents, "ready", lambda: (True, "test models"))          # play's check: the fake models answer
     monkeypatch.setattr(agents, "rate_article", stubs.rate_article)   # the rater never asks a real model (tests of
                                                                     # agents/rater.py patch llm.ask instead)

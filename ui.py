@@ -173,6 +173,29 @@ def start_loop(every: float) -> None:
             break
         time.sleep(0.2)
 
+IDLE_CHECK = 30                            # seconds between the idle unloader's looks
+
+def idle_check(off_since: float | None, now: float) -> float | None:
+    """One look of the idle unloader (#107): once the loop has been off llm.IDLE_UNLOAD, unload Mission Loop's
+    models Ollama still holds for longer than that (a loop that died, or an old 24-hour call). Returns when the loop
+    was first seen off, None while it runs. Never raises."""
+    try:
+        if loop_running():
+            return None
+        off_since = now if off_since is None else off_since
+        if now - off_since >= llm.IDLE_UNLOAD and (gone := llm.unload_pinned()):
+            print(f"loop off {int(now - off_since) // 60} min: unloaded {', '.join(gone)}", flush=True)
+        return off_since
+    except Exception:
+        return off_since
+
+def idle_unloader() -> None:
+    """Runs on a thread beside the UI (run.py ui) for as long as it is open."""
+    off_since = None
+    while True:
+        off_since = idle_check(off_since, time.monotonic())
+        time.sleep(IDLE_CHECK)
+
 def publish_now() -> threading.Thread:
     """The loop is off, so publish what a human just asked for from here, in the background: no model is needed,
     and the page shows each place as it is reached. A request that fails stays for the next try or the loop."""
