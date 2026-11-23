@@ -106,7 +106,7 @@ def test_the_attempt_finishes_and_history_names_the_outage(monkeypatch):
     monkeypatch.setattr(agents, "write_brief", lambda m, ev, now: (_ for _ in ()).throw(
         researcher.ResearchFailed("Only 1 verified supporting domain(s); need 3.")))
     note = orchestrator._write_brief(m, None)
-    assert note == "attempt 1 failed validation (web search was down)"
+    assert note == "attempt 1 failed validation: research crashed: Only 1 verified supporting domain(s); need 3. (web search was down)"
     assert "Web search was down during this attempt: Brave Search is out of prepaid credit" in m.validator_notes
 
 # ---------- the finder ----------
