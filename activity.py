@@ -89,8 +89,11 @@ def _log(worker: str, e: dict | None) -> None:
 
 def seat_model(seat: str) -> str:
     """The model a seat runs on: its worker's ("assistant-2" -> the Research Assistant's); "" for the desk."""
-    worker = settings.seat_worker(seat)
-    return settings.worker_model(worker) if worker in settings.WORKERS else ""
+    try:                                   # display-only: a bad settings file must never stop a step
+        worker = settings.seat_worker(seat)
+        return settings.worker_model(worker) if worker in settings.WORKERS else ""
+    except Exception:
+        return ""
 
 def begin(slug: str, agent: str) -> None:
     trail.start(slug, agent)               # the chat assistant reads what each agent did from here
