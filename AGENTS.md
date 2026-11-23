@@ -35,10 +35,10 @@ The written issue is what Will approves; nothing after it waits on him until the
 - Interpreter: Python 3.12 (`/opt/homebrew/bin/python3.12`). The code uses 3.10+ union syntax.
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
-  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui --open`). `README.md` is the newcomer's guide.
+  whenever it changes, notes a missing npx, uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 778 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 781 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine or a mail
   server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -596,7 +596,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
 
 ## Operating it
 
-The easy way: `python run.py ui`, then open http://127.0.0.1:8770. It lists every mission, shows briefs and
+The easy way: `python run.py ui`, which opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't; with a UI
+already running on the port it opens that one and exits). It lists every mission, shows briefs and
 article previews, and has buttons for approve / send back / publish / requeue / push through / add mission / save
 the finder's inspiration line and to wake the loop. The top bar of every page has the Auto switch and, beside
 it, the loop's play/pause button with its state (`ui.loop_button`; green and pulsing while the loop is off): play starts the loop, which runs in the
@@ -678,7 +679,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | You want to | Command |
 |---|---|
 | Install and open it the first time | `./start.sh` (again any time to start the app) |
-| Open the UI | `python run.py ui` → http://127.0.0.1:8770 (`--open` opens the browser) |
+| Open the UI | `python run.py ui` → opens http://127.0.0.1:8770 in your browser (`--no-open` doesn't) |
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
