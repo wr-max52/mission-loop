@@ -13,8 +13,10 @@ WAIT_RETRY = 30                            # seconds between checks while the lo
 
 @app.callback()
 def _start():
-    """Every command finds the database ready, so a fresh clone's first command never crashes."""
+    """Every command finds the database ready, so a fresh clone's first command never crashes, and epic titles saved
+    before they were cleaned (tech_influence) get their clean title."""
     store.init()
+    orchestrator.tidy_epic_titles(clock.now())
 
 def _lock():
     """Only one run/loop at a time, so a manual `run` can't race the background loop."""
@@ -109,6 +111,32 @@ def rename_epic(name: str, title: str):
 
 def _busy() -> set[str]:
     return {e["slug"] for e in activity.working()} if orchestrator.loop_running() else set()
+
+@app.command("merge-epic")
+def merge_epic(name: str, into: str):
+    """Move every mission in one epic (by title or slug) into another, and remove the first epic."""
+    e, target = store.find_epic(name), store.find_epic(into)
+    if not e or not target:
+        raise typer.BadParameter(f"no epic {name if not e else into}")
+    try:
+        orchestrator.merge_epic(e.slug, target.slug, clock.now(), busy=_busy())
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"{e.title} merged into {target.title}")
+
+@app.command("delete-epic")
+def delete_epic(name: str):
+    """Remove an epic with no missions (by title or slug). One with missions: merge-epic instead."""
+    e = store.find_epic(name)
+    if not e:
+        raise typer.BadParameter(f"no epic {name}")
+    try:
+        orchestrator.delete_epic(e.slug)
+    except ValueError as err:
+        print(err)
+        raise typer.Exit(1) from None
+    print(f"{e.title} deleted")
 
 @app.command()
 def combines():

@@ -36,9 +36,9 @@ The written issue is what Will approves; nothing after it waits on him until the
 - Activate the venv first: `source .venv/bin/activate`
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
-- CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic
+- CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 849 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 854 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -242,7 +242,15 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> COMBINED (folded into a bigger mi
   a new epic, but code keeps that only when 2+ missions from the same search share it; the proposal then
   waits on the UI home page (approve, rename and approve, move to another epic, or reject, which puts
   each mission back in the finder's best fit, `Mission.epic_fallback`). Epics show as pills on the
-  board and the published site (approved epics only); renaming redraws the published pages.
+  board and the published site (approved epics only); renaming redraws the published pages. The home page's
+  Epics list renames each approved epic, merges one with missions into another ("Merge into":
+  `orchestrator.merge_epic`, its missions move, it and its board note are gone, missions that would fall back to
+  it and proposed combines headed for it go to the other, pages redrawn; refused while a worker is busy with one
+  of its missions) and deletes one with none (`orchestrator.delete_epic`; one with missions is merged instead).
+  `contracts.epic_title` turns `_` into spaces and capitalises an all-lower-case title (`tech_influence` ->
+  "Tech influence"), and `store.find_epic` finds a title by its uncleaned form too; titles saved before that are
+  cleaned at every CLI start (`run._start` -> `orchestrator.tidy_epic_titles`, through `rename_epic`) when the
+  clean title is free.
 - Workers: two, set on the Settings page (`settings.WORKERS`, saved in `data/settings.json`). The
   Research Assistant (the small model: `assistant_model` in settings.json, else `MISSION_LOOP_SEARCH_MODEL`) does
   the "assistant" role: searching and reading. The Principal Investigator (the big model: `pi_model`, else
@@ -721,6 +729,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |
 | Put a mission in an epic | the Epic field on its page, or `python run.py epic <slug> "<title>"` (`""` clears) |
 | See / rename epics | `python run.py epics`, `python run.py rename-epic "<old>" "<new>"`, or Epics on the UI home page |
+| Merge or delete an epic | Merge into / Delete on the UI home page's Epics list, or `python run.py merge-epic "<from>" "<into>"` / `delete-epic "<title>"` (only an empty one) |
 | Approve a proposed epic | the "New epic proposed" panel on the UI home page |
 | Approve or reject a proposed combine | its card under Needs you on the UI home page, or `python run.py combines`, then `approve-combine <slug>` / `reject-combine <slug>` |
 | Link two missions, or remove a link | Connections on a mission's page, or `python run.py link <a> <b> --why "..."` / `unlink <a> <b>` |

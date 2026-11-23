@@ -1091,18 +1091,55 @@ def approve_epic(slug: str, title: str, now, by: str = "") -> None:
     _move(missions, slug, now, f"new epic approved{' by ' + by if by else ''}: {clean}")
     _refresh_pages(missions)
 
-def merge_epic(slug: str, into: str, now) -> None:
-    """Every mission in one epic moves to another, and the first epic is gone."""
-    target = store.get_epic(into)
-    if not store.get_epic(slug) or not target or slug == into:
+def merge_epic(slug: str, into: str, now, busy: set[str] = frozenset()) -> None:
+    """Every mission in one epic moves to another, and the first epic is gone (with its board note). Missions that
+    would go back to it if a proposal is rejected go back to the other one, and a proposed combine headed for it
+    heads there too. Refused while a worker is busy with one of its missions, since that task saves the mission
+    when it ends and would put it back in an epic that no longer exists."""
+    epic, target = store.get_epic(slug), store.get_epic(into)
+    if not epic or not target or slug == into:
         raise ValueError("pick a different epic to move them to")
     if target.status != "active":
         raise ValueError(f"{target.title} is still only proposed")
     missions = _in_epic(slug)
+    if {m.slug for m in missions} & set(busy):
+        raise ValueError("a worker is busy with one of its missions; try again once that task ends")
     _move(missions, into, now, f"moved to epic {target.title}")
+    for m in store.all_missions():
+        if m.epic_fallback == slug:
+            m.epic_fallback = into
+            store.save_mission(m)
+    for c in store.all_combines("proposed"):
+        if c.epic and getattr(store.find_epic(c.epic), "slug", "") == slug:
+            c.epic = target.title
+            store.save_combine(c)
     store.delete_epic(slug)
     store.delete_board_note("epic", slug)       # its pin goes with it
     _refresh_pages(missions)
+
+def delete_epic(slug: str) -> None:
+    """Remove an epic that holds no missions, and its board note. One with missions is merged instead."""
+    epic = store.get_epic(slug)
+    if not epic:
+        raise ValueError(f"no epic {slug}")
+    if _in_epic(slug):
+        raise ValueError(f"{epic.title} still has missions; merge it into another epic instead")
+    store.delete_epic(slug)
+    store.delete_board_note("epic", slug)
+
+def tidy_epic_titles(now) -> list[tuple[str, str]]:
+    """Titles saved before epic_title cleaned them (tech_influence) get the clean title, when no other epic has it.
+    Cheap and quiet: called at every start, it does nothing once they are clean. Returns (old, new) pairs."""
+    done = []
+    for e in store.all_epics():
+        clean = epic_title(e.title)
+        if clean and clean != e.title:
+            try:
+                rename_epic(e.slug, clean, now)
+                done.append((e.title, clean))
+            except ValueError:
+                pass                            # the clean title is taken: leave it for a human to merge
+    return done
 
 def reject_epic(slug: str, now) -> None:
     """Human turns down a proposed epic: each mission goes back to the existing epic the finder picked for it."""

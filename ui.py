@@ -57,6 +57,8 @@ MESSAGES = {
     "epic_moved": "Missions moved.",
     "epic_rejected": "Epic rejected. Missions moved back.",
     "epic_renamed": "Epic renamed.",
+    "epic_merged": "Epic merged.",
+    "epic_deleted": "Epic deleted.",
     "combined": "Combine approved. Combined mission queued.",
     "combine_rejected": "Combine rejected.",
     "linked": "Missions linked.",
@@ -131,6 +133,8 @@ ERRORS = {
     "epic": "An epic title is 1 to 4 words.",
     "epic_exists": "There is already an epic with that name.",
     "epic_target": "Pick a different approved epic.",
+    "epic_busy": "A worker is busy with one of its missions. Try again once that task ends.",
+    "epic_not_empty": "That epic still has missions. Merge it into another instead.",
     "site_url": "Enter a full http(s):// address, or leave it empty.",
     "bluesky": "Bluesky needs both a handle and an app password.",
     "worker_model": "Pick a model from the list.",
@@ -558,6 +562,8 @@ details summary { cursor:pointer; color:var(--muted); font-size:.9rem; }
 .ask-actions details.send-back { flex-basis:100%; margin:.2rem 0 0; }
 @media (max-width: 560px) { .ask .sub, .ask > .hint, .ask > ul, .ask-actions { margin-left:0; } }
 .epics form.inline { margin:.3rem 0; }
+.epics .epic-row { display:flex; gap:.4rem 1rem; align-items:center; flex-wrap:wrap; }
+.epics .epic-row select { width:auto; min-width:9rem; }
 select { font:inherit; padding:.45rem .5rem; border:1px solid var(--rule); border-radius:8px;
          background:var(--bg); color:var(--fg); }
 form.inline { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
@@ -2501,16 +2507,27 @@ def connections(m: Mission) -> str:
     return heading("link", _("Connections"), len(rows) or None, cls="sec") + body + form
 
 def epic_list(missions: list[Mission]) -> str:
+    """Every approved epic: rename it, merge it into another (its missions move, it is gone), or delete it once it
+    holds no missions."""
     active = store.all_epics("active")
     if not active:
         return ""
-    rows = "".join(
-        f'<form method="post" action="/epics/{quote(e.slug)}/rename" class="inline">'
-        f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
-        f'<span class="hint">{_n("{n} mission", "{n} missions", sum(m.epic == e.slug for m in missions))}</span>'
-        f'<button>{_("Rename")}</button></form>'
-        for e in active)
-    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{rows}</div>'
+    rows = []
+    for e in active:
+        n, slug = sum(m.epic == e.slug for m in missions), quote(e.slug)
+        others = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>'
+                         for a in active if a.slug != e.slug)
+        merge = (f'<form method="post" action="/epics/{slug}/merge" class="inline">'
+                 f'<select name="into" aria-label="{_("Merge into")}">{others}</select>'
+                 f'<button>{_("Merge into")}</button></form>') if n and others else ""
+        delete = "" if n else (f'<form method="post" action="/epics/{slug}/delete" class="inline">'
+                               f'<button>{_("Delete")}</button></form>')
+        rows.append(
+            f'<div class="epic-row"><form method="post" action="/epics/{slug}/rename" class="inline">'
+            f'<input type="text" name="title" value="{escape(e.title, quote=True)}" maxlength="48" aria-label="{_("Epic name")}">'
+            f'<span class="hint">{_n("{n} mission", "{n} missions", n)}</span>'
+            f'<button>{_("Rename")}</button></form>{merge}{delete}</div>')
+    return heading("layers", _("Epics"), len(active)) + f'<div class="epics">{"".join(rows)}</div>'
 
 # In progress, grouped by where each mission is in the workflow, closest to published first (flow_rank).
 STAGES = [("publishing", "send", "Publishing"), ("writing", "write", "Writing"), ("outreach", "people", "Outreach"),
@@ -4657,8 +4674,13 @@ async def epic_action(request: Request) -> Response:
             orchestrator.approve_epic(slug, title, now)
             done = "epic_approved"
         elif action == "merge":
-            orchestrator.merge_epic(slug, str(form.get("into") or ""), now)
-            done = "epic_moved"
+            proposed = store.get_epic(slug).status == "proposed"
+            orchestrator.merge_epic(slug, str(form.get("into") or ""), now,
+                                    busy={e["slug"] for e in running_now()})
+            done = "epic_moved" if proposed else "epic_merged"
+        elif action == "delete":
+            orchestrator.delete_epic(slug)
+            done = "epic_deleted"
         elif action == "reject":
             orchestrator.reject_epic(slug, now)
             done = "epic_rejected"
@@ -4668,8 +4690,8 @@ async def epic_action(request: Request) -> Response:
         else:
             return PlainTextResponse("Unknown action.", status_code=404)
     except ValueError as e:
-        return go("/", error="epic_exists" if "already" in str(e) else
-                  "epic_target" if action == "merge" else "state")
+        return go("/", error="epic_exists" if "already" in str(e) else "epic_busy" if "busy" in str(e) else
+                  "epic_target" if action == "merge" else "epic_not_empty" if action == "delete" else "state")
     return go("/", done=done)
 
 async def combine_action(request: Request) -> Response:
