@@ -129,6 +129,19 @@ def reason(e: BaseException) -> str:
     first = text if len(text) <= 160 else text[:157].rstrip() + "..."
     return first if name in ("Exception", "RuntimeError") or name.endswith("Failed") else f"{name}: {first}"
 
+SHORT = 160                                # the most of a reason History shows on one line
+SOURCE_LINE = re.compile(r"s\d+: ")        # a check's problem with one source ("s2: quote not found ...")
+
+def short_notes(notes: str) -> str:
+    """A check's notes as one line for History: its first problem, cut to SHORT characters, and how many more.
+    A problem with the whole thing goes ahead of one source's; a line in parentheses is an aside, not a problem."""
+    lines = [l.strip() for l in notes.splitlines() if l.strip() and not l.strip().startswith("(")]
+    if not lines:
+        return ""
+    first = next((l for l in lines if not SOURCE_LINE.match(l)), lines[0])
+    first = first if len(first) <= SHORT else first[:SHORT - 3].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+    return first + (f" (+{len(lines) - 1} more)" if len(lines) > 1 else "")
+
 def clear() -> None:
     """This worker is done with its task."""
     trail.stop()

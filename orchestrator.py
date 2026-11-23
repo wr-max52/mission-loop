@@ -78,10 +78,11 @@ def _research_failed(m: Mission, brief: ResearchBrief | None, notes: str) -> str
         path = Path("missions") / m.slug / "brief.rejected.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(brief_markdown(m.slug, brief) + f"\n## Validator notes\n{notes}\n")
+    why = f": {activity.short_notes(notes)}" if activity.short_notes(notes) else ""
     if m.attempts >= m.max_attempts:
         m.state = State.PARKED
-        return f"parked after {m.attempts} attempts"
-    return f"attempt {m.attempts} failed validation"
+        return f"parked after {m.attempts} attempts{why}"
+    return f"attempt {m.attempts} failed validation{why}"
 
 def _gather(m: Mission, now) -> str:
     """The Research Assistant's half of a research attempt: find and read sources. What it found is saved,
@@ -295,12 +296,14 @@ def _article_failed(m: Mission, brief: ResearchBrief, article: Article | None, n
         path.parent.mkdir(parents=True, exist_ok=True)
         title = "Rating" if rating else "Article check notes"
         path.write_text(article_markdown(m.slug, brief, article) + f"\n## {title}\n{notes}\n")
+    why = (f": {rating.summary().lower()}" if rating else
+           f": {activity.short_notes(notes)}" if activity.short_notes(notes) else "")
     if m.write_attempts >= m.max_attempts:
         m.state = State.PARKED
-        return f"parked after {m.write_attempts} writing attempts"
+        return f"parked after {m.write_attempts} writing attempts{why}"
     if rating:
         return f"writing attempt {m.write_attempts} {rating.summary().lower()}; sent back to the writer"
-    return f"writing attempt {m.write_attempts} failed check"
+    return f"writing attempt {m.write_attempts} failed check{why}"
 
 def _rate(m: Mission) -> str:
     """The Research Assistant rates an article that passed the article check (agents/rater.py). A total of
