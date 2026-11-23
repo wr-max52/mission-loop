@@ -5,7 +5,7 @@ from ollama import Message
 from starlette.testclient import TestClient
 import activity, agents, orchestrator, run as cli, status_tools, store, trail, ui
 from agents import llm, stubs, theorist
-from agents.theorist import NewEpic, NewMission, Theory, TheoryReply
+from agents.theorist import BoardTidy, EpicMission, NewEpic, NewMission, Theory, TheoryReply
 from contracts import Claim, Mission, State
 
 T0 = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
@@ -85,21 +85,18 @@ def test_line_rules():
     assert "characters" in theorist.line_problems(LINE[:-1] + " really" * 80 + "?", LINE)[0]
     assert "empty" in theorist.line_problems("  ", LINE)[0]
 
-async def test_new_epics_need_two_missions_and_a_new_name(monkeypatch):
+async def test_an_ideas_turn_never_makes_an_epic(monkeypatch):
+    """#131: new epics come only from the board turn. An ideas reply that still sends new_epics changes nothing."""
     desk()
-    script(monkeypatch, [reply(new_epics=[
-        NewEpic(title="Permit Money", missions=["dam", "fed-a", "nope"]),       # kept, unknown slug left out
-        NewEpic(title="Lone Thread", missions=["loose"]),                       # one mission: dropped
-        NewEpic(title="water rights", missions=["dam", "loose"]),               # an existing epic: dropped
-        NewEpic(title="Grid Silence", missions=["loose"]),                      # kept: the new mission joins it
-        NewEpic(title="Third Theme", missions=["dam", "loose"]),                # over the limit: dropped
-    ], new_mission=NewMission(topic="Did the grid operator and the dam builder share lawyers?",
-                              objective="loose and dam both name one firm.", epic="grid silence"))])
+    sent = reply(new_mission=NewMission(topic="Did the grid operator and the dam builder share lawyers?",
+                                        objective="loose and dam both name one firm.", epic="Grid Silence"))
+    raw = sent.model_dump() | {"new_epics": [{"title": "Grid Silence", "missions": ["dam", "fed-a", "loose"]}]}
+    seen = script(monkeypatch, [__import__("json").dumps(raw)])
     theory = await think()
-    assert [(e.title, e.missions) for e in theory.new_epics] == [("Permit Money", ["dam", "fed-a"]),
-                                                                ("Grid Silence", ["loose"])]
-    assert theory.new_mission.epic == "Grid Silence"
-    assert len(theory.dropped) == 3
+    assert "new_epics" not in seen[0]["format"]["properties"] and "new_epics" not in seen[0]["messages"][0]["content"]
+    assert theory.new_mission.epic == ""                                 # a made-up epic: none
+    assert orchestrator.apply_theory(theory, T0) == 2                    # the line and the mission
+    assert store.find_epic("Grid Silence") is None and store.all_epics("proposed") == []
 
 async def test_new_mission_must_be_new(monkeypatch):
     desk()
@@ -224,14 +221,15 @@ def test_a_human_edit_meanwhile_wins():
     assert store.get_inspiration() == "The editor's new line?"
     assert "changed it while the Theorist was thinking" in store.last_theory()["notes"][0]
 
+def board_epic(title="Permit Money", missions=("dam", "fed-b"), new=("Do the permit firm and the Fed lobbyist overlap?",),
+               why="both name one firm"):
+    return BoardTidy(why="Grouped the permit work.", new_epic=NewEpic(
+        title=title, why=why, missions=list(missions), new_missions=[EpicMission(topic=t, objective="o") for t in new]))
+
 def test_proposed_epic_moves_missions_and_rejecting_puts_them_back():
     desk()
     fed = store.find_epic("Fed Capture").slug
-    theory = Theory(patterns=[], inspiration=LINE, based_on=LINE,
-                    new_epics=[NewEpic(title="Permit Money", why="both name one firm", missions=["dam", "fed-b"])],
-                    new_mission=NewMission(topic="Do the permit firm and the Fed lobbyist overlap?", objective="o",
-                                           epic="Permit Money"))
-    assert orchestrator.apply_theory(theory, T0) == 3
+    assert orchestrator.apply_board(board_epic(), T0) == 3              # two moved, one queued
     epic = store.find_epic("Permit Money")
     assert epic.status == "proposed"
     new = [m for m in store.all_missions() if m.topic.startswith("Do the permit")][0]
@@ -239,17 +237,25 @@ def test_proposed_epic_moves_missions_and_rejecting_puts_them_back():
     assert "proposed by the Theorist" in store.events(new.slug)[0]["note"]
     assert store.get_mission("fed-b").epic == epic.slug and store.get_mission("fed-b").epic_fallback == fed
     assert "Theorist proposes the new epic Permit Money: both name one firm" in store.events("dam")[-1]["note"]
-    assert store.last_theory()["epics"] == ["Permit Money"] and store.last_theory()["mission"] == new.slug
+    assert "for the new epic Permit Money" in store.events(new.slug)[0]["note"]
+    last = store.last_theory()
+    assert (last["kind"], last["epics"], last["missions"]) == ("board", ["Permit Money"], [new.slug])
     orchestrator.reject_epic(epic.slug, T0)
     assert store.get_mission("fed-b").epic == fed and store.get_mission("dam").epic == store.find_epic("Water Rights").slug
     assert store.get_mission(new.slug).epic == ""
 
 def test_missions_being_worked_on_stay_put():
     desk()
-    theory = Theory(patterns=[], inspiration=LINE, based_on=LINE,
-                    new_epics=[NewEpic(title="Permit Money", missions=["dam", "fed-a"])])
-    assert orchestrator.apply_theory(theory, T0, busy={"fed-a"}) == 0
+    assert orchestrator.apply_board(board_epic(missions=("dam", "fed-a")), T0, busy={"fed-a"}) == 0
     assert store.find_epic("Permit Money") is None and "not enough of its missions" in store.last_theory()["notes"][0]
+    assert not [m for m in store.all_missions() if m.topic.startswith("Do the permit")]   # its new missions go with it
+
+def test_no_board_epic_while_another_was_proposed_meanwhile():
+    desk()
+    orchestrator.propose_epic("Grid Silence", ["loose", "fed-a", "dam"], "", T0, "chat")
+    assert orchestrator.apply_board(board_epic(missions=("fed-b", "fed-a")), T0) == 0
+    assert store.find_epic("Permit Money") is None
+    assert "Grid Silence was proposed while the Theorist was thinking" in store.last_theory()["notes"][0]
 
 # ---------- what humans and the chat assistant see ----------
 
@@ -262,14 +268,15 @@ def client(monkeypatch):
 
 def test_ui_shows_the_notes_and_the_line_over_time(client):
     desk()
-    orchestrator.apply_theory(Theory(patterns=["A <pattern>"], inspiration=EVOLVED, why="Because.", based_on=LINE,
-                                     new_epics=[NewEpic(title="Permit Money", missions=["dam", "fed-a"])]), T0)
+    orchestrator.apply_theory(Theory(patterns=["A <pattern>"], inspiration=EVOLVED, why="Because.", based_on=LINE), T0)
     html = client.get("/").text
     assert "Theorist&#x27;s notes" in html or "Theorist's notes" in html
     assert "<li>A &lt;pattern&gt;</li>" in html and "Because." in html
-    assert "Proposed epic <strong>Permit Money</strong>" in html
     assert "Theorist:</span> " + EVOLVED in html and "you:</span> " + LINE in html
-    assert "Proposed by Theorist · 2 missions" in html
+    orchestrator.apply_board(board_epic(missions=("dam", "fed-a")), T0)   # a board turn's epic and mission
+    html = client.get("/").text
+    assert "Proposed epic <strong>Permit Money</strong>" in html and "Do the permit firm and the Fed lobbyist overlap?" in html
+    assert "Proposed by Theorist · 3 missions" in html and "<li>A &lt;pattern&gt;</li>" in html   # the turn before stays
 
 def test_ui_asks_the_theorist(client):
     store.set_inspiration(LINE)

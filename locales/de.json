@@ -828,7 +828,7 @@
  "Their own quirk, drawn by a model.": "Eigene Marotte, von einem Modell gezeichnet.",
  "Their quirk": "Marotte",
  "Theorist": "Theoretiker",
- "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "Theoretiker-Prüfung (Code): nur Fragen, behält die Hälfte der Wörter; neue Reihe braucht 2+ Missionen und einen neuen Namen; neue Mission muss neu sein; eine Zusammenlegung nimmt 2-4 Missionen, die noch nicht geschrieben werden; eine Verknüpfung braucht eine offene Mission, einen Grund und ein neues Paar. Was durchfällt, wird verworfen.",
+ "Theorist check (code): questions only, keeps half its words; new epic only on a board turn, 3+ missions, 2+ existing, a new name, none while one waits; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "Theoretiker-Prüfung (Code): nur Fragen, behält die Hälfte der Wörter; neue Reihe nur in einer Pinnwand-Runde, 3+ Missionen, davon 2+ bestehende, ein neuer Name, keine, solange eine wartet; neue Mission muss neu sein; eine Zusammenlegung nimmt 2-4 Missionen, die noch nicht geschrieben werden; eine Verknüpfung braucht eine offene Mission, einen Grund und ein neues Paar. Was durchfällt, wird verworfen.",
  "Theorist proposes combining {n} missions into one.": "Der Theoretiker schlägt vor, {n} Missionen zu einer zusammenzulegen.",
  "Theorist runs next.": "Der Theoretiker ist als Nächstes dran.",
  "Theorist's notes": "Notizen des Theoretikers",

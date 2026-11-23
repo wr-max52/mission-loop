@@ -828,7 +828,7 @@
  "Their own quirk, drawn by a model.": "自己的小癖好，由模型绘制。",
  "Their quirk": "小癖好",
  "Theorist": "理论家",
- "Theorist check (code): questions only, keeps half its words; new epic needs 2+ missions and a new name; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "理论家检查（代码）：只能提问，至少保留一半原词；新专题需要 2 个以上任务和新名称；新任务必须是新的；合并需 2-4 个尚未进入撰写的任务；关联需要一个未完成的任务、一个理由和一组新配对。不合格的直接剔除。",
+ "Theorist check (code): questions only, keeps half its words; new epic only on a board turn, 3+ missions, 2+ existing, a new name, none while one waits; new mission must be new; a combine takes 2-4 missions not yet in writing; a link needs an open mission, a reason and a new pair. Failures are dropped.": "理论家检查（代码）：只能提问，至少保留一半原词；新专题只在看板轮次提出，需 3 个以上任务，其中 2 个以上已有，名称要新，已有专题待审时不提；新任务必须是新的；合并需 2-4 个尚未进入撰写的任务；关联需要一个未完成的任务、一个理由和一组新配对。不合格的直接剔除。",
  "Theorist proposes combining {n} missions into one.": "理论家提议把 {n} 个任务合并为一个。",
  "Theorist runs next.": "理论家将在下一轮运行。",
  "Theorist's notes": "理论家笔记",

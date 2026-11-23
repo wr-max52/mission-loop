@@ -1223,6 +1223,11 @@ def theorist_notes() -> str:
                     if moved else _("moved nothing"))
             tidied = _("Last turn {when} tidied the {board}: {what}.").format(when=_when(last["at"]), board=board, what=what)
             parts.append(f'<p class="muted">{tidied} {escape(last.get("why", ""))}</p>')
+            made = [f'<li>{_("Proposed epic")} <strong>{escape(t)}</strong></li>' for t in last.get("epics", [])]
+            made += [f'<li>{_("Proposed mission")} <a href="/m/{quote(m.slug)}">{escape(m.topic)}</a></li>'
+                     for m in (store.get_mission(s) for s in last.get("missions", [])) if m]
+            if made:
+                parts.append(f"<ul>{''.join(made)}</ul>")
             if last.get("notes"):
                 parts.append(f'<p class="hint">{_("Dropped by check:")} ' + escape("; ".join(last["notes"])) + "</p>")
         last = last.get("ideas") or {}
@@ -2419,11 +2424,16 @@ def mission_ask(m: Mission, epics: dict[str, Epic]) -> str:
                f'<div class="sub">{mission_pill(m, epics)}{escape(m.slug)} · {escape(next_step(m))}</div>',
                f'<a class="btn primary" href="{href}">{_(ASK_ACTION[color])}</a>', href)
 
+def by_theorist(e: Epic, ms: list[Mission]) -> bool:
+    """Whether the Theorist proposed epic e: a mission moved into it says so in its history ("the Theorist proposes
+    the new epic ..."), whichever of its turns it came from."""
+    said = f"the Theorist proposes the new epic {e.title}"
+    return any(ev["note"].startswith(said) for m in ms for ev in store.events(m.slug))
+
 def epic_proposals(missions: list[Mission]) -> list[str]:
     """Proposed epics (the finder's or the Theorist's), each waiting for the human to approve, rename, redirect
     or reject it."""
     active = store.all_epics("active")
-    theorist = {t.lower() for t in store.last_ideas().get("epics", [])}
     epics = {e.slug: e for e in store.all_epics()}
     out = []
     for e in store.all_epics("proposed"):
@@ -2438,7 +2448,7 @@ def epic_proposals(missions: list[Mission]) -> list[str]:
             options = "".join(f'<option value="{escape(a.slug, quote=True)}">{escape(a.title)}</option>' for a in active)
             move = (f'<form method="post" action="/epics/{slug}/merge"><select name="into" aria-label="{_("Existing epic")}">'
                     f'{options}</select><button>{_("Move to epic")}</button></form>')
-        who = _("Proposed by Theorist") if e.title.lower() in theorist else _("Proposed by mission finder")
+        who = _("Proposed by Theorist") if by_theorist(e, ms) else _("Proposed by mission finder")
         out.append(ask(
             "propose", e.title, _("New epic"),
             f'<div class="sub">{who} · {_n("{n} mission", "{n} missions", len(ms))}</div><ul>{items}</ul>',

@@ -448,7 +448,7 @@ def ask_theorist() -> str:
 @server.tool()
 def propose_epic(title: str, missions: str, why: str = "") -> str:
     """Propose a new epic, as the Theorist does: a theme emerging across missions or a strand that has grown into a
-    line of inquiry of its own. title: 1 to 3 words, not an existing epic's. missions: the slugs of at least 2
+    line of inquiry of its own. title: 1 to 3 words, not an existing epic's. missions: the slugs of at least 3
     existing missions that belong in it, separated by commas; they move there now, and go back to their old epic if
     the human rejects it. Missions an agent is working on right now stay put. why: one sentence."""
     notes: list[str] = []
@@ -473,7 +473,7 @@ def propose_combine(missions: str, topic: str, objective: str, epic: str = "", w
     title. why: one sentence. It waits for the human; approving stops the missions and queues the bigger one."""
     notes: list[str] = []
     c = theorist.settle_combine(theorist.NewCombine(missions=_slugs(missions), topic=topic, objective=objective,
-                                                    epic=epic, why=why), store.all_missions(), [], notes)
+                                                    epic=epic, why=why), store.all_missions(), notes)
     if not c:
         return _dropped(notes)
     try:

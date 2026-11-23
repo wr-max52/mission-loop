@@ -7,6 +7,7 @@ import agents                              # switchboard: see agents/__init__.py
 import search_status, settings, stopping, store
 from checks import validator
 from agents import bluesky, f916, github, publisher
+from agents.theorist import MIN_EPIC_MISSIONS, MIN_EXISTING
 from agents.channel import NoAllowance, Refused
 from contracts import (Evidence, Mission, State, ResearchBrief, RejectedBrief, RejectedArticle, OutreachRecord, Article,
                        ArticleRating,
@@ -596,7 +597,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                 if before == "theorist":   # applied here, between tasks, so no worker saves over its changes
                     busy = {m.slug for _, m, _ in running.values() if m}
                     if result is not None and hasattr(result, "moves"):   # a board turn
-                        changed += apply_board(result, now_fn())
+                        changed += apply_board(result, now_fn(), busy)
                     else:
                         changed += apply_theory(result, now_fn(), busy) if result else 0
                     continue
@@ -676,7 +677,7 @@ def find_new_missions(now) -> int:
 # ---------- the Theorist: looks across the desk, evolves the line ----------
 
 THEORY_GAP = timedelta(hours=6)            # at most one turn this often, unless a human asks (THINK_FLAG)
-BOARD_EVERY = 3                            # every third Theorist turn only arranges the cork board (#69)
+BOARD_EVERY = 3                            # every third Theorist turn arranges the cork board (#69) and may propose an epic (#131)
 
 def theory_turn() -> int:
     """The number the Theorist's next turn will have (data/theory.json counts them, failed ones included)."""
@@ -717,8 +718,8 @@ def theorist_due(now) -> bool:
         return True
 
 def think(now):
-    """The Theorist's turn, on a worker's thread: every BOARD_EVERY-th turn arranges the board (agents.tidy_board),
-    the others look across the desk (agents.theorize). It only reads; apply_theory or apply_board makes the
+    """The Theorist's turn, on a worker's thread: every BOARD_EVERY-th turn arranges the board and may propose a new
+    epic (agents.tidy_board), the others look across the desk (agents.theorize). It only reads; apply_theory or apply_board makes the
     changes. A failure is noted (and counted as a turn), so it waits THEORY_GAP before trying again, and never
     holds up the loop."""
     asked = THINK_FLAG.exists()
@@ -739,9 +740,8 @@ def think(now):
         activity.clear()
 
 def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
-    """Make the Theorist's changes, on the main thread between tasks: the evolved line, its proposed epics (they
-    wait for the human like the finder's, and each mission moved keeps its old epic to go back to), its one
-    new mission, its combine (proposed: it waits for the human too) and its links (made right away: they change
+    """Make the Theorist's changes, on the main thread between tasks: the evolved line, its one new mission (in an
+    active epic or none; new epics are the board turn's, apply_board), its combine (proposed: it waits for the human too) and its links (made right away: they change
     no mission, only what each one's research sees). A human edit to the line since the Theorist read it wins.
     Missions being worked on right now stay where they are. Returns how many changes."""
     changed, notes = 0, list(theory.dropped)
@@ -753,29 +753,11 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
         else:
             notes.append("line kept: the editor changed it while the Theorist was thinking")
 
-    homes, epics = {}, []                  # new epic title (lowercase) -> slug, for the new mission
-    joins = epic_title(theory.new_mission.epic).lower() if theory.new_mission else ""
-    for e in theory.new_epics:
-        try:
-            epic, moved = propose_epic(e.title, e.missions, e.why, now, "theorist", busy,
-                                       extra=int(joins == e.title.lower()))
-        except ValueError as why:
-            notes.append(f"new epic dropped: {why}")
-            continue
-        homes[e.title.lower()] = epic.slug
-        epics.append(epic.title)
-        changed += moved
-
     slug = ""
     if theory.new_mission:
-        idea, missions = theory.new_mission, store.all_missions()
+        idea = theory.new_mission
         home = store.find_epic(idea.epic) if idea.epic else None
-        epic = homes.get(joins) or (home.slug if home and home.status == "active" else "")
-        slug = _new_slug(idea.topic, {m.slug for m in missions})
-        store.save_mission(Mission(slug=slug, topic=idea.topic, epic=epic,
-                                   objective=f"{idea.objective}\n\nProposed by the Theorist from the desk's own work."))
-        store.log_event(slug, now, "", State.QUEUED.value, "proposed by the Theorist"
-                        + (f": {theory.why}" if theory.why else ""))
+        slug = _queue_idea(idea, home.slug if home and home.status == "active" else "", now, theory.why)
         changed += 1
 
     combine = ""
@@ -803,14 +785,43 @@ def apply_theory(theory, now, busy: set[str] = frozenset()) -> int:
     store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "ideas",
                        "patterns": theory.patterns,
                        "why": theory.why, "line_before": before, "line_after": store.get_inspiration(),
-                       "epics": epics, "mission": slug, "combine": combine, "links": linked, "notes": notes,
+                       "epics": [], "mission": slug, "combine": combine, "links": linked, "notes": notes,
                        "lookups": theory.lookups})
     print(f"theorist: {changed} change(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
     return changed
 
-def apply_board(tidy, now) -> int:
-    """A board turn's moves, on the main thread between tasks, saved as the Theorist's. It may move notes a human
-    dragged. The last turn that looked across the desk stays in theory.json under "ideas", for the notes."""
+def _queue_idea(idea, epic: str, now, why: str = "") -> str:
+    """Queue one of the Theorist's new missions (a topic and an objective) in epic (a slug, or ""), like a found one:
+    it still needs brief review. Returns its slug."""
+    slug = _new_slug(idea.topic, {m.slug for m in store.all_missions()})
+    store.save_mission(Mission(slug=slug, topic=idea.topic, epic=epic,
+                               objective=f"{idea.objective}\n\nProposed by the Theorist from the desk's own work."))
+    store.log_event(slug, now, "", State.QUEUED.value, "proposed by the Theorist" + (f": {why}" if why else ""))
+    return slug
+
+def _board_epic(e, now, busy: set[str], notes: list[str]) -> tuple[str, list[str], int]:
+    """A board turn's new epic (#131), proposed like the chat's and the finder's (it waits for the human; each
+    mission moved keeps its old epic to go back to; busy missions stay put), with its new missions queued in it.
+    Dropped, and noted, if another epic was proposed meanwhile or too few of its missions are free to move.
+    Returns (title, new mission slugs, changes)."""
+    waiting = [x.title for x in store.all_epics("proposed")]
+    if waiting:
+        notes.append(f"new epic dropped: {e.title}, {', '.join(waiting)} was proposed while the Theorist was thinking")
+        return "", [], 0
+    try:
+        epic, moved = propose_epic(e.title, e.missions, e.why, now, "theorist", busy, extra=len(e.new_missions),
+                                   least=MIN_EPIC_MISSIONS, existing=MIN_EXISTING)
+    except ValueError as why:
+        notes.append(f"new epic dropped: {why}")
+        return "", [], 0
+    made = [_queue_idea(idea, epic.slug, now, f"for the new epic {epic.title}") for idea in e.new_missions]
+    _drop_empty_proposals()               # an epic whose missions all just moved away goes
+    return epic.title, made, moved + len(made)
+
+def apply_board(tidy, now, busy: set[str] = frozenset()) -> int:
+    """A board turn's moves and its new epic, if any (_board_epic), on the main thread between tasks, saved as the
+    Theorist's. It may move notes a human dragged. The last turn that looked across the desk stays in theory.json
+    under "ideas", for the notes. Returns how many changes."""
     moved, notes = [], list(tidy.dropped)
     for mv in tidy.moves:
         prefix, _, slug = mv.id.partition(":")
@@ -819,26 +830,30 @@ def apply_board(tidy, now) -> int:
             moved.append(mv.model_dump())
         except ValueError as e:            # gone since the Theorist read the board
             notes.append(f"{mv.id}: {e}")
+    title, made, changed = _board_epic(tidy.new_epic, now, busy, notes) if tidy.new_epic else ("", [], 0)
     store.save_theory({"at": now.isoformat(), "fingerprint": desk_fingerprint(), "turn": theory_turn(), "kind": "board",
-                       "why": tidy.why, "moved": moved, "notes": notes, "ideas": store.last_ideas()})
-    print(f"theorist: board turn moved {len(moved)} note(s)" + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
-    return len(moved)
+                       "why": tidy.why, "moved": moved, "epics": [title] if title else [], "missions": made,
+                       "notes": notes, "ideas": store.last_ideas()})
+    print(f"theorist: board turn moved {len(moved)} note(s)" + (f", proposed the epic {title}" if title else "")
+          + (f"; {'; '.join(notes)}" if notes else ""), flush=True)
+    return len(moved) + changed
 
 WHO = {"theorist": "the Theorist", "chat": "the chat assistant", "human": "human"}
 
 def propose_epic(title: str, slugs: list[str], why: str, now, by: str = "theorist", busy: set[str] = frozenset(),
-                 extra: int = 0) -> tuple[Epic, int]:
+                 extra: int = 0, least: int = MIN_EPIC_MISSIONS, existing: int = 0) -> tuple[Epic, int]:
     """A new epic, proposed: it waits for the human like the finder's, and each mission moved into it keeps its old
-    (active) epic to go back to if it is rejected. Missions being worked on right now stay where they are. extra
-    counts a mission that will join it later (the Theorist's new mission). Used by the Theorist and the chat
-    assistant. Returns (epic, missions moved); raises ValueError if the epic exists or too few missions can move."""
+    (active) epic to go back to if it is rejected. Missions being worked on right now stay where they are. It needs
+    least missions in all, extra counting new ones that will join it (a board turn's), and at least existing of
+    them moved now. Used by the Theorist's board turn and the chat assistant. Returns (epic, missions moved);
+    raises ValueError if the epic exists or too few missions can move."""
     title = epic_title(title)
     if not title:
         raise ValueError("an epic title is 1 to 4 words")
     if store.find_epic(title):
         raise ValueError(f"{title} exists now")
     members = [m for m in (store.get_mission(s) for s in dict.fromkeys(slugs)) if m and m.slug not in busy]
-    if len(members) + extra < MIN_NEW_EPIC_MISSIONS:
+    if len(members) < existing or len(members) + extra < least:
         raise ValueError(f"{title}, not enough of its missions are free to move")
     epic = store.create_epic(title, status="proposed")
     for m in members:
