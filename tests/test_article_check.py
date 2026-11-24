@@ -132,6 +132,31 @@ def test_outside_urls_are_left_for_the_check():
     text = "See [https://congress.gov/x, https://evil.example] and [link](https://congress.gov/x)."
     assert cite_by_id(text, BRIEF) == text
 
+def test_citations_written_as_links_become_ids():
+    text = "It passed [gov](https://congress.gov/x). Critics object [op, news](https://elsewhere.example/a)."
+    assert cite_by_id(text, BRIEF) == "It passed [gov]. Critics object [op, news]."
+
+def test_citations_in_other_shapes_become_ids():
+    text = "It passed [GOV; news]. They said so [Source: op]. Both agree [gov and news]."
+    assert cite_by_id(text, BRIEF) == "It passed [gov, news]. They said so [op]. Both agree [gov, news]."
+
+def test_ids_in_parentheses_become_citations_only_when_they_look_like_ids():
+    brief = BRIEF.model_copy(update={"sources": [s.model_copy(update={"id": f"s{i}"})
+                                                 for i, s in enumerate(BRIEF.sources, 1)]})
+    assert cite_by_id("It passed (s1, s2). Critics object (sources: s3).", brief) == \
+        "It passed [s1, s2]. Critics object [s3]."
+    assert cite_by_id("The outlet (news) ran it in (2024).", BRIEF) == "The outlet (news) ran it in (2024)."
+
+def test_prose_in_brackets_and_outside_links_are_left_alone():
+    text = "The [utility report](https://u.example.com) says so [gov], and [one critic] disagrees [op](x)."
+    assert cite_by_id(text, BRIEF) == "The [utility report](https://u.example.com) says so [gov], and [one critic] disagrees [op]."
+
+def test_a_section_cited_only_by_links_is_settled_to_ids():
+    from checks.article_check import settle_section
+    sec = Section(heading="H", paragraphs=["It passed [gov](https://congress.gov/x).", "More [news](https://n.example)."])
+    settled, fixes = settle_section(sec, BRIEF)
+    assert settled.paragraphs == ["It passed [gov].", "More [news]."] and fixes == ["took links out of 2 paragraphs"]
+
 def test_article_citing_by_url_passes_once_rewritten():
     a = article()
     for sec in a.sections:

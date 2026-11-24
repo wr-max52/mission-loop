@@ -387,21 +387,35 @@ Mission.model_rebuild()
 
 # Inline citation in article text: [s1] or [s1, s2]. Shared by the checker and the renderer.
 CITATION = re.compile(r"\[([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\](?!\()")
-URL_CITATION = re.compile(r"\[\s*(https?://[^\s,\]]+(?:\s*,\s*(?:https?://)?[^\s,\]]+)*)\s*\](?!\()")
 
 def _bare(url: str) -> str:
     return url.strip().rstrip("/")
 
+# Citations the writer sometimes writes in another shape: [s1](https://...), [s1; s2], [S1], [Source: s1], (s1, s2).
+LOOSE_CITATION = re.compile(r"\[\s*(?:sources?\s*:?\s*)?([^\[\]]+?)\s*\](?:\(([^)\s]*)\))?"
+                            r"|\(\s*(sources?\s*:?\s*)?([^()\[\]]+?)\s*\)", re.I)
+_PARTS = re.compile(r"\s*[,;&]\s*|\s+and\s+")
+
 def cite_by_id(text: str, brief: "ResearchBrief") -> str:
-    """Rewrite [https://a, https://b] to [s1, s2] when every entry is a brief source's URL or id. Anything
-    else stays, so a link to a page outside the brief still fails the article check."""
+    """Rewrite citations to the plain [s1, s2] the checks count, when every entry is a brief source's id or URL:
+    [https://a, https://b], a Markdown link on ids like [s1](https://a), [s1; s2], [S1] and [Source: s1]. Ids in
+    parentheses, like (s1, s2), are taken too when they look like ids (have a digit) or say "source". Anything
+    else stays, so a link to a page outside the brief, or prose in brackets, still fails the article check (#175)."""
     ids = {s.id for s in brief.sources}
+    by_lower = {i.lower(): i for i in ids}
     by_url = {_bare(s.url): s.id for s in brief.sources}
+    def one(part: str, urls: bool = True) -> str | None:
+        part = part.strip()
+        return by_lower.get(part.lower()) or (by_url.get(_bare(part)) if urls else None)
     def swap(m: re.Match) -> str:
-        parts = [p.strip() for p in m.group(1).split(",")]
-        new = [p if p in ids else by_url.get(_bare(p)) for p in parts]
-        return f"[{', '.join(new)}]" if all(new) else m.group(0)
-    return URL_CITATION.sub(swap, text)
+        if m.group(1) is not None:                                   # [...] with or without (address) after it
+            new = [one(p) for p in _PARTS.split(m.group(1))]
+            return f"[{', '.join(new)}]" if all(new) else m.group(0)
+        new = [one(p, urls=False) for p in _PARTS.split(m.group(4))]   # (...)
+        if all(new) and (m.group(3) or all(any(c.isdigit() for c in n) for n in new)):
+            return f"[{', '.join(new)}]"
+        return m.group(0)
+    return LOOSE_CITATION.sub(swap, text)
 
 # The required wording of a possibility. Shared by the checkers and the renderer.
 POSSIBILITY = re.compile(r"\bit is possible that\b", re.I)
