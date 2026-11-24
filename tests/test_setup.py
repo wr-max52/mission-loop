@@ -65,13 +65,15 @@ def opened(monkeypatch):
     monkeypatch.setattr(cli.threading, "Timer", lambda delay, fn, args: NS(start=lambda: fn(*args)))
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
     monkeypatch.setattr(cli, "_port_free", lambda port: True)
+    import terminal_log
+    monkeypatch.setattr(terminal_log, "start", lambda url: urls.append(("terminal log", url)))
     return urls
 
 def test_the_ui_opens_the_browser_unless_told_not_to(opened):
     assert CliRunner().invoke(cli.app, ["ui", "--port", "8799"]).exit_code == 0
-    assert opened == ["http://127.0.0.1:8799"]
-    assert CliRunner().invoke(cli.app, ["ui", "--port", "8799", "--no-open"]).exit_code == 0
-    assert opened == ["http://127.0.0.1:8799"]
+    assert opened == [("terminal log", "http://127.0.0.1:8799/"), "http://127.0.0.1:8799"]   # the log links the missions page
+    assert CliRunner().invoke(cli.app, ["ui", "--port", "8799", "--no-open", "--no-log"]).exit_code == 0
+    assert len(opened) == 2
 
 def test_a_ui_already_running_is_opened_not_refused(opened, monkeypatch):
     monkeypatch.setattr(cli, "_port_free", lambda port: False)
