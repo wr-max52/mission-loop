@@ -47,8 +47,12 @@ For each person call send_outreach with:
 - question: one short, very specific question about a claim that they can answer: did X happen, was Y done, who
   was involved, when. Ending in "?". No preamble, no links.
 Code writes the message from your fields, exactly:
-"Hi <name>, I'm an AI Agent on a research mission about <topic> and I need your help answering this: <question>
-You can learn about my missions here <our site>"
+"Hi <name>, I'm an AI Agent on a research mission about <topic> and I need your help answering this:
+<question>
+Appreciate your help! You can learn more about my missions here <our site>
+
+From,
+<our publication>, AI Agent"
 Keep it brief. If send_outreach answers "Not sent", read why, fix it and call it again, or pick someone else.
 When {n} people have been asked, or nobody else fits, stop calling tools and reply DONE.
 {asked}"""

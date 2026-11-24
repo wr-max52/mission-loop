@@ -19,6 +19,7 @@ Each contact who answers gets one canned reply (THANKS, with the site's address)
 thread, the first time their answer is read; no model writes it or reads their answer for it.
 """
 import email, email.policy, imaplib, re, smtplib, ssl
+from html import escape
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid, parseaddr, parsedate_to_datetime
@@ -26,9 +27,13 @@ import httpx
 import settings, store
 from contracts import Mission, OutreachRecord
 
-TEMPLATE = ("Hi {name}, I'm an AI Agent on a research mission about {topic} and I need your help answering this: "
-            "{question}")
-LINK = " You can learn about my missions here {url}"
+# The message, line by line: the ask, the question on a line of its own (bold where the channel can show it: email),
+# the thanks with the site's address, then a blank line and the sign-off with the publication's name.
+TEMPLATE = "Hi {name}, I'm an AI Agent on a research mission about {topic} and I need your help answering this:"
+CLOSE = "Appreciate your help!"
+MORE = " You can learn more about my missions here {url}"
+SIGN = "From,\n{desk}, AI Agent"
+LINK = " You can learn about my missions here {url}"                   # what the canned thank-you ends with
 THANKS = "Thanks {name}, that really helps. I'll weigh your answer in my research."   # the canned reply to an answer
 SUBJECT = "A question from an AI research agent about {topic}"
 BLUESKY_MAX = 300                          # characters in a Bluesky post
@@ -61,10 +66,21 @@ def addresses(channel: str) -> str:
 
 # ---------- the message ----------
 
-def message(name: str, topic: str, question: str, url: str | None = None) -> str:
-    """TEMPLATE filled in, with the site's address when there is one."""
+def _parts(name: str, topic: str, question: str, url: str | None) -> tuple[str, str, str, list[str]]:
+    """The ask, the question, the thanks (with the site's address when there is one) and the sign-off's lines."""
     url = settings.site_url() if url is None else url
-    return TEMPLATE.format(name=name, topic=topic, question=question) + (LINK.format(url=url) if url else "")
+    return (TEMPLATE.format(name=name, topic=topic), question, CLOSE + (MORE.format(url=url) if url else ""),
+            SIGN.format(desk=settings.publication_name()).split("\n"))
+
+def message(name: str, topic: str, question: str, url: str | None = None) -> str:
+    """The message as plain text (Bluesky, 1F916, the email's text part and the record): one line each."""
+    ask, q, close, sign = _parts(name, topic, question, url)
+    return "\n".join([ask, q, close, "", *sign])
+
+def message_html(name: str, topic: str, question: str, url: str | None = None) -> str:
+    """The same message as HTML, the question in bold: the email's HTML part and the preview in Settings."""
+    ask, q, close, sign = _parts(name, topic, question, url)
+    return f"<p>{escape(ask)}<br><strong>{escape(q)}</strong><br>{escape(close)}</p><p>{'<br>'.join(map(escape, sign))}</p>"
 
 def _shown(url: str) -> str:
     """The site's address as a Bluesky post shows it: no scheme, no trailing slash (the facet carries the rest)."""
@@ -189,6 +205,7 @@ def _send_email(m: Mission, address: str, name: str, topic: str, question: str, 
     ref = make_msgid(domain=cfg["from_address"].split("@")[-1])
     msg["Message-ID"] = ref
     msg.set_content(body + "\n")
+    msg.add_alternative(message_html(name, topic, question), subtype="html")   # mail apps show this one: the question bold
     try:
         with _smtp(cfg) as conn:
             conn.send_message(msg, to_addrs=_with_copy(cfg, address))

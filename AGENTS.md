@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library backup restore`
-- Tests: `pytest -q` (expects 973 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 974 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -587,9 +587,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
   `search`, `fetch`, `pages` and the `outreach` MCP server, finds up to `settings.outreach_contacts()` (default 3, at
   most 6) people who know first-hand and calls `send_outreach {channel, address, name, topic, question}` for each
   (`MAX_CALLS` 30 in `TIME_LIMIT` 10 minutes; `researcher.tool_loop` with `role="pi"` and an `OutreachGuard`). It never
-  writes a message: code (`contacts.send`) fills `contacts.TEMPLATE` ("Hi {name}, I'm an AI Agent on a research mission
-  about {topic} and I need your help answering this: {question} You can learn about my missions here {site}", the site
-  part only while `settings.site_url()` has one), checks, sends and records it as an `OutreachRecord` in the mission's
+  writes a message: code (`contacts.send`) fills `contacts.message` ("Hi {name}, I'm an AI Agent on a research mission
+  about {topic} and I need your help answering this:", then {question} on its own line, then "Appreciate your help! You
+  can learn more about my missions here {site}" with the site part only while `settings.site_url()` has one, a blank
+  line and "From," / "{publication name}, AI Agent"; email also gets an HTML part with the question in bold,
+  `contacts.message_html`, #169), checks, sends and records it as an `OutreachRecord` in the mission's
   `outreach` artifact the moment it goes, so a crash or stop loses nothing. Every outreach email and thank-you also goes
   to our own `from_address` as a blind copy in the envelope only (`contacts._with_copy`, #163), so it lands in the
   owner's inbox as well as Sent; the person sees no Bcc, and the copy has no `In-Reply-To`, so it is never read as a
