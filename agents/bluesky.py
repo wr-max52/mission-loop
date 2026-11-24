@@ -25,6 +25,7 @@ from agents.channel import NoAllowance, Refused
 KEY, NAME = "bluesky", "Bluesky"
 TEXT_MAX = 300                             # Bluesky counts graphemes; code points are never fewer, so this is safe
 POST_GAP = timedelta(minutes=10)           # with a 15-minute loop, one article a pass
+PACE = POST_GAP                            # how fast a backlog drains (#119)
 MANUAL_SKIPS_WAIT = True                   # the gap is ours, not Bluesky's: a human's "publish now" goes first
 CRED_FILE = Path("data/bluesky.json")      # {"handle", "app_password", "service"}: saved from the Settings page
 STATE_FILE = Path("data/bluesky_state.json")  # {"next_at", "note"}: pacing, and why the last try failed

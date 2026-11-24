@@ -1,5 +1,5 @@
 """The sprite rulebook (SPRITES.md) in code: specs are data, checked before they join the cast."""
-import json, shutil, subprocess
+import json, re, shutil, subprocess
 from pathlib import Path
 import pytest
 import avatars
@@ -174,51 +174,73 @@ def test_every_cyborg_looks_the_same_with_its_back_piece_as_with_its_old_map():
 }""".replace("OLD", json.dumps(old)))
     assert r == {k: True for k in old}, r
 
-def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
-    """The About page's scene (#139): every beat is one the director knows, on a step the strip shows; played with
-    no clock (each actor until it waits on a signal), the work lights every step once, in strip order, and ends."""
+def about_strip():
     import sys
     sys.path.insert(0, str(ROOT))
     import flowchart
-    r = js("R => ({ tour: R.TOUR, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS) })")
-    tour, strip = r["tour"], [k for k, kind, _ in flowchart.FLOW if k not in flowchart.OUTREACH_STEPS]
-    reviews = [k for k, kind, _ in flowchart.FLOW if kind == "human"]
-    for who, beats in tour.items():
-        for b in beats:
-            assert b[0] in r["beats"], (who, b)
-            if b[0] in ("enter", "go", "light", "approve"):
-                assert b[1] in strip, (who, b)
-            if b[0] == "do":
-                assert b[1] in r["bits"], (who, b)
-            if b[0] in ("cue", "face"):
-                assert b[1] in tour, (who, b)
-    lit, signals, queue, at = [], set(), [], {}
-    playing = {"P": list(tour["P"]), "R": list(tour["R"])}
-    while playing or queue:
-        if not playing:
-            who = queue.pop(0)
-            playing[who] = list(tour[who])
-        moved = False
-        for who, beats in list(playing.items()):
-            while beats:
-                op, *args = beats[0]
-                if op == "until" and args[0] not in signals:
-                    break
-                beats.pop(0)
-                moved = True
-                if op == "light":
-                    lit.append(args[0])
-                elif op == "signal":
-                    signals.add(args[0])
-                elif op == "cue":
-                    queue.append(args[0])
-            if not beats:
-                del playing[who]
-        assert moved or not playing, f"stuck: {playing}"
-    assert lit == strip                                                # every box once, in the strip's order
-    for k in reviews:                                                  # every review is approved after it lights
-        assert any(b[:2] == ["approve", k] for beats in tour.values() for b in beats)
+    return flowchart.FLOW
 
+def route_js():
+    return js("R => ({ stations: R.STATIONS, routes: R.ROUTES, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS) })")
+
+def check_route(stops, r, flow):
+    kinds = {k: kind for k, kind, _ in flow}
+    for step, *beats in stops:
+        assert step in kinds, step
+        assert not beats or step in r["stations"], (step, beats)       # a check or a review takes no beats
+        for b in beats:
+            assert b[0] in r["beats"], (step, b)
+            if b[0] == "do":
+                assert b[1] in r["bits"], (step, b)
+            if b[0] == "say":
+                assert set(re.findall(r"\{(\w+)\}", b[1])) <= set(r["vars"]), (step, b)
+    return [step for step, *_ in stops]
+
+def test_the_about_page_has_a_researcher_on_every_agents_box():
+    """#155: one researcher per agent's box on the About strip, from the crew that runs it (anyone at Publish)."""
+    r, flow = route_js(), about_strip()
+    assert sorted(r["stations"]) == sorted(k for k, kind, _ in flow if kind == "agent")
+    assert r["stations"] == {"theorist": "pi", "finder": "assistant", "sources": "assistant", "brief": "pi",
+                             "outreach": "pi", "writer": "pi", "article_rating": "assistant", "publisher": "desk"}
+
+def test_the_long_trip_passes_its_paper_through_every_box_once_in_order():
+    """The About page's long trip (#139): its paper visits every box on the strip, outreach included, once and in
+    strip order, and every agent's box has something to say or do with it."""
+    r, flow = route_js(), about_strip()
+    stops = r["routes"]["tour"]["stops"]
+    assert check_route(stops, r, flow) == [k for k, _, _ in flow]
+    assert all(len(stop) > 1 for stop in stops if stop[0] in r["stations"])
+
+def test_the_loops_pass_their_paper_back_between_two_boxes_then_on():
+    """The loops (#155): each paper goes back to the box before once (another angle, one more source, a draft turned
+    down) and then on along the strip to a review or Publish."""
+    r, flow = route_js(), about_strip()
+    order = [k for k, _, _ in flow]
+    steps = {name: check_route(route["stops"], r, flow) for name, route in r["routes"].items() if name != "tour"}
+    assert steps == {
+        "theorist": ["theorist", "theorist_check", "finder", "theorist", "finder", "finder_check", "epic_review"],
+        "sources": ["sources", "brief", "sources", "brief", "source_check", "brief_review"],
+        "outreach": ["outreach", "outreach_check", "replies", "writer", "article_check", "article_rating", "writer",
+                     "article_check", "article_rating", "rating_check", "article_review", "publisher"],
+    }
+    for name, s in steps.items():
+        back = [i for i in range(1, len(s)) if order.index(s[i]) < order.index(s[i - 1])]
+        assert len(back) == 1, name                                    # passed back once, everything else forward
+    assert len({route["ink"] for route in r["routes"].values()}) == len(r["routes"])   # each trip's paper has its own colour
+
+def test_researchers_on_the_strip_take_turns_to_speak():
+    """Two bubbles never land on each other (#155): a line waits while someone near on the same row is talking, and
+    is said once their bubble is gone; someone far along the row, or on another row, talks at once."""
+    r = js("""R => {
+      const crowded = R.Tour.prototype.crowded, me = { x: 100, alpha: 1, stage: { ground: 50 } };
+      const them = (x, ground, t) => ({ x, alpha: 1, stage: { ground }, bubble: { text: "Pages for you.", t, dur: 2 } });
+      const tour = a => ({ actors: [me, a], bubbleW: t => t.length * 6 + 12 });
+      return { near: crowded.call(tour(them(130, 50, 0.5)), me, "One more source!"),
+               far: crowded.call(tour(them(400, 50, 0.5)), me, "One more source!"),
+               below: crowded.call(tour(them(130, 120, 0.5)), me, "One more source!"),
+               done: crowded.call(tour(them(130, 50, 1.95)), me, "One more source!") };
+    }""")
+    assert r == {"near": True, "far": False, "below": False, "done": False}
 
 def test_an_arm_keeps_its_length_wherever_the_hand_goes():
     # #146: a raised, forward or lowered arm is one length; a hand out of reach is pulled in, never stretched to.

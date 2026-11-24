@@ -8,3 +8,5 @@ missions.yaml
 .DS_Store
 .claude/
 .pytest_cache/
+data.before-restore-*/
+.restore-*/

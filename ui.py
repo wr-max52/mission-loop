@@ -18,9 +18,10 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, board, claim_tags, clock, contacts, desk_profiles, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
+import activity, agents, avatars, backup, board, claim_tags, clock, contacts, desk_profiles, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
+from agents import channel as channel_contract
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
                        RATING_FACTORS, RATING_FAIL_AT, RATING_SCALE)
 from render import CSS, brief_html, epic_pill
@@ -114,6 +115,8 @@ MESSAGES = {
     "mcp_off": "Sharing off. Nothing on the network can reach the tools.",
     "mcp_token": "New token made. Apps with the old one are refused.",
     "mcp_port": "Port saved.",
+    "backup_saved": "Backed up. The zip holds your keys: keep it private.",
+    "backup_folder": "Backup folder saved.",
     "setup_hidden": "Setup hidden. Settings → Setup brings it back.",
     "setup_shown": "Setup shown on the Missions page.",
     "publication_saved": "Publication saved.",
@@ -121,6 +124,8 @@ MESSAGES = {
     "profile_copied": "Profile copied and in use. Edit the file named under Profile.",
 }
 ERRORS = {
+    "backup_folder": "A backup folder must be a full path outside the Mission Loop folder.",
+    "backup_failed": "Backup failed. Check the folder exists and can be written to.",
     "outreach": "Wait is 0 to 336 hours; 1 to 6 people per mission.",
     "mcp_start": "Sharing didn't start. The MCP server part of Settings says why.",
     "mcp_port": "A port is a number from 1024 to 65535.",
@@ -2718,9 +2723,17 @@ def publish_queue(missions: list[Mission]) -> list[tuple[str, str, list[tuple[st
             out.append((c.KEY, c.NAME, entries))
     return out
 
+def queue_pace(key: str, n: int, lead: str = "") -> str:
+    """How long a capped place's n queued articles take, "about 3 weeks (one a day)" (channel.estimate, #119),
+    after `lead`; "" for the local site and channels with no PACE."""
+    found = next((c for c in live_channels() if c.KEY == key), None)
+    words = channel_contract.estimate(found, n, clock.now()) if found else ""
+    return f"{lead}{escape(words)}" if words else ""
+
 def queue_card(queued: list, count: int) -> str:
     """The Missions page's one card for everything waiting to be published; the queue is on /published."""
-    places = " · ".join(f"{escape(name)} {len(entries)}" for _, name, entries in queued)
+    places = " · ".join(f"{escape(name)} {len(entries)}{queue_pace(key, len(entries), ' · ')}"
+                        for key, name, entries in queued)
     return (f'<a class="card publish" href="/published#queue"><div class="row"><span class="topic">'
             f'{_n("{n} article queued", "{n} articles queued", count)}</span><span class="badge publish">{_("Publishing")}</span></div>'
             f'<div class="sub">{places}</div></a>')
@@ -2736,8 +2749,10 @@ def queue_section(queued: list) -> str:
             f'<li><a href="{f"#a-{escape(slug)}" if key != "site" or asked else f"/m/{quote(slug)}"}">{escape(title)}</a>'
             + (f' · <strong>{_("requested")}</strong>' if asked else "") + "</li>"
             for slug, title, asked in entries)
-        parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span></h3>'
-                     f'<ol class="queue">{items}</ol>')
+        pace = queue_pace(key, len(entries))
+        parts.append(f'<h3 class="stage"><span>{escape(name)}</span><span class="n">{len(entries)}</span>'
+                     + (f'<span class="hint">{pace}</span>' if pace else "")
+                     + f'</h3><ol class="queue">{items}</ol>')
     total = len({slug for _, _, entries in queued for slug, _, _ in entries})
     return heading("clock", _("Queue"), total, "queue") + "".join(parts)
 
@@ -2785,8 +2800,8 @@ def setup_card(found: list | None = None) -> str:
         return ""
     conn = {"ok": True, "models": []} if doctor.stubs() else llm.connection()
     found = found if found is not None else doctor.checks(conn=conn)
-    if doctor.done([c for c in found if c.key != "search_up"]):   # an outage is the top bar's to say, not setup's
-        return ""
+    if doctor.done([c for c in found if c.key not in ("search_up", "backup")]):   # an outage is the top bar's to say,
+        return ""                          # not setup's; an old backup is Settings → Setup's
     by = {c.key: c for c in found}
     model_checks = [c for c in found if c.key in ("models", "connection")]
     models_ok = all(c.ok for c in model_checks)
@@ -2861,7 +2876,24 @@ def setup_section(conn: dict) -> str:
                _("The loop can't start until a model is connected."))
     cli = _("Same checks: {command}.").format(command="<code>python run.py doctor</code>")
     return (f'<div class="actions"><p>{summary} {cli}</p>'
-            f'{note}<ul class="checks">{rows}</ul>{again}</div>')
+            f'{note}<ul class="checks">{rows}</ul>{again}</div>{backup_box()}')
+
+def backup_box() -> str:
+    """Settings → Setup's backup (#120): Back up now, the last backup's time and path, and the folder it goes to."""
+    last = backup.last()
+    when = (_("Last backup: {when}, {path}.").format(when=_when(last["at"]), path=f'<code>{escape(last.get("path", ""))}</code>')
+            if last else _("No backup yet."))
+    folder = settings.backup_dir()
+    return f"""<div class="pubbox channel" id="backup"><div class="head"><h3>{icon("shield")}{_("Backup")}</h3><span class="badge">{_("On this machine")}</span></div>
+<p>{_("One zip of the database, settings, keys, missions and the published site. It holds your keys: keep it private.")}</p>
+<p>{when}</p>
+<form method="post" action="/settings/backup" class="inline"><input type="hidden" name="do" value="now">
+  <button>{_("Back up now")}</button><span class="hint">{_("or {command}").format(command="<code>python run.py backup</code>")}</span></form>
+<form method="post" action="/settings/backup" class="inline setup-form"><input type="hidden" name="do" value="folder">
+  <label for="backup_dir" style="margin:0">{_("Folder")}</label>
+  <input type="text" id="backup_dir" name="folder" value="{escape(folder, quote=True)}" maxlength="1000">
+  <button>{_("Save")}</button></form>
+<p class="hint">{_("Restore with {command} while the loop is stopped.").format(command="<code>python run.py restore &lt;zip&gt;</code>")}</p></div>"""
 
 def profile_section() -> str:
     """Settings → Research → Profile (#122): which desk profile's words the agents' prompts use (desk_profiles.py).
@@ -3262,6 +3294,28 @@ async def save_publication(request: Request) -> Response:
         return go("/settings#publication", error="publication")
     await run_in_threadpool(orchestrator.refresh_site)
     return go("/settings#publication", done="publication_saved")
+
+async def save_backup(request: Request) -> Response:
+    """Settings → Setup: Back up now, or the folder backups go to (#120)."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "folder":
+        folder = str(form.get("folder") or "").strip()[:1000]
+        try:
+            if folder:                     # checked before it is saved: a full path, not inside this folder
+                backup.check_folder(Path(folder).expanduser())
+            settings.set_backup_dir(folder)
+        except ValueError:
+            return go("/settings#backup", error="backup_folder")
+        return go("/settings#backup", done="backup_folder")
+    try:
+        await run_in_threadpool(backup.make)
+    except ValueError:
+        return go("/settings#backup", error="backup_folder")
+    except OSError:
+        return go("/settings#backup", error="backup_failed")
+    return go("/settings#backup", done="backup_saved")
 
 async def setup_action(request: Request) -> Response:
     if not same_origin(request):
@@ -4033,7 +4087,8 @@ async def log_page(request: Request) -> HTMLResponse:
         steps=count, time=took(total), file=f"<code>{escape(str(activity.LOG))}</code>")
     body = [f'<p>{back}</p>', f'<h1>{_("Step log")}</h1>',
             f'<p class="muted">{summary}'
-            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "") + "</p>"]
+            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "")
+            + f' · <a href="/stats">{_("Stats")}</a></p>']
     rows = [step_row(e, topics, live=True) for e in (live if page_no == 1 else [])]
     rows += [step_row(e, topics) for e in shown]
     if rows:
@@ -4047,6 +4102,43 @@ async def log_page(request: Request) -> HTMLResponse:
                     f'<span class="muted">{_("Page {n} of {total}").format(n=page_no, total=pages)}</span> '
                     f'{link(page_no + 1, _("Older") + " &rarr;") if page_no < pages else ""}</p>')
     return page(_("Step log"), "".join(body), poll=True)
+
+STATS_COLUMNS = ("Runs", "Passed", "Failed", "Stopped", "Pass rate", "Median", "Slowest tenth")
+STATS_WINDOWS = {"all": "All time", "week": "Last 7 days"}
+
+def stats_table(rows: list[dict], by_model: bool) -> str:
+    """One /stats table: a row per step (or per step and model), "-" where there is nothing to show."""
+    dash = '<span class="muted">-</span>'
+    head = "".join(f'<td class="when">{_(h)}</td>' for h in ("Step",) + (("Model",) if by_model else ()) + STATS_COLUMNS)
+    out = []
+    for r in rows:
+        model = (f'<td><code>{escape(r["model"])}</code></td>' if r["model"] else
+                 f'<td><span class="muted">{_("unknown model")}</span></td>') if by_model else ""
+        rate = f'{round(100 * r["rate"])}%' if r["rate"] is not None else dash
+        cells = [str(r["runs"]), str(r["passed"]), str(r["failed"]), str(r["stopped"]), rate,
+                 took(r["median"]) if r["median"] is not None else dash, took(r["p90"]) if r["p90"] is not None else dash]
+        out.append(f'<tr><td><strong>{agent_name(r["agent"])}</strong></td>{model}'
+                   + "".join(f'<td class="took">{c}</td>' for c in cells) + "</tr>")
+    return f'<table class="events steps-log stats"><tr>{head}</tr>{"".join(out)}</table>'
+
+async def stats_page(request: Request) -> HTMLResponse:
+    """Pass rate and time per agent step, then the same split by the model that ran it, read from the step log
+    (activity.stats), so it shows whether a model swap helped. ?window=week keeps the last 7 days. Read only."""
+    window = request.query_params.get("window", "all")
+    window = window if window in STATS_WINDOWS else "all"
+    since = time.time() - activity.WEEK if window == "week" else 0
+    steps = activity.history()
+    switch = " · ".join(f"<strong>{_(label)}</strong>" if key == window else
+                        f'<a href="/stats' + ("" if key == "all" else f"?window={key}") + f'">{_(label)}</a>'
+                        for key, label in STATS_WINDOWS.items())
+    by_model = activity.stats(steps, by_model=True, since=since)
+    body = [f'<p><a class="back" href="/log">&larr; {_("Back to the step log")}</a></p>', f'<h1>{_("Step stats")}</h1>',
+            f'<p class="muted">{switch}</p>',
+            f'<p class="muted">{_("Pass rate is passed out of passed and failed. A stop cuts a step short, so stopped runs count as runs but not in the pass rate or the times. Slowest tenth: nine in ten runs took this long or less.")}</p>',
+            f'<h2>{_("By step")}</h2>', stats_table(activity.stats(steps, since=since), by_model=False),
+            f'<h2>{_("By model")}</h2>',
+            stats_table(by_model, by_model=True) if by_model else f'<p class="muted">{_("No steps yet.")}</p>']
+    return page(_("Step stats"), "".join(body))
 
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
@@ -5179,6 +5271,7 @@ app = Starlette(routes=[
     Route("/settings/outreach", save_outreach, methods=["POST"]),
     Route("/settings/email", save_email, methods=["POST"]),
     Route("/settings/publication", save_publication, methods=["POST"]),
+    Route("/settings/backup", save_backup, methods=["POST"]),
     Route("/setup/{action}", setup_action, methods=["POST"]),
     Route("/about", about),
     Route("/settings/animations", save_animations, methods=["POST"]),
@@ -5202,6 +5295,7 @@ app = Starlette(routes=[
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
     Route("/log", log_page),
+    Route("/stats", stats_page),
     Route("/board", board_page),
     Route("/board/move", board_move, methods=["POST"]),
     Route("/board/style", board_style_save, methods=["POST"]),

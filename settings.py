@@ -709,6 +709,26 @@ def setup_dismissed() -> bool:
 def set_setup_dismissed(on: bool) -> None:
     save(setup_dismissed="yes" if on else "")
 
+# ---------- backups (backup.py, #120) ----------
+# Where `run.py backup` and Settings → Setup's Back up now write the zip: the folder saved on the Settings page, else
+# ~/Documents when there is one (macOS always has it), else the home folder. Never inside the Mission Loop folder
+# (backup.py refuses that), since a zip there could be committed with the keys in it.
+
+def backup_dir_default() -> str:
+    docs = Path.home() / "Documents"
+    return str(docs if docs.is_dir() else Path.home())
+
+def backup_dir() -> str:
+    return saved().get("backup_dir") or backup_dir_default()
+
+def set_backup_dir(folder: str) -> str:
+    """Save the backup folder ("" goes back to the default). Raises ValueError unless it is a full path."""
+    folder = str(Path(folder.strip()).expanduser()) if folder.strip() else ""
+    if folder and not Path(folder).is_absolute():
+        raise ValueError("a backup folder must be a full path")
+    save(backup_dir="" if folder == backup_dir_default() else folder)
+    return backup_dir()
+
 # The publication's name, tagline and About statement: shown on the published site, its About page and its feeds.
 # Nothing is stored until a human changes them, so a fresh clone shows the defaults.
 PUBLICATION_DEFAULT = "Mission Loop"
