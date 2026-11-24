@@ -57,6 +57,8 @@ def test_the_ui_unloads_once_the_loop_has_been_off_five_minutes(monkeypatch):
     fake = FakeOllama({"big-test:30b": timedelta(hours=24)})
     monkeypatch.setattr(llm, "CLIENT", fake)
     monkeypatch.setattr(ui, "loop_running", lambda: False)
+    pinned = llm.unload_pinned                     # the UI reads the real clock: hold it at NOW, as the fake does
+    monkeypatch.setattr(llm, "unload_pinned", lambda now=None: pinned(now or NOW))
     off = ui.idle_check(None, 1000.0)
     assert off == 1000.0 and fake.sent == []
     assert ui.idle_check(off, 1000.0 + llm.IDLE_UNLOAD - 1) == off and fake.sent == []
