@@ -1257,5 +1257,21 @@
  "one every {n} hours": "un toutes les {n} heures",
  "one a minute": "un par minute",
  "one every {n} minutes": "un toutes les {n} minutes",
- "{time} ({pace})": "{time} ({pace})"
+ "{time} ({pace})": "{time} ({pace})",
+ "Stats": "Statistiques",
+ "Runs": "Exécutions",
+ "Passed": "Réussies",
+ "Failed": "Échouées",
+ "Stopped": "Arrêtées",
+ "Pass rate": "Taux de réussite",
+ "Median": "Médiane",
+ "Slowest tenth": "Dixième le plus lent",
+ "All time": "Depuis le début",
+ "Last 7 days": "7 derniers jours",
+ "unknown model": "modèle inconnu",
+ "Back to the step log": "Retour au journal des étapes",
+ "Step stats": "Statistiques des étapes",
+ "By step": "Par étape",
+ "By model": "Par modèle",
+ "Pass rate is passed out of passed and failed. A stop cuts a step short, so stopped runs count as runs but not in the pass rate or the times. Slowest tenth: nine in ten runs took this long or less.": "Le taux de réussite est le nombre de réussites sur les réussites et les échecs. Un arrêt interrompt une étape, donc les exécutions arrêtées comptent comme exécutions mais pas dans le taux ni dans les durées. Dixième le plus lent : neuf exécutions sur dix ont pris ce temps ou moins."
 }

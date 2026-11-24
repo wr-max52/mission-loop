@@ -1257,5 +1257,21 @@
  "one every {n} hours": "um a cada {n} horas",
  "one a minute": "um por minuto",
  "one every {n} minutes": "um a cada {n} minutos",
- "{time} ({pace})": "{time} ({pace})"
+ "{time} ({pace})": "{time} ({pace})",
+ "Stats": "Estatísticas",
+ "Runs": "Execuções",
+ "Passed": "Aprovadas",
+ "Failed": "Falhadas",
+ "Stopped": "Paradas",
+ "Pass rate": "Taxa de aprovação",
+ "Median": "Mediana",
+ "Slowest tenth": "Décimo mais lento",
+ "All time": "Todo o período",
+ "Last 7 days": "Últimos 7 dias",
+ "unknown model": "modelo desconhecido",
+ "Back to the step log": "Voltar ao registro de etapas",
+ "Step stats": "Estatísticas das etapas",
+ "By step": "Por etapa",
+ "By model": "Por modelo",
+ "Pass rate is passed out of passed and failed. A stop cuts a step short, so stopped runs count as runs but not in the pass rate or the times. Slowest tenth: nine in ten runs took this long or less.": "A taxa de aprovação é aprovadas sobre aprovadas e falhadas. Uma parada interrompe uma etapa, então execuções paradas contam como execuções, mas não na taxa nem nos tempos. Décimo mais lento: nove em cada dez execuções levaram isso ou menos."
 }

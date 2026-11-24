@@ -78,10 +78,11 @@ def outreach_shown() -> bool:
     import agents                          # here, not at the top: agents pulls in the whole loop
     return settings.outreach_on() and bool(agents.outreach_channels())
 
-def flow_steps(auto: bool = False) -> list[tuple[str, str, str]]:
+def flow_steps(auto: bool = False, outreach: bool | None = None) -> list[tuple[str, str, str]]:
     """The strip's steps for this setup: outreach, its check and the reply wait only while the loop runs outreach
-    (outreach_shown), and with auto (the UI's switch) the two reviews it takes over drawn as automatic ("auto")."""
-    outreach = outreach_shown()
+    (outreach_shown; outreach=True draws them anyway, as the About page does), and with auto (the UI's switch) the
+    two reviews it takes over drawn as automatic ("auto")."""
+    outreach = outreach_shown() if outreach is None else outreach
     return [(k, "auto", _(AUTO_STEPS[k][0])) if auto and k in AUTO_STEPS else (k, kind, _(text))
             for k, kind, text in FLOW if k not in OUTREACH_STEPS or outreach]
 
@@ -114,12 +115,12 @@ def lanes(steps: list[tuple[str, str, str]]) -> tuple[list[list[tuple[str, str, 
     return out, ends
 
 def track(lit: dict[str, str], waiting: dict[str, int], parked: dict[str, int], review_href: str = "",
-          auto: bool = False, held: dict[str, int] | None = None) -> str:
+          auto: bool = False, held: dict[str, int] | None = None, outreach: bool | None = None) -> str:
     """The strip's track: its lanes and the reviews between them. lit: step -> the worker on it right now; waiting:
     missions at each human review; parked: missions parked at each check; held: missions at each tile now
     (step_of). review_href links the human reviews (a span without it). auto draws the reviews auto mode takes over
-    as automatic."""
-    steps = flow_steps(auto)
+    as automatic. outreach: draw outreach's steps whatever the setup (True) or never (False); None follows it."""
+    steps = flow_steps(auto, outreach)
     runs, ends = lanes(steps)
     parked_n = Mission.model_fields["max_attempts"].default
     held = held or {}
