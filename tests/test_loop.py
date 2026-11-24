@@ -83,7 +83,7 @@ def ready_to_publish(slug):
 def watch(monkeypatch):
     """Record each agent call as (agent, slug), in order, while the stubs do the work."""
     calls = []
-    for name in ("gather", "write_brief", "write", "publish"):
+    for name in ("gather", "write_brief", "outreach", "write", "publish"):
         real = getattr(agents, name)
         def spy(m, *a, _name=name, _real=real, **k):
             calls.append((_name, m.slug))
@@ -141,6 +141,18 @@ def test_a_failed_attempt_lets_the_others_have_a_turn(monkeypatch):
     run_at(T0)
     assert calls == [("write", "bad"), ("gather", "ok"), ("write", "bad"), ("write_brief", "ok"), ("write", "bad")]
     assert state("bad") == State.PARKED and state("ok") == State.BRIEF_READY
+
+def test_a_mission_that_moves_on_gets_its_turn_ahead_of_new_briefs(monkeypatch):
+    one_worker()
+    settings.set_auto_mode(True)                       # a's brief is approved the moment it is written
+    for slug in ("a", "b"):
+        store.save_mission(Mission(slug=slug, topic="Anything", state=State.RESEARCHING, gathered=True, attempts=1))
+        store.save_artifact(slug, "evidence", stubs.gather(store.get_mission(slug)))
+    calls = watch(monkeypatch)
+    run_at(T0)
+    assert calls[:3] == [("write_brief", "a"),
+                         ("outreach", "a"),            # moved on to Outreach: fresh again, and farther along (#163)
+                         ("write_brief", "b")]
 
 def test_a_code_step_that_breaks_is_logged_and_the_rest_go_on():
     store.save_mission(Mission(slug="new", topic="Anything"))
