@@ -46,6 +46,15 @@ def test_theme_toggle_reaches_the_published_and_preview_pages():
     for html in (site, index):
         assert 'class="theme-toggle"' in html and "window.toggleTheme" in html
 
+def test_the_published_site_has_the_favicon_and_the_mark_beside_its_name():
+    # site/ is what GitHub Pages serves too (agents/github.py keeps its repo identical to it)
+    to_article_ready("p")
+    flag("p", reviewed=True)
+    run_at(T0 + timedelta(hours=49))
+    for html in (Path("site/p/index.html").read_text(), Path("site/index.html").read_text()):
+        assert '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' in html
+        assert '<a class="brand" href="' in html and '<svg class="logo" aria-hidden="true"' in html
+
 def test_no_outreach_skips_the_wait(monkeypatch):
     monkeypatch.setattr(settings, "outreach_on", lambda: False)
     store.save_mission(Mission(slug="n", topic="x"))

@@ -25,7 +25,7 @@ from agents import channel as channel_contract
 from contracts import (Mission, State, ResearchBrief, Article, ArticleRating, Epic, epic_title, is_open, slugify, SITE_FOLDERS,
                        RATING_FACTORS, RATING_FAIL_AT, RATING_SCALE)
 from render import CSS, brief_html, epic_pill
-from icons import icon, PATHS as ICON_PATHS, CSS as ICON_CSS
+from icons import icon, logo, FAVICON, PATHS as ICON_PATHS, CSS as ICON_CSS
 import flowchart, i18n
 from flowchart import flow_steps
 from i18n import _, _n
@@ -1044,8 +1044,8 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{avatars.script_tag()}{avatars.backs_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
-            f'<nav class="top"><a class="brand" href="/">Mission Research Loop</a>'
+            f"<title>{escape(title)}</title>{FAVICON}{avatars.script_tag()}{avatars.backs_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
+            f'<nav class="top"><a class="brand" href="/">{logo()}Mission Research Loop</a>'
             f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
             f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
             f'<a href="/board">{ICON_BOARD}{_("Board")}</a>'

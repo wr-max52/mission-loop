@@ -6,7 +6,7 @@ from html import escape
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 import avatars, flowchart, settings, wayback
-from icons import icon
+from icons import icon, logo, FAVICON
 from contracts import ResearchBrief, Article, BOLD, CITATION, POSSIBILITY, cited_ids, unbold
 
 FACTS_HEADING = "Facts (quotes verified against sources)"
@@ -197,8 +197,8 @@ def _page(title: str, body: str, home: str, head: str = "", nav: str | None = No
                  f'<a href="{home}about/"{cur("about")}>About</a>')
     return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<title>{escape(title)}</title>{head}{THEME_INIT}<style>{CSS}</style></head>\n"
-            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">{escape(settings.publication_name())}</a>{links}"
+            f"<title>{escape(title)}</title>{FAVICON}{head}{THEME_INIT}<style>{CSS}</style></head>\n"
+            f"<body><main><header class=\"site\"><a class=\"brand\" href=\"{home}\">{logo()}{escape(settings.publication_name())}</a>{links}"
             f"{THEME_TOGGLE}</header>\n{body}\n</main></body></html>\n")
 
 def epic_pill(title: str, proposed: bool = False, href: str = "") -> str:

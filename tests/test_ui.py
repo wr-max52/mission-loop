@@ -426,3 +426,10 @@ def test_play_starts_the_loop_with_the_saved_rest_and_goes_back(client, monkeypa
     client.post("/settings/loop-every", data={"every": "5"})
     assert settings.saved() == {}                                        # the default is not stored
     assert client.post("/settings/loop-every", data={"every": "9"}, headers={"origin": "https://evil.example"}).status_code == 403
+
+def test_the_app_has_the_favicon_and_the_mark_beside_its_name(client):
+    html = client.get("/").text
+    assert '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' in html
+    assert '<a class="brand" href="/"><svg class="logo" aria-hidden="true"' in html
+    import icons
+    assert icons.LOGO.count("<path") == 4 and "#7c3aed" in icons.LOGO   # the page, its fold, the sparkle, the pen's tip
