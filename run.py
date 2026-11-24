@@ -297,7 +297,8 @@ def _unload_after_rest(rested: bool, began: float) -> list[str]:
 
 @app.command()
 def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
-       open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in your browser once it is up")):
+       open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in your browser once it is up"),
+       show_log: bool = typer.Option(True, "--log/--no-log", help="Print each step and each mission needing review here")):
     """The local web UI: missions, briefs, articles, approve/reject/publish, start/stop the loop."""
     import uvicorn
     import ui as web
@@ -323,6 +324,9 @@ def ui(port: int = typer.Option(8770, help="Port on 127.0.0.1"),
         threading.Thread(target=lambda: print(f"MCP server: {mcp_share.start() or mcp_share.url()}", flush=True),
                          daemon=True).start()
     threading.Thread(target=web.idle_unloader, name="idle-unload", daemon=True).start()
+    if show_log:                           # the step log here too, each line linking to the missions page
+        import terminal_log
+        terminal_log.start(f"{url}/")
     if open_browser:
         threading.Timer(1.0, webbrowser.open, [url]).start()
     uvicorn.run(web.app, host="127.0.0.1", port=port, log_level="warning")
