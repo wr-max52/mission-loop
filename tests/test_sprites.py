@@ -76,6 +76,20 @@ def test_a_bad_spec_says_what_to_fix(patch, says):
     errors = js("R => R.validateSprite(SPEC).errors".replace("SPEC", json.dumps(spec)))
     assert any(says in e for e in errors), errors
 
+def test_a_custom_sprite_keeps_the_skin_it_was_given_on_every_visit():
+    # The strip and the cards give each visit a new seed; a tone picked in the builder must survive all of them.
+    r = js("""R => { R.registerSprite("custom-sprite-1", Object.assign({}, EX, { skin: [6] }));
+                     R.registerSprite("custom-sprite-2", { base: "ben", name: "Ben 2" });
+                     const seeds = Array.from({ length: 200 }, (_, i) => i + 1);
+                     return { picked: [...new Set(seeds.map(s => R.makeLook("custom-sprite-1", s).skin))],
+                              want: R.makeLook("custom-sprite-1", 1).skin,
+                              likeStart: [...new Set(seeds.map(s => R.makeLook("custom-sprite-2", s).skin))].length,
+                              builtIn: [...new Set(seeds.map(s => R.makeLook("ben", s).skin))].length }; }"""
+           .replace("EX", json.dumps(EXAMPLE)))
+    assert r["picked"] == [r["want"]]          # one tone, every visit
+    assert r["likeStart"] <= 3                 # "Like the original": only its start's own tones (ben has 3)
+    assert r["builtIn"] > 3                    # built-ins still turn up in other tones now and then
+
 def test_register_keeps_built_in_names_and_tidy_keys():
     r = js("""R => [R.registerSprite("pip", EX).errors, R.registerSprite("Custom Sprite!", EX).errors]""".replace("EX", json.dumps(EXAMPLE)))
     assert "built-in" in r[0][0] and "lowercase" in r[1][0]
