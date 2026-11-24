@@ -367,18 +367,38 @@ main { max-width: 56rem; }
 .onboard:hover { color:var(--accent); }
 .onboard svg { width:.95em; height:.95em; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
 body { font-family: -apple-system, system-ui, sans-serif; font-size: 16px; }
-nav.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
-          border-bottom:1px solid var(--rule); padding-bottom:1rem; margin-bottom:1.5rem; }
-nav.top a.brand { font:400 1.25rem "American Typewriter", "Courier Prime", "Courier New", Courier, monospace;
+/* the top bar (#177): one per page, outside <main>, so a wider page body never moves it. Brand and the loop's
+   controls on the first row, the pages as folder tabs on the second, sitting on a rule across the whole window; the
+   page you're on is the front folder, joined to the page. Tabs size to their text and the row scrolls sideways when
+   it runs out of room (zoom, a longer language, a narrow window), so a label never wraps or gets cut. */
+html { scrollbar-gutter:stable; }                 /* a page that scrolls lines up with one that doesn't */
+main { padding-top:1.25rem; }
+nav.top { background:linear-gradient(var(--rule), var(--rule)) bottom / 100% 1px no-repeat; margin-bottom:.5rem; }
+nav.top .bar { max-width:56rem; margin:0 auto; padding:1rem 1rem 0; }
+nav.top .row { display:flex; justify-content:space-between; align-items:center; gap:.4rem 1rem; min-height:2.6em;
+               flex-wrap:wrap; white-space:nowrap; }   /* wraps only when the controls outgrow a tiny window */
+nav.top a.brand { display:inline-flex; align-items:center; min-width:0;
+                  font:400 1.25rem "American Typewriter", "Courier Prime", "Courier New", Courier, monospace;
                   letter-spacing:.04em; color:var(--fg); text-decoration:none;
                   text-shadow:.5px .5px 0 currentColor, -.3px 0 .4px rgba(0,0,0,.25); }   /* old typewriter ink */
-nav.top .links { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
-nav.top .links a { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .8rem; border-radius:8px;
-                   border:1px solid var(--muted); background:var(--quote); color:var(--fg);
-                   font-size:.9rem; font-weight:600; text-decoration:none; }
-nav.top .links a:hover { border-color:var(--fg); }
-nav.top .links svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
-                     stroke-linecap:round; stroke-linejoin:round; }
+nav.top .ctl { display:flex; align-items:center; flex-wrap:nowrap; flex-shrink:0; margin-left:auto; }
+nav.top .tabs { position:relative; display:flex; align-items:flex-end; gap:.3em; margin-top:.6rem;
+                overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+nav.top .tabs::-webkit-scrollbar { display:none; }
+nav.top .tabs a { display:inline-flex; align-items:center; gap:.45em; flex-shrink:0; white-space:nowrap;
+                  font-size:.9rem; font-weight:600; line-height:1.3; text-decoration:none; }
+nav.top .tabs a.tab { padding:.55em 1.05em .5em; border:1px solid var(--rule); border-radius:.6em .6em 0 0;
+                      background:var(--quote); color:var(--muted); }
+nav.top .tabs a.tab:hover { color:var(--fg); }
+nav.top .tabs a.tab[aria-current="page"] { background:var(--bg); color:var(--fg); border-bottom-color:var(--bg);
+                                           box-shadow:inset 0 2px 0 var(--accent); }
+nav.top .tabs a.tab[aria-current="page"] svg { color:var(--accent); }
+nav.top .tabs a.about { margin-left:auto; align-self:center; padding:.3em .2em; color:var(--muted); }
+nav.top .tabs a.about:hover { color:var(--fg); }
+nav.top .ctl svg, nav.top .tabs svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:2;
+                                      stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
+nav.top .tabs svg { width:1em; height:1em; }
+@media (max-width: 640px) { nav.top a.brand .name { display:none; } }   /* the logo alone, so the controls fit */
 form.auto { margin:0 .5rem 0 0; }
 form.auto .switch { font-size:.9rem; font-weight:600; gap:.45rem; }
 form.auto .switch input { width:2.2rem; height:1.3rem; }
@@ -670,7 +690,7 @@ form.inline input[type=text] { width:auto; flex:1; min-width:10rem; max-width:20
 .suggest button { font-size:.82rem; padding:.3rem .7rem; border-radius:999px; }
 .chat-form { display:flex; gap:.5rem; align-items:flex-end; }
 .chat-form textarea { resize:none; min-height:2.6rem; }
-@media (min-width: 761px) { body.chat-open main { margin-left:calc(max(33.333vw, 20rem) + 1.5rem); } }
+@media (min-width: 761px) { body.chat-open main, body.chat-open nav.top .bar { margin-left:calc(max(33.333vw, 20rem) + 1.5rem); } }
 @media (max-width: 760px) { .chat-panel { width:100vw; }
                             body.chat-open .chat-bubble { display:none; } }
 .workers { display:grid; grid-template-columns:repeat(auto-fit, minmax(16rem, 1fr)); gap:1rem; margin:1rem 0 1.5rem; }
@@ -1004,7 +1024,32 @@ def html_attrs() -> str:
         out += f' style="--chat:{color};--chat-ink:{settings.ink_on(color)}"'
     return out
 
-def page(title: str, body: str, poll: bool = False) -> HTMLResponse:
+# The top bar's folder tabs (#177), left to right: (tab, address, icon, label). A page names its tab in page(tab=...);
+# a new top-level page is one line here.
+TABS = [("missions", "/", ICON_MISSIONS, "Missions"), ("published", "/published", ICON_SITE, "Published"),
+        ("board", "/board", ICON_BOARD, "Board"), ("settings", "/settings", ICON_SETTINGS, "Settings")]
+
+# Keeps the front tab in view when the tab row is narrower than its tabs (zoomed in, a long language, a small window).
+TABS_JS = """<script>
+(() => {
+  const row = document.querySelector("nav.top .tabs"), on = row && row.querySelector('[aria-current="page"]');
+  if (on && row.scrollWidth > row.clientWidth) row.scrollLeft = on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2;
+})();
+</script>"""
+
+def top_bar(tab: str = "") -> str:
+    """The bar at the top of every page: the brand, Auto and play on the first row, the pages as folder tabs on the
+    second with the one named `tab` in front. The same markup on every page but for that, so it never moves."""
+    tabs = "".join(f'<a class="tab" href="{href}"{' aria-current="page"' if key == tab else ""}>{ico}<span>{_(label)}</span></a>'
+                   for key, href, ico, label in TABS)
+    about = (f'<a class="about" href="/about" target="_blank" title="{escape(_("How it works, on the published site"), quote=True)}">'
+             f'{icon("book")}<span>{_("About")}</span></a>')
+    return (f'<nav class="top"><div class="bar"><div class="row">'
+            f'<a class="brand" href="/">{logo()}<span class="name">Mission Research Loop</span></a>'
+            f'<span class="ctl">{auto_switch()}{loop_button()}</span></div>'
+            f'<div class="tabs">{tabs}{about}</div></div></nav>')
+
+def page(title: str, body: str, poll: bool = False, tab: str = "") -> HTMLResponse:
     # Refresh itself when the loop changes something, unless the human is typing.
     script = f"""<script>
 let sig = "{signature()}";
@@ -1044,14 +1089,9 @@ async function refresh() {{
 </script>{ELAPSED_JS}""" if poll else ""
     html = (f'<!doctype html><html lang="{i18n.current()}"{html_attrs()}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{escape(title)}</title>{FAVICON}{avatars.script_tag()}{avatars.backs_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body><main>"
-            f'<nav class="top"><a class="brand" href="/">{logo()}Mission Research Loop</a>'
-            f'<span class="links">{auto_switch()}{loop_button()}<a href="/">{ICON_MISSIONS}{_("Missions")}</a>'
-            f'<a href="/published">{ICON_SITE}{_("Published")}</a>'
-            f'<a href="/board">{ICON_BOARD}{_("Board")}</a>'
-            f'<a href="/settings">{ICON_SETTINGS}{_("Settings")}</a>'
-            f'<a href="/about" target="_blank" title="{escape(_("How it works, on the published site"), quote=True)}">{icon("book")}{_("About")}</a></span></nav>'
-            f"{body}</main>{js_strings()}{lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
+            f"<title>{escape(title)}</title>{FAVICON}{avatars.script_tag()}{avatars.backs_tag()}<style>{CSS}{ICON_CSS}{flowchart.CSS}{UI_CSS}</style></head><body>"
+            f"{top_bar(tab)}<main>"
+            f"{body}</main>{TABS_JS}{js_strings()}{lines_script()}{chat_widget()}{KEEP_SCROLL_JS}{BOARD_LINK_JS}{script}</body></html>")
     return HTMLResponse(html)
 
 JS_STRINGS = ["(default)", "Web search off. Switch a source on in Settings → Web search.", "Looking…",
@@ -1785,10 +1825,10 @@ async def save_provider(request: Request) -> Response:
         found = await run_in_threadpool(providers.list_models, pid, key, url or settings.PROVIDERS[pid]["url"])
         settings.save_provider(pid, key, url)
     except (ValueError, providers.ProviderError) as e:
-        return page(_("Settings"), settings_body(request, _("{provider} not connected: {error}").format(provider=name, error=e)))
+        return settings_view(settings_body(request, _("{provider} not connected: {error}").format(provider=name, error=e)))
     providers.forget_models(pid)
     if not found:
-        return page(_("Settings"), settings_body(request, _("{provider} connected, but offers no chat models for this key.").format(provider=name)))
+        return settings_view(settings_body(request, _("{provider} connected, but offers no chat models for this key.").format(provider=name)))
     return go("/settings", done="provider_on")
 
 async def save_worker(request: Request) -> Response:
@@ -2144,6 +2184,10 @@ def settings_section(anchor: str, body: str) -> str:
     ico, title = next((i, t) for a, i, t in SETTINGS_SECTIONS if a == anchor)
     return f'<section class="set" id="{anchor}"><h2>{icon(ico)}<span>{escape(_(title))}</span></h2>{body}</section>'
 
+def settings_view(body: str) -> HTMLResponse:
+    """The Settings page around its body, its tab in front."""
+    return page(_("Settings"), body, tab="settings")
+
 def settings_body(request: Request, error: str = "") -> str:
     err = f'<div class="flash err">{escape(error)}</div>' if error else flash(request)
     checked = " checked" if settings.animations() else ""
@@ -2187,7 +2231,7 @@ def settings_body(request: Request, error: str = "") -> str:
 {sprites}"""
 
 async def settings_page(request: Request) -> HTMLResponse:
-    return page(_("Settings"), settings_body(request))
+    return settings_view(settings_body(request))
 
 async def save_site_url(request: Request) -> Response:
     if not same_origin(request):
@@ -2279,7 +2323,7 @@ async def save_library(request: Request) -> Response:
                 await run_in_threadpool(library.check, ref)
             settings.set_embed_model(ref or settings.WORDS_ONLY)
     except (ValueError, library.LibraryError) as e:
-        return page(_("Settings"), settings_body(request, _("Embedding model not saved: {error}").format(error=e)))
+        return settings_view(settings_body(request, _("Embedding model not saved: {error}").format(error=e)))
     settings.set_library_top_n(top_n)
     return go("/settings", done="library_saved")
 
@@ -2307,7 +2351,7 @@ async def join_1f916(request: Request) -> Response:
     try:
         await run_in_threadpool(f916.register, handle, settings.model_for("pi") or "unknown")
     except (FileExistsError, RuntimeError) as e:
-        return page(_("Settings"), settings_body(request, _("1F916 did not join: {error}").format(error=e)))
+        return settings_view(settings_body(request, _("1F916 did not join: {error}").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="joined")
@@ -2320,7 +2364,7 @@ async def add_custom_channel(request: Request) -> Response:
         settings.add_custom_channel(str(form.get("name") or ""), str(form.get("kind") or ""),
                                     str(form.get("target") or "")[:500], str(form.get("format") or ""))
     except ValueError as e:
-        return page(_("Settings"), settings_body(request, _("Channel not added: {error}.").format(error=e)))
+        return settings_view(settings_body(request, _("Channel not added: {error}.").format(error=e)))
     if loop_running():
         wake()
     return go("/settings", done="custom_added")
@@ -2350,7 +2394,7 @@ async def save_bluesky(request: Request) -> Response:
     try:
         await run_in_threadpool(bluesky.check_login, handle, password, service)
     except Exception as e:                 # wrong password, rate limit, network: nothing is saved
-        return page(_("Settings"), settings_body(request, _("Bluesky did not accept that login: {error}").format(error=e)))
+        return settings_view(settings_body(request, _("Bluesky did not accept that login: {error}").format(error=e)))
     bluesky.save_credentials(handle, password, service)
     if loop_running():
         wake()
@@ -2374,7 +2418,7 @@ async def github_action(request: Request) -> Response:
             GITHUB_LOGIN.clear()
             GITHUB_LOGIN.update(await run_in_threadpool(github.start_login))
         except Exception as e:             # no OAuth app, device flow off, network
-            return page(_("Settings"), settings_body(request, _("GitHub did not start the sign-in: {error}").format(error=e)))
+            return settings_view(settings_body(request, _("GitHub did not start the sign-in: {error}").format(error=e)))
         return go("/settings")
     if do == "cancel":
         GITHUB_LOGIN.clear()
@@ -2395,12 +2439,12 @@ async def github_action(request: Request) -> Response:
             else:
                 await run_in_threadpool(github.link_site, str(form.get("repo") or "")[:300])
         except Exception as e:             # private, no access, holds other files, network
-            return page(_("Settings"), settings_body(request, _("The site wasn't linked: {error}").format(error=e)))
+            return settings_view(settings_body(request, _("The site wasn't linked: {error}").format(error=e)))
         orchestrator.refresh_feed()        # the feeds use the site's address from now on
         try:
             await run_in_threadpool(github.sync, clock.now())   # files only; the loop records each article's link
         except Exception as e:
-            return page(_("Settings"), settings_body(request, _("Linked, but the first push failed: {error}. The loop "
+            return settings_view(settings_body(request, _("Linked, but the first push failed: {error}. The loop "
                                                                  "retries on each post.").format(error=e)))
         if loop_running():
             wake()
@@ -3241,7 +3285,7 @@ async def save_email(request: Request) -> Response:
                                           f("password", 200), f("from_name", 60), f("from_address"))
         await run_in_threadpool(contacts.check_email, cfg)
     except ValueError as e:
-        return page(_("Settings"), settings_body(request, _("Email wasn't saved: {why}").format(why=e)))
+        return settings_view(settings_body(request, _("Email wasn't saved: {why}").format(why=e)))
     settings.save_email_config(cfg)
     return go("/settings#outreach", done="email_saved")
 
@@ -3397,7 +3441,7 @@ async def home(request: Request) -> HTMLResponse:
                 f'<div class="sub">{_("Where each article went, and republish")}</div></a>')
     if lab:
         body.append(script("researchers.js"))
-    return page("Mission Loop", "\n".join(body), poll=True)
+    return page("Mission Loop", "\n".join(body), poll=True, tab="missions")
 
 def new_mission() -> str:
     """A long slim card right under the pipeline strip; clicking it opens a three-step wizard (topic, objective,
@@ -3552,7 +3596,7 @@ async def published_page(request: Request) -> HTMLResponse:
             f'<span class="badge{" publish" if m.publish_requests else ""}">{escape(label(m))}</span></div>'
             f'<div class="sub">{mission_pill(m, epics)}{escape(when)} · <a href="/m/{quote(m.slug)}">{_("mission page")}</a></div>'
             f'<ul class="places">{places_html(m, rows)}</ul>{publish_form(m, rows, "/published")}</div>')
-    return page(_("Published"), "\n".join(body), poll=True)
+    return page(_("Published"), "\n".join(body), poll=True, tab="published")
 
 def outreach_section(m: Mission) -> str:
     """Who the Outreach agent asked, on which channel, the exact message, and what they answered (their words are
@@ -3649,7 +3693,7 @@ async def mission(request: Request) -> Response:
                        f'<td>{escape(e["note"] or "")}</td></tr>' for e in reversed(events))
         body.append(f'{heading("history", _("History"), cls="sec")}<table class="events">{rows}</table>'
                     f'<p><a class="steps-all" href="/log?m={quote(slug)}">{_("Step log")} &rarr;</a></p>')
-    return page(m.topic, "\n".join(body), poll=True)
+    return page(m.topic, "\n".join(body), poll=True, tab="missions")
 
 async def preview(request: Request) -> Response:
     slug = request.path_params["slug"]
@@ -4110,7 +4154,7 @@ async def log_page(request: Request) -> HTMLResponse:
         body.append(f'<p>{link(page_no - 1, "&larr; " + _("Newer")) if page_no > 1 else ""} '
                     f'<span class="muted">{_("Page {n} of {total}").format(n=page_no, total=pages)}</span> '
                     f'{link(page_no + 1, _("Older") + " &rarr;") if page_no < pages else ""}</p>')
-    return page(_("Step log"), "".join(body), poll=True)
+    return page(_("Step log"), "".join(body), poll=True, tab="missions")
 
 STATS_COLUMNS = ("Runs", "Passed", "Failed", "Stopped", "Pass rate", "Median", "Slowest tenth")
 STATS_WINDOWS = {"all": "All time", "week": "Last 7 days"}
@@ -4147,7 +4191,7 @@ async def stats_page(request: Request) -> HTMLResponse:
             f'<h2>{_("By step")}</h2>', stats_table(activity.stats(steps, since=since), by_model=False),
             f'<h2>{_("By model")}</h2>',
             stats_table(by_model, by_model=True) if by_model else f'<p class="muted">{_("No steps yet.")}</p>']
-    return page(_("Step stats"), "".join(body))
+    return page(_("Step stats"), "".join(body), tab="missions")
 
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
@@ -4378,7 +4422,7 @@ async def board_page(request: Request) -> Response:
             f'aria-expanded="false">{ICON_SETTINGS}</button></div>{board_style_panel(style)}'
             f'</div><script type="application/json" id="board-data">{raw}</script>'
             f'{script_i18n("board.js")}{script("board.js")}{script("researchers.js") if data["animations"] else ""}')
-    return page(_("Board"), body)
+    return page(_("Board"), body, tab="board")
 
 # The board's tools are drawn, not typed: a "−" or "+" glyph sits on its font's baseline, never in the middle.
 ICON_ZOOM_OUT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>'
@@ -4392,9 +4436,8 @@ BOARD_CSS = """
 @property --gy { syntax:"<length>"; inherits:false; initial-value:0px; }
 @property --gz { syntax:"<number>"; inherits:false; initial-value:1; }
 body:has(.board-wrap) { overflow-x:hidden; }
-body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-wrap { --string:#c0242b; position:relative; width:calc(100vw - 2rem); margin-left:calc(50% - 50vw + 1rem);
-  height:calc(100vh - 8rem); min-height:420px; overflow:hidden; border-radius:6px; touch-action:none; user-select:none;
+  height:calc(100vh - 9.5rem); min-height:420px; overflow:hidden; border-radius:6px; touch-action:none; user-select:none;
   cursor:grab; background-color:#b98a57;
   background-image:
     radial-gradient(rgba(70,40,15,.28) 1px, transparent 1.4px),
@@ -4502,7 +4545,7 @@ body:has(.board-wrap) nav.top { margin-bottom:1rem; }
 .board-empty { position:absolute; inset:0; display:grid; place-items:center; margin:0; color:#fff;
   font:italic 1.2rem Georgia, serif; text-shadow:0 1px 3px rgba(0,0,0,.6); }
 .board-empty a { color:#fff; }
-@media (max-width: 640px) { .board-legend { display:none; } .board-wrap { height:calc(100vh - 11rem); } }/* ---------- surfaces (cork is the default above) ---------- */
+@media (max-width: 640px) { .board-legend { display:none; } .board-wrap { height:calc(100vh - 12.5rem); } }/* ---------- surfaces (cork is the default above) ---------- */
 .board-wrap.surface-paper { background-color:#f4efe4; border-radius:4px;
   background-image:radial-gradient(rgba(120,100,70,.09) 1px, transparent 1.5px), radial-gradient(rgba(120,100,70,.06) 1px, transparent 1.6px),
     radial-gradient(ellipse at 20% 10%, rgba(255,255,255,.7), transparent 55%), radial-gradient(ellipse at 90% 100%, rgba(150,120,70,.14), transparent 60%);
@@ -4795,7 +4838,7 @@ async def avatars_page(request: Request) -> HTMLResponse:
             f'<div id="studio" data-next="{escape(avatars.next_key(), quote=True)}"'
             f'{" data-cyborgs" if settings.cyborgs() else ""}><noscript>{_("The studio needs JavaScript.")}</noscript></div>'
             f'{script("researchers.js")}{script_i18n("avatars.js")}{script("avatars.js")}')
-    return page(_("Avatar studio"), body)
+    return page(_("Avatar studio"), body, tab="settings")
 
 async def sprite_studio(request: Request) -> Response:
     """The sprite studio (tools/sprites.html): a sprite's spec on the left, the real renderer on the right. The page

@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library backup restore`
-- Tests: `pytest -q` (expects 979 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 981 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -803,12 +803,20 @@ it, the loop's play/pause button with its state (`ui.loop_button`; green and pul
 background, logs to `data/loop.log` and rests `settings.loop_every` minutes when idle (the Loop field on the
 Settings page, default 5); pause asks it to stop after the agent at work saves (disabled while it stops). "Check for
 work now" stays in the Missions page's loop panel while the loop runs.
+The top bar (`ui.top_bar`, #177) is built once by `ui.page()` outside `<main>`: the brand and the loop's controls
+on one row, the pages as folder tabs on the next (`ui.TABS`: Missions, Published, Board, Settings; About a plain link
+at the end), sitting on a rule across the window. A page names its tab with `page(tab=...)` (a mission page and the
+step log light Missions, the avatar studio Settings) and that tab is the front folder, joined to the page
+(`aria-current="page"`). It never moves between pages: the same markup and width everywhere whatever the page's own
+width, `scrollbar-gutter: stable`, tabs that size to their text and a tab row that scrolls sideways instead of
+wrapping (zoom, a long language, a narrow window; `ui.TABS_JS` keeps the front tab in view). A new top-level page
+is one line in `ui.TABS`.
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
 progress closest to published first (publishing, writing, briefs, searches) and new missions last. Publishing
 there is one card (`ui.queue_card`): how many articles are queued and for which places, each capped place with how
 long its queue takes ("1F916 21 · about 3 weeks (one a day)", `ui.queue_pace`, #119), leading to the queue on
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
-page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
+page, for anyone scrolling to find it. The Published tab in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
 order they go out, requested ones marked, each capped place's heading with the same estimate), and each article with where it went, boxes to rebuild its page or post it where it hasn't gone, and a link to each post it has. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
 between looks for work, Model providers, Research (the desk profile, web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
