@@ -21,7 +21,7 @@ def called(path: Path) -> set[str]:
 
 def keys() -> set[str]:
     """Every English string the UI looks up: the literals, and the tables it translates at display time."""
-    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py") | called(ROOT / "doctor.py")
+    out = called(ROOT / "ui.py") | called(ROOT / "flowchart.py") | called(ROOT / "doctor.py") | called(ROOT / "clock.py")
     out |= set(ui.MESSAGES.values()) | set(ui.ERRORS.values()) | set(ui.LABELS.values())
     out |= set(activity.AGENTS.values()) | set(settings.WORKERS.values()) | set(ui.WORKER_BLURBS.values())
     out |= {s for steps in ui.ROLE_STEPS.values() for s in steps} | set(ui.ASK_ACTION.values())
@@ -36,6 +36,7 @@ def keys() -> set[str]:
     out |= set(flowchart.REVIEW_SUB.values()) | {t for t, _tone in flowchart.HUMAN_STEPS.values()}
     out |= {s for pair in flowchart.AUTO_STEPS.values() for s in pair} | set(flowchart.CHECKS.values())
     out |= set(ui.PAST.values()) | set(ui.OUTCOME.values()) | set(ui.LOG_COLUMNS) | {"done"}
+    out |= set(ui.STATS_COLUMNS) | set(ui.STATS_WINDOWS.values())
     out |= set(ui.CLAIM_CHIP.values()) | set(ui.VERDICT_NAMES.values()) | set(ui.VERDICT_HINTS.values())
     out |= set(ui.SET_BY.values())
     out |= {title for _a, _i, title in ui.SETTINGS_SECTIONS}

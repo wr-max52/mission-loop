@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
-import activity, agents, orchestrator, stopping, store, ui
+import time
+import activity, agents, orchestrator, settings, stopping, store, ui
 from contracts import Mission, State
 
 pytestmark = pytest.mark.usefixtures("stub_agents")
@@ -96,3 +97,69 @@ def test_log_page_lists_every_step_and_filters_by_mission(client, monkeypatch):
 
 def test_log_page_with_no_steps(client):
     assert "No steps yet" in client.get("/log").text
+
+# ---------- /stats (#121) ----------
+
+def write_log(lines):
+    activity.LOG.parent.mkdir(parents=True, exist_ok=True)
+    activity.LOG.write_text("".join(json.dumps(e) + "\n" for e in lines))
+
+def step(agent, outcome="done", model=None, took=10.0, ended=None):
+    ended = time.time() - 60 if ended is None else ended
+    return {"worker": "pi", "slug": "b", "agent": agent, "since": ended - took, "ended": ended, "outcome": outcome} \
+        | ({"model": model} if model else {})
+
+def test_each_step_records_the_model_its_seat_used():
+    settings.save(assistant_model="small-test:1b", pi_model="anthropic/claude-test")
+    activity.work_as("assistant-2"); activity.begin("b", "sources")
+    activity.work_as("pi"); activity.begin("b", "brief")
+    activity.work_as(activity.DESK); activity.begin("b", "publisher")
+    for seat in ("assistant-2", "pi", activity.DESK):
+        activity.work_as(seat); activity.clear()
+    activity.work_as(activity.DESK)
+    models = {e["agent"]: e.get("model") for e in logged()}
+    assert models == {"sources": "small-test:1b", "brief": "anthropic/claude-test", "publisher": None}
+
+def test_stats_count_brief_checks_per_model():
+    lines = [step("source_check", "done", "model-a")] * 3 + [step("source_check", "failed", "model-a")] \
+        + [step("source_check", "done", "model-b")] * 2
+    rows = {r["model"]: r for r in activity.stats(lines, by_model=True)}
+    assert rows["model-a"]["rate"] == 0.75 and rows["model-b"]["rate"] == 1.0
+    assert (rows["model-a"]["runs"], rows["model-a"]["passed"], rows["model-a"]["failed"]) == (4, 3, 1)
+
+def test_stats_page_shows_the_pass_rate_on_each_models_row(client):
+    write_log([step("source_check", "done", "model-a")] * 3 + [step("source_check", "failed", "model-a")]
+              + [step("source_check", "done", "model-b")] * 2)
+    html = client.get("/stats").text
+    assert "<h1>Step stats</h1>" in html
+    by_model = html.split("<h2>By model</h2>")[1]
+    row_a = by_model.split("<code>model-a</code>")[1].split("</tr>")[0]
+    row_b = by_model.split("<code>model-b</code>")[1].split("</tr>")[0]
+    assert ">4<" in row_a and ">75%<" in row_a and ">2<" in row_b and ">100%<" in row_b
+    by_step = html.split("<h2>By step</h2>")[1].split("<h2>")[0]
+    assert ">83%<" in by_step                                        # 5 of 6 for the source check as a whole
+    assert by_step.count("<tr>") == 1 + len(activity.STATS_AGENTS)  # every model step, even with no runs
+    assert 'href="/stats"' in client.get("/log").text                # linked from the Full log page
+
+def test_stats_leave_stopped_runs_out_of_the_rate_and_the_times():
+    lines = [step("writer", "done", took=t) for t in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)] \
+        + [step("writer", "failed", took=200), step("writer", "stopped", took=9999)]
+    (row,) = [r for r in activity.stats(lines) if r["agent"] == "writer"]
+    assert (row["runs"], row["passed"], row["failed"], row["stopped"]) == (12, 10, 1, 1)
+    assert row["rate"] == 10 / 11
+    assert row["median"] == 60 and row["p90"] == 100                # 11 times: the 10th of them, sorted
+    empty = next(r for r in activity.stats(lines) if r["agent"] == "brief")
+    assert empty["runs"] == 0 and empty["rate"] is None and empty["median"] is None
+
+def test_stats_week_switch_and_old_lines_with_no_model(client):
+    old = time.time() - 30 * 86400
+    write_log([step("brief", "failed", ended=old), step("brief", "done"), step("publisher")])   # no models
+    week = client.get("/stats?window=week").text
+    all_time = client.get("/stats").text
+    assert "unknown model" in all_time and "Publisher" not in all_time   # only the steps a model runs
+    assert ">50%<" in all_time and ">50%<" not in week and ">100%<" in week
+    assert '<strong>Last 7 days</strong>' in week and 'href="/stats?window=week"' in all_time
+
+def test_stats_page_with_no_steps(client):
+    html = client.get("/stats").text
+    assert "No steps yet" in html and ">0<" in html

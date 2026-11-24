@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library backup restore`
-- Tests: `pytest -q` (expects 944 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 958 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -450,22 +450,36 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     filters by tag (an approved epic is called a tag on the site; `?tag=` in the address, so an article's tag pill
     links to its list), and an article page has a link back and its newer and older article, read from
     `feed.json` so pages written once stay current. `site/about/` shows the pipeline strip (`flowchart.py`, the
-    same snake the UI draws, always with the human reviews: auto mode is the UI's own switch) playing one made-up
-    mission from the Theorist to Publish as a short comic scene on a loop (#139): two researchers chase the work from
-    box to box (one from each worker's crew; the Assistant waits ahead at Sources, oversleeps, gulps a coffee and
-    makes it with two seconds to spare), hopping the gaps and leaping down where the strip turns, with a line at
-    every step, and a third walks in to Publish once they've gone ("Hot off the press!"), so the strip holds two at
-    a time. The scene is data: `TOUR` in `assets/researchers.js` is each actor's beats (enter, go, light, approve,
-    say, do a bit, wait, until/signal, cue, exit), played by `Tour` (a `FlowStage` on `#flow[data-tour]`) with
-    `Actor`s, researchers who follow beats instead of picking bits; `TOUR_BITS` adds the scene's own bits (the
-    leap, sleep and tap holds, jolt, shout, skid, cheer). A box lights only when a beat reaches it: `Tour` sends a
-    `tourstep` event and `assets/about.js` turns it into `Flow.apply` (`data-demo` means nothing is polled). A
-    resize lands anyone mid-run on their box. With reduced motion there is no scene: `about.js` lights each box in
-    turn and a `tourframe` event stands a still researcher on it. Below, Who does what is a card per strip step
-    (`render.STEP_NOTES`, `render.step_card`: the strip's icon, who runs it, what it does; the Theorist's, finder's
-    and rating checks are told on their agent's card), and two researchers drop into cards for a short visit, doing
+    same snake the UI draws, always with the human reviews (auto mode is the UI's own switch) and always with
+    outreach, whatever this desk has on (`render.english_track`, `flowchart.track(outreach=True)`, #155)) playing
+    made-up missions as a short comic scene (#139, #155): every agent's box has a researcher of its own
+    (`STATIONS` in `assets/researchers.js`, from the crew that runs it, anyone at Publish), and each mission is a
+    sheet of paper passed from box to box (`ROUTES`: one stop per box, `[step, ...beats]`). A researcher takes the
+    paper that reaches their box, does that stop's beats (say, do a bit, wait) and tosses it on: to the next agent,
+    onto a code check (it rests there `HOLD.check`, the reply wait longer) or onto a review (counted until approved).
+    With nothing to do they nap on their box (`NAP`) or walk off its side, and a new paper brings someone back in from
+    the side (a sleeper jolts awake, "I'm up! I'm up!", sometimes with a coffee); papers waiting their turn lie at
+    the box's edge. Four trips are on the line at once, each paper with its own coloured corner: the long one
+    passes every box once (a "{replier} wrote back!" at Article), and three loops pass theirs back once between two
+    boxes before it goes on: Theorist <-> Finder ("Another angle?", then the finder's check and a new epic approved),
+    Sources <-> Brief ("Need one more source!", then the source check and the brief review) and Outreach -> Publish
+    (a made-up person replies, the rater turns the first draft down with a reason, the rewrite passes, then the
+    review and Publish). Names, patterns and reasons come from `TOUR_VARS` (made-up people only, one pick a paper,
+    `{replier}` in a line). Trips start `LOOP_STAGGER` (6 s) apart, and a filed paper's trip starts again after
+    `TOUR_GAP` or `LOOP_GAP`. Researchers take turns to speak (`Tour.crowded`): a line whose bubble would land on
+    another's on the same row waits until that one is gone (`Station.say`), and a held say waits until it has been
+    said and read. `Tour` (a `FlowStage` on `#flow[data-tour]`) moves the papers and staffs the boxes with
+    `Station`s, researchers who follow a stop's beats instead of picking bits; `TOUR_BITS` adds the scene's own
+    (stroll on and off a box, toss, the sleep and tap holds, jolt, shout, skid, cheer). A box lights only while a
+    paper is on it: each paper's `tourstep` event (`who`, its step, or none for dark) lights its box, and
+    `assets/about.js` keeps one per paper and lights them all in one `Flow.apply` (a review counts the papers
+    waiting on it; `data-demo` means nothing is polled). A resize stands everyone back on their box.
+    turn and a `tourframe` event stands that box's researcher on it, still. Below, Who does what is a card per strip step
+    (`render.STEP_NOTES`, `render.step_card`: the strip's icon, who runs it, what it does; the Theorist's, finder's,
+    outreach and rating checks are told on their agent's card), and two researchers drop into cards for a short visit, doing
     that step's kind of work (`data-lab`, mostly from the crew that runs it; `window.RESEARCHERS_PACE`), apart from
-    the scene: the strip counts as two of the page's four (`Stage.hold`). Rebuilding the index rewrites it and copies those three scripts to
+    the scene: while the strip is in view it takes every seat on the page (`Tour.seats`), so the cards wait; scrolled
+    away it takes none, and back in view the card visitors walk off. Rebuilding the index rewrites it and copies those three scripts to
     `site/assets/`, and starting the UI copies any that differ from the code's (`publisher.refresh_assets`), so an
     updated script reaches the site without waiting for the next article. The UI serves `/assets` and `/site` with
     `Cache-Control: no-cache` (`ui.FreshFiles`) and writes every script's address with a stamp of its contents
@@ -480,6 +494,12 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     runs out. So a new channel with no cap (GitHub Pages, a folder, a webhook) gets every past article on its first pass, while
     1F916 takes one a day and Bluesky one per 10 minutes until they catch up. A pass gives up on a channel after
     `MAX_REFUSALS` (3) refusals.
+    A capped channel declares `PACE` (a timedelta: 1F916 one day, Bluesky its `POST_GAP`), and the queue says how
+    long its backlog takes (#119): `channel.backlog_time` is its `wait_until` (from now, never below zero) plus
+    `PACE` between each queued entry, and `channel.estimate` words it with `clock.backlog` ("about 3 weeks (one a
+    day)": `clock.about` rounds to minutes, hours, days up to two weeks, then weeks; `clock.every` words the pace).
+    The words are translated like the UI's (`clock.py` is in the i18n test's list); a channel without `PACE` (GitHub
+    Pages, custom ones, the local site) shows no estimate.
     A refusal costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
   - Publishing again: the Published page (or a published mission's page) ticks the local site and any channels
@@ -527,7 +547,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
     the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
     article it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
-    holds that wait and the last failure, which the UI and `status` show.
+    holds that wait and the last failure, which the UI and `status` show. `status` prints each channel's
+    queue with the same estimate as the UI, in English ("21 queued · about 3 weeks (one a day)", `run._queued`).
 - Auto mode: the switch at the top of every UI page (or `python run.py auto on|off`; `settings.auto_mode`, saved in
   `data/settings.json` only while on) approves everything except publishing. `orchestrator.auto_approve` approves
   every brief waiting for review, every proposed epic (the Theorist's and the finder's) and every proposed combine,
@@ -723,13 +744,20 @@ replies) only while outreach is on and a channel is ready;
   which share their class names.
 - Step log: `activity.py` appends every agent step that ends (the seat's next `begin`, or `clear`) to
   `data/steps.jsonl` (`activity.LOG`, on this machine only, never trimmed): one JSON line with the seat, mission slug
-  (`""` for the Theorist and the finder), agent, start, end and outcome: `done`, or `failed`/`stopped` with why
+  (`""` for the Theorist and the finder), agent, start, end, the model the seat's worker was set to when the step
+  began (`activity.seat_model`; none for the desk, and lines from before #121 have none) and outcome: `done`, or `failed`/`stopped` with why
   (`activity.fail(e)` from the orchestrator's excepts, an `Interrupted` counting as stopped; `activity.outcome` for a
   failed source or article check or a paused search; the first outcome given stands). Under the pipeline strip
   (`ui.flow_status`, served in `/api/flow`'s `now`) the agents at work come first, then the last `RECENT_STEPS` (3)
   finished steps, each "Agent · mission · took 4m 12s · 3m ago" (`activity.recent` reads only the log's end), then Full log, which
   opens `/log` (`ui.log_page`): every step newest first, `LOG_PAGE` (200) a page, the ones at work on top, `?m=<slug>`
-  for one mission (a mission page's History links to it). Display-only, like the activity file.
+  for one mission (a mission page's History links to it), and links to `/stats` (`ui.stats_page`, #121): for each
+  model step (`activity.STATS_AGENTS`: sources, brief, source check, writing, article check, rating, outreach, Theorist,
+  finder) its runs, passed (outcome `done`, so a dead lead found by the source check passed), failed, stopped, pass
+  rate (passed out of passed and failed), median and slowest-tenth (nearest-rank 90th percentile) time, then the same
+  split by model ("unknown model" for a line with none), all time or `?window=week` (the last 7 days). Stopped runs
+  count as runs but in neither the rate nor the times, since a stop cuts a step short. `activity.stats` adds it up
+  from the whole log on each visit; plain tables, nothing stored. Display-only, like the activity file.
 - Trails: `trail.py` keeps each mission's last 40 agent steps (model thinking and replies, tool calls, tool
   results, each cut to 400 characters) in `data/trail/<slug>.jsonl` (`_finder.jsonl` for the finder, `_theorist.jsonl` for the Theorist). Only the
   loop writes them: `activity.begin` starts a trail, `llm.chat` and `researcher.tool_loop` add to it. Display-only.
@@ -746,11 +774,12 @@ Settings page, default 5); pause asks it to stop after the agent at work saves (
 work now" stays in the Missions page's loop panel while the loop runs.
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
 progress closest to published first (publishing, writing, briefs, searches) and new missions last. Publishing
-there is one card (`ui.queue_card`): how many articles are queued and for which places, leading to the queue on
+there is one card (`ui.queue_card`): how many articles are queued and for which places, each capped place with how
+long its queue takes ("1F916 21 · about 3 weeks (one a day)", `ui.queue_pace`, #119), leading to the queue on
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
+order they go out, requested ones marked, each capped place's heading with the same estimate), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
 between looks for work, Model providers, Research (web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
