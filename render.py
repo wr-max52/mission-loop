@@ -478,9 +478,9 @@ def english_track() -> str:
         return flowchart.track({}, {}, {}, outreach=True)
 
 def about_html() -> str:
-    """site/about/index.html: the pipeline strip playing one made-up mission from start to finish, carried by
-    researchers (assets/about.js and the Tour in assets/researchers.js, #139), then a card for each step with a
-    researcher or two dropping in."""
+    """site/about/index.html: the pipeline strip playing made-up missions passed from box to box as paper by a
+    researcher on each agent's box (assets/about.js and the Tour in assets/researchers.js, #139, #155), then a card
+    for each step with a researcher or two dropping in."""
     strip = (f'<section id="flow" class="flow" data-demo data-tour data-working="[]" '
              f'aria-label="The pipeline, playing an example run">'
              f'<div class="flow-scroll"><div class="flow-track" data-lab>{english_track()}</div></div>'

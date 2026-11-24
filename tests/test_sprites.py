@@ -178,95 +178,69 @@ def about_strip():
     import sys
     sys.path.insert(0, str(ROOT))
     import flowchart
-    return [k for k, kind, _ in flowchart.FLOW], [k for k, kind, _ in flowchart.FLOW if kind == "human"]
+    return flowchart.FLOW
 
-def play(script: dict, first: list, round_signals: bool = False):
-    """Play a storyboard with no clock: each actor until it waits on a signal it hasn't got. Returns the boxes it lit,
-    in order, with who lit them. With round_signals a signal belongs to the round it was given in (the loops)."""
-    lit, signals, queue, rounds = [], set(), [], {}
-    playing = {who: list(script[who]) for who in first}
-    while playing or queue:
-        if not playing:
-            who = queue.pop(0)
-            playing[who] = list(script[who])
-        moved = False
-        for who, beats in list(playing.items()):
-            key = lambda name: (rounds.get(who, 0), name) if round_signals else name
-            while beats:
-                op, *args = beats[0]
-                if op == "until" and key(args[0]) not in signals:
-                    break
-                beats.pop(0)
-                moved = True
-                if op == "light":
-                    lit.append((who, args[0]))
-                elif op == "signal":
-                    signals.add(key(args[0]))
-                elif op == "cue":
-                    queue.append(args[0])
-                elif op == "round":
-                    rounds[who] = rounds.get(who, 0) + 1
-            if not beats:
-                del playing[who]
-        assert moved or not playing, f"stuck: {playing}"
-    return lit
+def route_js():
+    return js("R => ({ stations: R.STATIONS, routes: R.ROUTES, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS) })")
 
-def check_beats(script: dict, r: dict, strip: list):
-    for who, beats in script.items():
+def check_route(stops, r, flow):
+    kinds = {k: kind for k, kind, _ in flow}
+    for step, *beats in stops:
+        assert step in kinds, step
+        assert not beats or step in r["stations"], (step, beats)       # a check or a review takes no beats
         for b in beats:
-            assert b[0] in r["beats"], (who, b)
-            if b[0] in ("enter", "go", "light", "approve"):
-                assert b[1] in strip, (who, b)
+            assert b[0] in r["beats"], (step, b)
             if b[0] == "do":
-                assert b[1] in r["bits"], (who, b)
-            if b[0] in ("cue", "face"):
-                assert b[1] in script, (who, b)
-            if b[0] == "go" and len(b) > 2 and "beside" in b[2]:
-                assert b[2]["beside"] in script, (who, b)
+                assert b[1] in r["bits"], (step, b)
             if b[0] == "say":
-                assert set(re.findall(r"\{(\w+)\}", b[1])) <= set(r["vars"]), (who, b)
+                assert set(re.findall(r"\{(\w+)\}", b[1])) <= set(r["vars"]), (step, b)
+    return [step for step, *_ in stops]
 
-def test_the_about_page_storyboard_runs_the_whole_strip_in_order():
-    """The About page's scene (#139): every beat is one the director knows, on a step the strip shows (outreach
-    included, #155); played with no clock (each actor until it waits on a signal), the work lights every step once,
-    in strip order, and ends."""
-    r = js("R => ({ tour: R.TOUR, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS) })")
-    tour, (strip, reviews) = r["tour"], about_strip()
-    check_beats(tour, r, strip)
-    assert [step for _, step in play(tour, ["P", "R"])] == strip      # every box once, in the strip's order
-    for k in reviews:                                                  # every review is approved after it lights
-        assert any(b[:2] == ["approve", k] for beats in tour.values() for b in beats)
+def test_the_about_page_has_a_researcher_on_every_agents_box():
+    """#155: one researcher per agent's box on the About strip, from the crew that runs it (anyone at Publish)."""
+    r, flow = route_js(), about_strip()
+    assert sorted(r["stations"]) == sorted(k for k, kind, _ in flow if kind == "agent")
+    assert r["stations"] == {"theorist": "pi", "finder": "assistant", "sources": "assistant", "brief": "pi",
+                             "outreach": "pi", "writer": "pi", "article_rating": "assistant", "publisher": "desk"}
 
-def test_the_about_page_loops_pass_work_between_neighbouring_stages():
-    """The loops beside the long storyboard (#155): each round passes the work forward along the strip and comes
-    back for more (Sources <-> Brief, Article <-> Rating), never gets stuck, and every reply line is a made-up name."""
-    r = js("""R => ({ loops: R.TOUR_LOOPS, beats: Object.keys(R.BEATS), bits: Object.keys(R.TOUR_ACTS), vars: Object.keys(R.TOUR_VARS),
-                     replier: R.TOUR_VARS.replier, compiled: Object.fromEntries(Object.entries(R.TOUR_LOOPS).map(([name, def]) => {
-                       const s = new R.Scene({}, name, def, 0); return [name, Object.fromEntries(Object.keys(def.cast).map(id => [id, s.beats(id)]))]; })) })""")
-    strip, reviews = about_strip()
-    assert set(r["loops"]) == {"sources", "outreach"}
-    on = {}
-    for name, loop in r["loops"].items():
-        script = r["compiled"][name]
-        assert set(script) == set(loop["cast"]) and set(loop["cast"].values()) == {"pi", "assistant"}   # one of each crew
-        check_beats(script, r, strip)
-        lit = play(script, list(loop["cast"]), round_signals=True)
-        steps = [step for _, step in lit]
-        rounds = loop.get("rounds", 1)
-        assert len(lit) and len(steps) % rounds == 0
-        one = steps[:len(steps) // rounds]
-        assert steps == one * rounds                                   # every round lights the same boxes
-        forward = sorted(set(one), key=strip.index)
-        assert [k for k in one if one.count(k) == 1] == [k for k in forward if one.count(k) == 1]   # passed on in strip order
-        on[name] = one
-        for k in set(one) & set(reviews):                              # a review it lights, it approves
-            assert any(b[:2] == ["approve", k] for beats in script.values() for b in beats)
-    assert on["sources"] == ["sources", "brief", "source_check"]      # handed over, back for one more source, then on
-    assert sum(b[0] == "until" for b in r["loops"]["sources"]["round"]["S"]) == 2
-    assert on["outreach"].count("article_rating") == 2 and on["outreach"].count("writer") == 2   # turned down once, then passed
-    assert on["outreach"][:3] == ["outreach", "outreach_check", "replies"] and on["outreach"][-1] == "publisher"
-    assert len(r["replier"]) >= 5                                      # a shuffle of made-up people
+def test_the_long_trip_passes_its_paper_through_every_box_once_in_order():
+    """The About page's long trip (#139): its paper visits every box on the strip, outreach included, once and in
+    strip order, and every agent's box has something to say or do with it."""
+    r, flow = route_js(), about_strip()
+    stops = r["routes"]["tour"]["stops"]
+    assert check_route(stops, r, flow) == [k for k, _, _ in flow]
+    assert all(len(stop) > 1 for stop in stops if stop[0] in r["stations"])
 
+def test_the_loops_pass_their_paper_back_between_two_boxes_then_on():
+    """The loops (#155): each paper goes back to the box before once (another angle, one more source, a draft turned
+    down) and then on along the strip to a review or Publish."""
+    r, flow = route_js(), about_strip()
+    order = [k for k, _, _ in flow]
+    steps = {name: check_route(route["stops"], r, flow) for name, route in r["routes"].items() if name != "tour"}
+    assert steps == {
+        "theorist": ["theorist", "theorist_check", "finder", "theorist", "finder", "finder_check", "epic_review"],
+        "sources": ["sources", "brief", "sources", "brief", "source_check", "brief_review"],
+        "outreach": ["outreach", "outreach_check", "replies", "writer", "article_check", "article_rating", "writer",
+                     "article_check", "article_rating", "rating_check", "article_review", "publisher"],
+    }
+    for name, s in steps.items():
+        back = [i for i in range(1, len(s)) if order.index(s[i]) < order.index(s[i - 1])]
+        assert len(back) == 1, name                                    # passed back once, everything else forward
+    assert len({route["ink"] for route in r["routes"].values()}) == len(r["routes"])   # each trip's paper has its own colour
+
+def test_researchers_on_the_strip_take_turns_to_speak():
+    """Two bubbles never land on each other (#155): a line waits while someone near on the same row is talking, and
+    is said once their bubble is gone; someone far along the row, or on another row, talks at once."""
+    r = js("""R => {
+      const crowded = R.Tour.prototype.crowded, me = { x: 100, alpha: 1, stage: { ground: 50 } };
+      const them = (x, ground, t) => ({ x, alpha: 1, stage: { ground }, bubble: { text: "Pages for you.", t, dur: 2 } });
+      const tour = a => ({ actors: [me, a], bubbleW: t => t.length * 6 + 12 });
+      return { near: crowded.call(tour(them(130, 50, 0.5)), me, "One more source!"),
+               far: crowded.call(tour(them(400, 50, 0.5)), me, "One more source!"),
+               below: crowded.call(tour(them(130, 120, 0.5)), me, "One more source!"),
+               done: crowded.call(tour(them(130, 50, 1.95)), me, "One more source!") };
+    }""")
+    assert r == {"near": True, "far": False, "below": False, "done": False}
 
 def test_an_arm_keeps_its_length_wherever_the_hand_goes():
     # #146: a raised, forward or lowered arm is one length; a hand out of reach is pulled in, never stretched to.

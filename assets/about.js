@@ -1,9 +1,10 @@
-/* The published site's About page: the pipeline strip plays one made-up mission running the whole line (#139),
- * through the same relighting the UI uses (assets/flow.js, Flow.apply). The researchers on the strip carry it
- * (assets/researchers.js, Tour): each time the work reaches a box they send a "tourstep" event and the box lights
- * here, so the lights follow them. Short loops play beside it (#155), so every actor lights one box of their own
- * and the strip shows them all. With no scene (reduced motion), the boxes light in turn on a timer instead,
- * and a "tourframe" event tells researchers.js where to stand a still figure.
+/* The published site's About page: the pipeline strip plays made-up missions running the line (#139, #155),
+ * through the same relighting the UI uses (assets/flow.js, Flow.apply). Each agent's box has a researcher, and each
+ * mission is a sheet of paper they pass along (assets/researchers.js, Tour); every time a paper reaches a box or
+ * leaves it, a "tourstep" event says so (who: that paper) and the box lights or goes dark here, so the lights
+ * follow the paper. Several papers are on the line at once and the strip shows them all. With no scene (reduced
+ * motion), the boxes light in turn on a timer instead, and a "tourframe" event tells researchers.js which box's
+ * researcher to stand there, still.
  * Nothing here talks to a server; the loop and its missions never leave the machine that runs them.
  */
 (() => {
@@ -54,7 +55,7 @@ function frame(list) {
     }
     const worker = working.find(e => e.step === step).worker;
     return `<span class="who">${WORKERS[worker]}</span> · <strong>${AGENTS[step] || step}</strong> ` +
-           `${DOING[step] || ""}${DOING[step] && / for$/.test(DOING[step]) ? " a mission" : ""}`;
+           `${DOING[step] || ""}${DOING[step] && / (for|about)$/.test(DOING[step]) ? " a mission" : ""}`;
   };
   return { running: true, working, waiting, parked: {}, states: {}, now: lines.map(line).join("<br>") };
 }
@@ -78,7 +79,7 @@ function play() {
   timer = setInterval(next, EVERY);
 }
 
-// Each actor's box (who -> their latest tourstep); one with no actor darkens the whole strip.
+// Each paper's box (who -> its latest tourstep); one with no paper darkens the whole strip.
 let driven = false;
 const lit = new Map();
 document.addEventListener("tourstep", e => {
