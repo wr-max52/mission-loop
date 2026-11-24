@@ -13,7 +13,7 @@ Settings page) or `.env` has `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`. `data/
 identity (no recovery), `data/github.json` holds a GitHub token, `data/bluesky.json` an app password and
 `data/providers.json` the cloud model providers' API keys, `data/search.json` the web search sources' keys,
 `data/mcp_share.json` the token LAN clients send to the shared MCP server (the Settings page shows it to the owner to
-copy) and `data/email.json` the outreach email login (an app password): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go.
+copy) and `data/email.json` the outreach email login (an app password): never commit, print or move any of them. The Pages repo is the one place `site/` is meant to go. The one sanctioned copy of them is `python run.py backup` (#120): a mode-600 zip written outside the repo, never inside it.
 
 ## How a task becomes a merged PR (coding agents, this repo only)
 
@@ -37,8 +37,8 @@ The written issue is what Will approves; nothing after it waits on him until the
 - First launch: `./start.sh` (checks Python 3.10+, makes `.venv`, installs `requirements.txt` the first time and
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
-  combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 933 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+  combines approve-combine reject-combine link unlink library backup restore`
+- Tests: `pytest -q` (expects 958 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -82,6 +82,22 @@ The written issue is what Will approves; nothing after it waits on him until the
   blocks anything. Every CLI command creates the database first (`run._start`), `ui` refuses a port with a live
   listener (`run._port_free`) and writes the site's index and About page when `site/` has none, so `/site/` and the
   top bar's About (`/about`) work before anything is published.
+- Backup and restore (`backup.py`, #120): `backup.desk()` is the one list of what makes up a desk (`data/` with the
+  database, settings and keys, `missions/`, `missions.yaml`, `site/`), for backups now and an export or a move later.
+  `python run.py backup [--to <folder>]` (or Back up now in Settings → Setup) writes `mission-loop-backup-<date>.zip`
+  (`-2`, `-3` the same day; nothing is overwritten), mode 600, with a manifest (`mission-loop-backup.json`); it leaves
+  out what can be rebuilt (`backup.left_out()`: `data/library.db`, `data/loop.log`, `data/trail/`) and the loop's flags,
+  locks and `activity.json`/`waiting.json`, and copies the database with SQLite's backup so a running loop is fine. The
+  folder is `settings.backup_dir()` (saved on the page, else `~/Documents` if it exists, else the home folder), and
+  `backup.check_folder` refuses one inside the repo or the folder the loop runs in. The command says the zip holds keys
+  and prints no key. The last backup's time and path are in `data/backup.json` (not backed up; Settings → Setup shows
+  them). `python run.py restore <zip>` refuses while the loop runs, checks every name first (manifest required, no
+  absolute paths, `..`, links or anything outside the desk), unpacks into a `.restore-*` staging folder, moves the
+  current `data/`, `missions/`, `missions.yaml` and `site/` into `data.before-restore-<date>/` (all four inside it),
+  then puts the backup's in place and keeps this machine's `data/backup.json`; both folders are in `.gitignore`. The
+  setup check adds "A recent backup" once `data/1f916.json` exists, failing (never blocking, and never bringing back
+  the home page's setup card) with no backup in `backup.OLD_AFTER_DAYS` (30) days. Scheduled or off-machine backups are
+  not built.
 - An honest loop: play (and Add and start loop) asks `agents.ready` first (`ui.can_start`) and refuses with the
   reason. A running loop that can't work records why in `data/waiting.json` (`doctor.set_waiting`, logged once per
   reason) and checks again every `run.WAIT_RETRY` (30 s) instead of resting; the top bar then says Waiting (amber,
@@ -853,6 +869,8 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Write a sprite by hand and see it drawn | Settings → Avatars → Open the sprite studio (`/sprites`); the rules are in `SPRITES.md` |
 | Use the desk's tools from another app on this network | Settings → MCP server: switch on, copy a setup (or `python run.py mcp`) |
 | Check this machine's setup | `python run.py doctor`, or Settings → Setup |
+| Back up everything this machine can't get back (keys included) | Back up now in Settings → Setup, or `python run.py backup [--to <folder>]` (never inside this folder) |
+| Restore a backup | stop the loop, then `python run.py restore <zip>` (what was here moves to `data.before-restore-<date>/`); restart the UI |
 | Set the published site's name, tagline and About statement | Settings → Publication |
 | Pick web search sources, their order and keys | Settings → Web search (or `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `SERPER_API_KEY` in `.env`) |
 | Add a mission | edit `missions.yaml` then `python run.py init`, or `python run.py add <slug> "<topic>" --objective "..."` |

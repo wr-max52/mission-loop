@@ -19,7 +19,7 @@ OLLAMA_DOWNLOAD = "https://ollama.com/download"
 
 @dataclass
 class Check:
-    key: str            # models, connection, search, search_up, npx, uvx, work, outreach
+    key: str            # models, connection, search, search_up, npx, uvx, work, outreach, backup
     title: str          # what is being checked, in a few words
     ok: bool
     detail: str         # what was found
@@ -116,6 +116,21 @@ def _outreach() -> list[Check]:
                   "" if ready else _("Set up email in Settings → Outreach, or add Bluesky or 1F916 under Publishing."),
                   "" if ready else "/settings#outreach")]
 
+def _backup() -> list[Check]:
+    """Only once there is a 1F916 key, which has no recovery: a backup in the last OLD_AFTER_DAYS days (#120). Warns,
+    never blocks."""
+    import backup                          # late: backup reads the desk's folders
+    from agents import f916
+    if not f916.KEY_FILE.exists():
+        return []
+    days = backup.age_days()
+    ok = days is not None and days <= backup.OLD_AFTER_DAYS
+    detail = (_("Last backup: {when}.").format(when=backup.last()["at"][:16].replace("T", " ") + " UTC") if days is not None
+              else _("No backup yet, and the 1F916 key has no recovery."))
+    return [Check("backup", _("A recent backup"), ok, detail if ok or days is None else
+                  _("Last backup {n} days ago; the 1F916 key has no recovery.").format(n=int(days)),
+                  "" if ok else _("Press Back up now in Settings → Setup, or run python run.py backup."), "/settings#setup")]
+
 def stubs() -> bool:
     return os.environ.get("MISSION_LOOP_STUBS") == "1"
 
@@ -124,9 +139,9 @@ def checks(deep: bool = False, conn: dict | None = None, probe: bool = False) ->
     PROBE_EVERY seconds, so a saved key that ran out of credit shows up."""
     if stubs():                            # MISSION_LOOP_STUBS=1 needs no model, so play already works
         return [Check("models", _("A model for each worker"), True, _("Running on stubs (MISSION_LOOP_STUBS=1), no model needed"))] \
-            + _tools() + _work()
+            + _tools() + _work() + _backup()
     conn = conn or llm.connection()
-    return _models(conn) + _connection(conn, deep) + _tools(probe or deep) + _work() + _outreach()
+    return _models(conn) + _connection(conn, deep) + _tools(probe or deep) + _work() + _outreach() + _backup()
 
 def problems(found: list[Check] | None = None) -> list[Check]:
     return [c for c in (found if found is not None else checks()) if not c.ok]
