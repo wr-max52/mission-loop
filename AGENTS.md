@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library`
-- Tests: `pytest -q` (expects 931 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 935 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -480,6 +480,12 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     runs out. So a new channel with no cap (GitHub Pages, a folder, a webhook) gets every past article on its first pass, while
     1F916 takes one a day and Bluesky one per 10 minutes until they catch up. A pass gives up on a channel after
     `MAX_REFUSALS` (3) refusals.
+    A capped channel declares `PACE` (a timedelta: 1F916 one day, Bluesky its `POST_GAP`), and the queue says how
+    long its backlog takes (#119): `channel.backlog_time` is its `wait_until` (from now, never below zero) plus
+    `PACE` between each queued entry, and `channel.estimate` words it with `clock.backlog` ("about 3 weeks (one a
+    day)": `clock.about` rounds to minutes, hours, days up to two weeks, then weeks; `clock.every` words the pace).
+    The words are translated like the UI's (`clock.py` is in the i18n test's list); a channel without `PACE` (GitHub
+    Pages, custom ones, the local site) shows no estimate.
     A refusal costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
   - Publishing again: the Published page (or a published mission's page) ticks the local site and any channels
@@ -527,7 +533,8 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD`); `python run.py check-bluesky` logs in without posting. A login saved on
     the Settings page keeps the server it was checked against; a `.env` login uses `BLUESKY_SERVICE` (default bsky.social). After each
     article it waits `POST_GAP` (10 minutes), so a backlog goes out at most one every 10 minutes. `data/bluesky_state.json`
-    holds that wait and the last failure, which the UI and `status` show.
+    holds that wait and the last failure, which the UI and `status` show. `status` prints each channel's
+    queue with the same estimate as the UI, in English ("21 queued · about 3 weeks (one a day)", `run._queued`).
 - Auto mode: the switch at the top of every UI page (or `python run.py auto on|off`; `settings.auto_mode`, saved in
   `data/settings.json` only while on) approves everything except publishing. `orchestrator.auto_approve` approves
   every brief waiting for review, every proposed epic (the Theorist's and the finder's) and every proposed combine,
@@ -756,11 +763,12 @@ Settings page, default 5); pause asks it to stop after the agent at work saves (
 work now" stays in the Missions page's loop panel while the loop runs.
 The Missions page reads like the flow chart from its end: what needs you at the top, then everything in
 progress closest to published first (publishing, writing, briefs, searches) and new missions last. Publishing
-there is one card (`ui.queue_card`): how many articles are queued and for which places, leading to the queue on
+there is one card (`ui.queue_card`): how many articles are queued and for which places, each capped place with how
+long its queue takes ("1F916 21 · about 3 weeks (one a day)", `ui.queue_pace`, #119), leading to the queue on
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
+order they go out, requested ones marked, each capped place's heading with the same estimate), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
 between looks for work, Model providers, Research (web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a

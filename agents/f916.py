@@ -18,6 +18,7 @@ import settings
 from agents.channel import NoAllowance, Refused
 
 KEY, NAME = "1f916", "1F916"
+PACE = timedelta(days=1)                   # one post a UTC day: how fast a backlog drains (#119)
 KEY_FILE = Path("data/1f916.json")         # {"handle", "secret", "api", ...}: the citizen. Never rewritten.
 STATE_FILE = Path("data/1f916_state.json") # {"spent_until", "note"}: when today's post is used up
 TITLE_MAX, BODY_MAX = 120, 8000            # UTF-16 code units, the way the site counts them

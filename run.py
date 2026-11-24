@@ -3,8 +3,9 @@ import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()                              # reads API keys from .env before anything else
-import activity, agents, claim_tags, clock, doctor, notify, orchestrator, settings, store
+import activity, agents, claim_tags, clock, doctor, i18n, notify, orchestrator, settings, store
 from agents import llm
+from agents import channel as channel_contract
 from contracts import Mission, SITE_FOLDERS
 
 app = typer.Typer()
@@ -364,7 +365,6 @@ def mcp_cmd(port: int = typer.Option(0, help="Port (default: the one on the Sett
 @app.command("doctor")
 def doctor_cmd():
     """Check this machine's setup: models, their connection, web search, the tools research needs."""
-    import i18n
     with i18n.english():                   # the terminal speaks English, whatever the UI's language
         found = doctor.checks(deep=True)
     print(doctor.report(found))
@@ -493,17 +493,25 @@ def status():
     if agents.f916_enabled():
         queued, until = len(orchestrator.queue(f916)), f916.spent_until()
         when = f"next post after {until:%m-%d %H:%M} UTC" if until and until > clock.now() else "can post now"
-        print(f"1F916 as {f916.key()['handle']}: {queued} queued, {when}")
+        print(f"1F916 as {f916.key()['handle']}: {_queued(f916, queued)}, {when}")
     if agents.github_enabled():
         from agents import github
         note = github.load_state().get("note", "")
-        print(f"GitHub Pages: {github.repo()} -> {github.site_address()}, {len(orchestrator.queue(github))} queued"
+        print(f"GitHub Pages: {github.repo()} -> {github.site_address()}, {_queued(github)}"
               + (f" (last push failed: {note})" if note else ""))
     if agents.bluesky_enabled():
         from agents import bluesky
         note = bluesky.load_state().get("note", "")
-        print(f"Bluesky as {bluesky.handle()}: {len(orchestrator.queue(bluesky))} queued"
+        print(f"Bluesky as {bluesky.handle()}: {_queued(bluesky)}"
               + (f" (last try failed: {note})" if note else ""))
+
+def _queued(channel, n: int | None = None) -> str:
+    """"21 queued · about 3 weeks (one a day)": a channel's backlog with the same estimate as the UI's queue (#119),
+    in English like the rest of `status`; no estimate for a channel with no PACE."""
+    n = len(orchestrator.queue(channel)) if n is None else n
+    with i18n.english():
+        pace = channel_contract.estimate(channel, n, clock.now())
+    return f"{n} queued" + (f" · {pace}" if pace else "")
 
 @app.command()
 def ask(question: str, model: str = typer.Option("", help="An Ollama model, or provider/model for a connected cloud provider; default: the small search model")):
