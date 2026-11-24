@@ -754,6 +754,16 @@ def set_publication(name: str, tagline_text: str, about: str) -> None:
             raise ValueError(f"the {what} can be at most {limit} characters")
     save(publication_name="" if name == PUBLICATION_DEFAULT else name, tagline=tagline_text, about_statement=about)
 
+# The desk profile (#122): which file's words the agents' prompts use (desk_profiles.py reads the files). Saved only
+# when it isn't investigative, the words the prompts always had.
+PROFILE_DEFAULT = "investigative"
+
+def profile() -> str:
+    return saved().get("profile") or PROFILE_DEFAULT
+
+def set_profile(name: str) -> None:
+    save(profile="" if name == PROFILE_DEFAULT else name)
+
 # ---------- outreach: asking real people a question about a mission ----------
 # Off until switched on (Settings → Outreach, or MISSION_LOOP_OUTREACH=1 in .env). While on, every approved brief
 # goes to the Outreach agent, which asks up to outreach_contacts() people on the channels ticked here that are set

@@ -18,7 +18,7 @@ from starlette.responses import (HTMLResponse, RedirectResponse, PlainTextRespon
 from starlette.routing import Route, Mount
 from starlette.concurrency import run_in_threadpool
 from starlette.staticfiles import StaticFiles
-import activity, agents, avatars, backup, board, claim_tags, clock, contacts, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
+import activity, agents, avatars, backup, board, claim_tags, clock, contacts, desk_profiles, doctor, library, mcp_share, orchestrator, search_sources, search_status, settings, stopping, store
 from agents import llm, providers
 from agents import bluesky, f916, github, publisher
 from agents import channel as channel_contract
@@ -120,6 +120,8 @@ MESSAGES = {
     "setup_hidden": "Setup hidden. Settings → Setup brings it back.",
     "setup_shown": "Setup shown on the Missions page.",
     "publication_saved": "Publication saved.",
+    "profile_saved": "Profile saved. Applies at the next agent step.",
+    "profile_copied": "Profile copied and in use. Edit the file named under Profile.",
 }
 ERRORS = {
     "backup_folder": "A backup folder must be a full path outside the Mission Loop folder.",
@@ -165,6 +167,7 @@ ERRORS = {
     "search_key": "That source refused the key.",
     "search_format": "That isn't an API key. Paste it without spaces.",
     "publication": "Too long. Limits: name {name}, tagline {tagline}, About {about} characters.",
+    "profile": "Pick a profile from the list.",
 }
 
 # ---------- loop status ----------
@@ -2159,7 +2162,7 @@ def settings_body(request: Request, error: str = "") -> str:
         settings_section("setup", setup_section(conn)),
         settings_section("workers", workers_section(conn, models) + loop),
         settings_section("providers", connection_section(conn)),
-        settings_section("research", search_section() + library_section(conn)),
+        settings_section("research", profile_section() + search_section() + library_section(conn)),
         settings_section("mcp", mcp_section()),
         settings_section("display", display_forms() + board_style_form() + animations + avatar_link()),
         settings_section("publication", publication_section()),
@@ -2891,6 +2894,53 @@ def backup_box() -> str:
   <input type="text" id="backup_dir" name="folder" value="{escape(folder, quote=True)}" maxlength="1000">
   <button>{_("Save")}</button></form>
 <p class="hint">{_("Restore with {command} while the loop is stopped.").format(command="<code>python run.py restore &lt;zip&gt;</code>")}</p></div>"""
+
+def profile_section() -> str:
+    """Settings → Research → Profile (#122): which desk profile's words the agents' prompts use (desk_profiles.py).
+    Picking one saves it at once; Copy to edit copies the one in use to data/profiles/ and switches to the copy."""
+    current = desk_profiles.current()
+    def label(n: str) -> str:              # a custom one also shows its file's name
+        return desk_profiles.title(n) + (" (" + n + ")" if desk_profiles.is_custom(n) else "")
+    opts = "".join(f'<option value="{n}"{" selected" if n == current else ""}>{escape(label(n))}</option>'
+                   for n in desk_profiles.names())
+    folder = f"<code>{escape(str(desk_profiles.CUSTOM))}/</code>"
+    about = desk_profiles.description(current)
+    notes = [escape(about)] if about else []
+    if desk_profiles.is_custom(current):
+        file = f"<code>{escape(str(desk_profiles.CUSTOM / (current + '.md')))}</code>"
+        notes.append(_("Edit {file} to change it.").format(file=file))
+        if gone := desk_profiles.missing(current):
+            notes.append(escape(_("Uses the investigative profile's words for: {blocks}.").format(
+                blocks=", ".join(_(desk_profiles.BLOCKS[k]) for k in gone))))
+        if odd := desk_profiles.unknown(current):
+            notes.append(escape(_("Headings not used: {headings}.").format(headings=", ".join(odd))))
+    intro = _("The words the agents use for what kind of desk this is. The checks are the same in every profile.")
+    return f"""{part("layers", _("Profile"), "profile")}
+<p>{intro}</p>
+<form method="post" action="/settings/profile">
+  <input type="hidden" name="do" value="pick">
+  <label for="profile_pick">{_("Profile")} <span class="hint">{_("applies at the next agent step")}</span></label>
+  <select id="profile_pick" name="profile" onchange="this.form.requestSubmit()">{opts}</select>
+  <noscript><p><button>{_("Save")}</button></p></noscript>
+</form>
+<p class="hint">{" ".join(notes)}</p>
+<form method="post" action="/settings/profile" class="inline"><input type="hidden" name="do" value="copy">
+  <button>{_("Copy to edit")}</button><span class="hint">{_("Any file in {folder} shows up here. Kept on this machine.").format(folder=folder)}</span></form>"""
+
+async def save_profile(request: Request) -> Response:
+    """Settings → Research → Profile: pick a profile, or copy the one in use to data/profiles/ and use the copy."""
+    if not same_origin(request):
+        return PlainTextResponse("Cross-site request refused.", status_code=403)
+    form = await request.form()
+    if form.get("do") == "copy":
+        name, _file = desk_profiles.copy(desk_profiles.current())
+        settings.set_profile(name)
+        return go("/settings", done="profile_copied")
+    name = str(form.get("profile") or "")
+    if name not in desk_profiles.names():
+        return go("/settings", error="profile")
+    settings.set_profile(name)
+    return go("/settings", done="profile_saved")
 
 def search_section() -> str:
     """Settings → Web search: every source in the order searches try them, each with on/off, up/down, its key and how
@@ -5232,6 +5282,7 @@ app = Starlette(routes=[
     Route("/auto", save_auto, methods=["POST"]),
     Route("/settings/loop-every", save_loop_every, methods=["POST"]),
     Route("/settings/library", save_library, methods=["POST"]),
+    Route("/settings/profile", save_profile, methods=["POST"]),
     Route("/settings/worker", save_worker, methods=["POST"]),
     Route("/settings/ollama", save_ollama, methods=["POST"]),
     Route("/settings/ollama-connect", connect_ollama, methods=["POST"]),

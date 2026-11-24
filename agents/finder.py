@@ -5,7 +5,7 @@ import asyncio, random
 from pydantic import BaseModel, ValidationError
 from contracts import MissionIdea, words
 from agents import llm
-import stopping
+import desk_profiles, stopping
 from agents.researcher import SearchRun, tool_loop
 from agents.toolbox import Toolbox
 
@@ -32,7 +32,7 @@ ANGLES = [
     "Find who was left out: the people, places or data the standard account never mentions, and the record that shows them.",
 ]
 
-SEARCH = """You are the mission finder for an independent investigative desk. You do not research stories.
+SEARCH = """You are the mission finder for {the_desk}. You do not research stories.
 You scout for the ones nobody on the desk has thought of.
 
 The editor's inspiration line: {inspiration}
@@ -131,13 +131,17 @@ def epic_listing(epics: dict[str, list[str]] | None) -> str:
         return "- none yet"
     return "\n".join(f"- {title}" + "".join(f"\n    · {t}" for t in topics) for title, topics in epics.items())
 
+def prompt(inspiration: str, listed: str, angle_1: str, angle_2: str, now=None) -> str:
+    """The finder's search prompt, in the desk profile in use now (#122)."""
+    today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
+    return SEARCH.format(inspiration=inspiration, today=today, angle_1=angle_1, angle_2=angle_2,
+                         existing=listed, searches=MAX_SEARCHES, the_desk=desk_profiles.block("desk"))
+
 async def run_finder(inspiration: str, topics: list[str], now=None, epics: dict[str, list[str]] | None = None,
                      toolbox_factory=Toolbox) -> list[MissionIdea]:
     angle_1, angle_2 = random.sample(ANGLES, 2)
     listed = "\n".join(f"- {t}" for t in topics[-MAX_LISTED:]) or "- none yet"
-    today = f"Today's date: {now:%Y-%m-%d}.\n" if now else ""
-    system = SEARCH.format(inspiration=inspiration, today=today, angle_1=angle_1, angle_2=angle_2,
-                           existing=listed, searches=MAX_SEARCHES)
+    system = prompt(inspiration, listed, angle_1, angle_2, now)
     async with toolbox_factory(["search"]) as tb:
         if getattr(tb, "skipped", {}).get("search"):
             raise FinderFailed(f"web search is off on this machine: {tb.skipped['search']} (see Settings → Setup)")

@@ -11,12 +11,12 @@ from contracts import (Mission, ResearchBrief, OutreachRecord, Article, ArticleD
                        Section, cite_by_id, tidy_bold, unbold)
 from agents import llm
 from checks import article_check
-import checkpoint, stopping, trail
+import checkpoint, desk_profiles, stopping, trail
 
 PLAN_ROUNDS = 2                            # the plan, then one round of fixes; code settles what is left
 SECTION_ROUNDS = 3                         # a section, then up to 2 rounds of fixes
 
-SYSTEM = """You are an investigative writer who explains hard findings in plain language.
+SYSTEM = """{writer}
 Write a short, clear article (500 to 900 words) from the research brief below. The brief is the only
 thing you know: do not add facts, numbers, names, dates or quotes that are not in it.
 
@@ -137,7 +137,8 @@ def _notes(m: Mission) -> str:
 def prompt(m: Mission, brief: ResearchBrief, records: list[OutreachRecord]) -> str:
     data = brief.model_dump(exclude={"pocs", "question_for_pocs"})
     data["claims"] = [{"n": n, **c} for n, c in enumerate(data["claims"], 1)]
-    return SYSTEM.format(comments=_comments(records), notes=_notes(m), brief=json.dumps(data, indent=1))
+    return SYSTEM.format(comments=_comments(records), notes=_notes(m), brief=json.dumps(data, indent=1),
+                         writer=desk_profiles.block("writer"))
 
 def _settle_plan(plan: ArticlePlan, brief: ResearchBrief) -> ArticlePlan:
     """Code's fixes for a plan still wrong after its repair round: drop claim numbers that don't exist,

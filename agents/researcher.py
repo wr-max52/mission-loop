@@ -3,7 +3,7 @@ gather (the Research Assistant's model finds sources) and write_brief (the Princ
 Investigator's model writes a ResearchBrief from what was gathered)."""
 import asyncio, json, re, time
 from urllib.parse import unquote, urlparse
-import activity, checkpoint, related, search_status, stopping, trail, wayback
+import activity, checkpoint, desk_profiles, related, search_status, stopping, trail, wayback
 from contracts import ClaimSet, Evidence, Mission, POSSIBILITY, ResearchBrief, SourceFix, SourcePick, VERDICTS
 from agents import llm
 from checks import validator
@@ -15,8 +15,9 @@ MAX_REFUSED = 3                            # calls refused in a row (repeats, un
 LOW_BUDGET = 10                            # from here on every result says how many calls are left
 SOURCE_TIME_LIMIT = 15 * 60                # seconds the source finder may run before it must stop
 
-SYSTEM = """You are a skeptical, nonpartisan political investigator. Your job is to find the edge of what
-is known and say plainly what may lie just past it.
+# {researcher} and {primary_sources} are the desk profile's words (desk_profiles.py, #122); the rest is the same for
+# every profile, because it is what the checks hold the brief to.
+SYSTEM = """{researcher}
 Topic: {topic}
 Mission: {objective}
 {today}{past}
@@ -63,10 +64,7 @@ Rules:
 - Aim provocation at what the evidence leaves open: official accounts, institutions, incentives, numbers
   and gaps. Do not use a possibility to suggest that a named person committed a crime or acted in bad
   faith, unless a source you cite makes that allegation, and then say who made it.
-- Go beneath the coverage to primary material: legislature and government records, bill text and
-  roll-call votes, court opinions and filings, election and campaign-finance records, official
-  transcripts. Press releases are spin too; use them to show what was said. Use news outlets and
-  research organisations for leads, details and the opposing view.
+- {primary_sources}
 - Set each source's stance by what its evidence does to the thesis, not by what the outlet concludes. An
   article that dismisses an idea can still contain the detail that supports it; quote that detail.
 - When you attribute words or actions to a named person, cite a page that shows their own words
@@ -447,13 +445,18 @@ def _for_brief(messages: list) -> list:
         out.append(m)
     return out
 
+def prompt(m: Mission, now=None) -> str:
+    """The Research Assistant's search prompt, in the desk profile in use now."""
+    today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
+    return SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
+                         past=related.reference_block(m), researcher=desk_profiles.block("researcher"),
+                         primary_sources=desk_profiles.indented("primary_sources"))
+
 async def run_gather(m: Mission, now=None, toolbox_factory=Toolbox, resume: Evidence | None = None) -> Evidence:
     """The Research Assistant's step: search and read until done, out of budget or time, or stopped. The
     transcript is saved after every tool result; a search the stop button (or a killed loop) cut short comes
     back unfinished and carries on from it next time (resume), with the budget and time it has left."""
-    today = f"Today's date: {now:%Y-%m-%d}. Prefer current information.\n" if now else ""
-    system = SYSTEM.format(topic=m.topic, objective=m.objective or m.topic, today=today, notes=_notes(m),
-                           past=related.reference_block(m))
+    system = prompt(m, now)
     start = resume.messages if resume and resume.messages else None
     run = SearchRun(_calls_made(start) if start else 0, resume.seconds if start else 0,
                     resume.search_down if start else "")
