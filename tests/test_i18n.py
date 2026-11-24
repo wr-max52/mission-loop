@@ -4,7 +4,7 @@ import ast, json, re
 from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
-import activity, flowchart, i18n, search_status, settings, ui
+import activity, desk_profiles, flowchart, i18n, search_status, settings, ui
 from agents import assistant
 from contracts import RATING_FACTORS
 
@@ -45,6 +45,7 @@ def keys() -> set[str]:
     out |= set(RATING_FACTORS.values()) | set(ui.RATING_SHORT.values())
     out |= {s for pair in assistant.TOOL_LABELS.values() for s in pair}      # Researcher Chat's live line
     out |= set(search_status.FIX.values()) | {src["blurb"] for src in settings.SEARCH_SOURCES.values()}
+    out |= set(desk_profiles.BLOCKS.values())                               # Settings → Research → Profile
     return out
 
 PLACEHOLDER = re.compile(r"\{[a-z_]*\}")

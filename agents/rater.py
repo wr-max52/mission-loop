@@ -11,7 +11,7 @@ import asyncio, json
 from urllib.parse import urlparse
 from contracts import Article, ArticleRating, Mission, RatingReply, ResearchBrief, RATING_SCALE, cited_ids
 from agents import llm
-import claim_tags, store, trail, wayback
+import claim_tags, desk_profiles, store, trail, wayback
 
 SYSTEM = """You are a tough, fair editor deciding whether an article is good enough to show the publisher.
 Rate it on three things, each from 1 to {scale}:
@@ -23,10 +23,7 @@ logic: the strength of the claim and its logic. Is the claim at the top specific
 intrigue: would a curious reader keep reading? Does the opening make the stakes concrete, is there a real
   question or surprise, does it say why it matters to an ordinary person? Dull, vague or padded writing
   scores low; so does hype the evidence can't carry.
-sources: the credibility of the sources it cites. Primary records (filings, court documents, official data,
-  the people involved on the record) and established outlets score high; anonymous blogs, press releases
-  repeated as fact, partisan or commercial sites with a stake, and one source carrying the whole story score
-  low. A source's quote that doesn't say what the article uses it for counts against it.
+sources: {rater} A source's quote that doesn't say what the article uses it for counts against it.
 
 How to score: 1-3 weak, 4-6 passable with real problems, 7-8 strong, 9-10 rare and excellent. Most decent
 articles land between 5 and 8. Judge each factor on its own; don't let one pull the others up or down.
@@ -73,7 +70,7 @@ def sources_text(brief: ResearchBrief, a: Article) -> str:
     return "\n".join(lines) or "(none cited)"
 
 def messages(brief: ResearchBrief, a: Article, tag: str = "") -> list[dict]:
-    return [{"role": "system", "content": SYSTEM.format(scale=RATING_SCALE)},
+    return [{"role": "system", "content": SYSTEM.format(scale=RATING_SCALE, rater=desk_profiles.indented("rater"))},
             {"role": "user", "content": ASK.format(article=article_markdown(a), sources=sources_text(brief, a),
                                                    thesis=brief.thesis, tag=tag or "none given")}]
 
