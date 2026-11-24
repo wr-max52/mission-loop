@@ -3983,7 +3983,8 @@ async def log_page(request: Request) -> HTMLResponse:
         steps=count, time=took(total), file=f"<code>{escape(str(activity.LOG))}</code>")
     body = [f'<p>{back}</p>', f'<h1>{_("Step log")}</h1>',
             f'<p class="muted">{summary}'
-            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "") + "</p>"]
+            + (f' · <a href="/log">{_("All missions")}</a>' if slug else "")
+            + f' · <a href="/stats">{_("Stats")}</a></p>']
     rows = [step_row(e, topics, live=True) for e in (live if page_no == 1 else [])]
     rows += [step_row(e, topics) for e in shown]
     if rows:
@@ -3997,6 +3998,43 @@ async def log_page(request: Request) -> HTMLResponse:
                     f'<span class="muted">{_("Page {n} of {total}").format(n=page_no, total=pages)}</span> '
                     f'{link(page_no + 1, _("Older") + " &rarr;") if page_no < pages else ""}</p>')
     return page(_("Step log"), "".join(body), poll=True)
+
+STATS_COLUMNS = ("Runs", "Passed", "Failed", "Stopped", "Pass rate", "Median", "Slowest tenth")
+STATS_WINDOWS = {"all": "All time", "week": "Last 7 days"}
+
+def stats_table(rows: list[dict], by_model: bool) -> str:
+    """One /stats table: a row per step (or per step and model), "-" where there is nothing to show."""
+    dash = '<span class="muted">-</span>'
+    head = "".join(f'<td class="when">{_(h)}</td>' for h in ("Step",) + (("Model",) if by_model else ()) + STATS_COLUMNS)
+    out = []
+    for r in rows:
+        model = (f'<td><code>{escape(r["model"])}</code></td>' if r["model"] else
+                 f'<td><span class="muted">{_("unknown model")}</span></td>') if by_model else ""
+        rate = f'{round(100 * r["rate"])}%' if r["rate"] is not None else dash
+        cells = [str(r["runs"]), str(r["passed"]), str(r["failed"]), str(r["stopped"]), rate,
+                 took(r["median"]) if r["median"] is not None else dash, took(r["p90"]) if r["p90"] is not None else dash]
+        out.append(f'<tr><td><strong>{agent_name(r["agent"])}</strong></td>{model}'
+                   + "".join(f'<td class="took">{c}</td>' for c in cells) + "</tr>")
+    return f'<table class="events steps-log stats"><tr>{head}</tr>{"".join(out)}</table>'
+
+async def stats_page(request: Request) -> HTMLResponse:
+    """Pass rate and time per agent step, then the same split by the model that ran it, read from the step log
+    (activity.stats), so it shows whether a model swap helped. ?window=week keeps the last 7 days. Read only."""
+    window = request.query_params.get("window", "all")
+    window = window if window in STATS_WINDOWS else "all"
+    since = time.time() - activity.WEEK if window == "week" else 0
+    steps = activity.history()
+    switch = " · ".join(f"<strong>{_(label)}</strong>" if key == window else
+                        f'<a href="/stats' + ("" if key == "all" else f"?window={key}") + f'">{_(label)}</a>'
+                        for key, label in STATS_WINDOWS.items())
+    by_model = activity.stats(steps, by_model=True, since=since)
+    body = [f'<p><a class="back" href="/log">&larr; {_("Back to the step log")}</a></p>', f'<h1>{_("Step stats")}</h1>',
+            f'<p class="muted">{switch}</p>',
+            f'<p class="muted">{_("Pass rate is passed out of passed and failed. A stop cuts a step short, so stopped runs count as runs but not in the pass rate or the times. Slowest tenth: nine in ten runs took this long or less.")}</p>',
+            f'<h2>{_("By step")}</h2>', stats_table(activity.stats(steps, since=since), by_model=False),
+            f'<h2>{_("By model")}</h2>',
+            stats_table(by_model, by_model=True) if by_model else f'<p class="muted">{_("No steps yet.")}</p>']
+    return page(_("Step stats"), "".join(body))
 
 async def api_flow(request: Request) -> JSONResponse:
     return JSONResponse(flow_state())
@@ -5151,6 +5189,7 @@ app = Starlette(routes=[
     Route("/settings/custom-channel/remove", remove_custom_channel, methods=["POST"]),
     Route("/published", published_page),
     Route("/log", log_page),
+    Route("/stats", stats_page),
     Route("/board", board_page),
     Route("/board/move", board_move, methods=["POST"]),
     Route("/board/style", board_style_save, methods=["POST"]),
