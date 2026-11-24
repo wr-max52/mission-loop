@@ -733,6 +733,7 @@ form.republish button { margin-left:auto; }
 label.tick { display:inline-flex; align-items:center; gap:.35rem; margin:0; font-weight:600; cursor:pointer; }
 label.tick input { width:auto; margin:0; }
 label.tick .hint { margin-left:-.15rem; }
+.tick.posted { display:inline-flex; align-items:center; gap:.35rem; font-weight:600; }
 .pubbox { border:1px solid var(--rule); border-radius:10px; padding:.9rem 1rem; margin:.6rem 0; }
 .pubbox .head { display:flex; justify-content:space-between; align-items:center; gap:.6rem; flex-wrap:wrap; }
 .pubbox h3 { margin:0; font-family:Georgia, serif; font-size:1.15rem; }
@@ -1412,6 +1413,7 @@ def places(m: Mission, queues: dict[str, list[str]] | None = None) -> list[dict]
         if m.channel_errors.get(key):
             bits.append(f'{_("refused:")} {escape(m.channel_errors[key])}')
         out.append({"key": key, "name": _(orchestrator.channel_name(key)), "posted": bool(post),
+                    "url": post.where if post and post.where.startswith(("https://", "http://")) else None,
                     "on": key == "site" or key in queues, "status": " · ".join(bits) or _("not posted")})
     return out
 
@@ -1420,12 +1422,19 @@ def channel_names(m: Mission) -> str:
     return ", ".join(_(orchestrator.channel_name(k)) for k in orchestrator.channels(m))
 
 def publish_form(m: Mission, rows: list[dict], back: str) -> str:
-    """Publish a published article again: tick where. Places it hasn't reached yet are ticked already."""
-    boxes = "".join(
-        f'<label class="tick"><input type="checkbox" name="to" value="{escape(r["key"], quote=True)}"'
-        f'{"" if r["posted"] and r["key"] != "site" else " checked"}> {escape(r["name"])}'
-        f'<span class="hint">{" " + _("(rebuild page)") if r["key"] == "site" else " " + _("(again)") if r["posted"] else ""}</span></label>'
-        for r in rows if r["on"])
+    """Publish a published article again: the local site can be rebuilt, a channel not reached yet ticked (ticked
+    already). A channel it reached shows a link to the post instead of a box: an article goes to a channel once."""
+    def place(r):
+        name = escape(r["name"])
+        if r["posted"] and r["key"] != "site":
+            if r["url"]:
+                return (f'<a class="tick posted" href="{escape(r["url"], quote=True)}" target="_blank" '
+                        f'rel="noopener">{name} &#8599;</a>')
+            return f'<span class="tick posted">{name}<span class="hint"> ({_("posted")})</span></span>'
+        hint = f'<span class="hint"> {_("(rebuild page)")}</span>' if r["key"] == "site" else ""
+        return (f'<label class="tick"><input type="checkbox" name="to" value="{escape(r["key"], quote=True)}"'
+                f' checked> {name}{hint}</label>')
+    boxes = "".join(place(r) for r in rows if r["on"])
     return (f'<form method="post" action="/m/{quote(m.slug)}/republish" class="republish">'
             f'<input type="hidden" name="back" value="{escape(back, quote=True)}">{boxes}'
             f'<button class="primary">{_("Publish")}</button></form>')

@@ -979,11 +979,13 @@ def channels(m: Mission) -> dict[str, ChannelPost]:
 
 def request_publish(m: Mission, keys: list[str], now) -> None:
     """A human asks to publish a published article again: "site" rewrites its page on the local site, a channel
-    key posts it there (again, if it already went), ahead of everything else waiting. The loop does it on its
-    next sweep, within seconds while it runs; a try that fails stays requested for the next publishing pass."""
+    key posts it to a channel it hasn't reached yet (never a second time: #165), ahead of everything else waiting.
+    The loop does it on its next sweep, within seconds while it runs; a try that fails stays requested for the next
+    publishing pass."""
     if m.state != State.DONE:
         raise ValueError("only a published article can be published again")
-    known = {"site"} | {c.KEY for c in agents.channels() if c.enabled()}
+    reached = channels(m)
+    known = {"site"} | {c.KEY for c in agents.channels() if c.enabled() and c.KEY not in reached}
     keys = [k for k in dict.fromkeys(keys) if k in known]
     if not keys:
         raise ValueError("nowhere to publish it")

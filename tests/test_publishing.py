@@ -80,8 +80,22 @@ def test_nav_goes_to_the_published_page_which_leads_back(client, sky):
     assert '<input type="checkbox" name="to" value="bluesky" checked> Bluesky' in html   # not posted yet: ticked
     run_at(T0)
     html = client.get("/published").text
-    assert '<input type="checkbox" name="to" value="bluesky"> Bluesky<span class="hint"> (again)' in html
     assert "<strong>Bluesky</strong>: posted" in html
+    post = store.get_mission("a").channels["bluesky"].where
+    assert post.startswith("https://bsky.app/")      # posted: a link to the post where its box was, no second post
+    assert f'<a class="tick posted" href="{post}" target="_blank" rel="noopener">Bluesky &#8599;</a>' in html
+    assert 'value="bluesky"' not in html and "(again)" not in html
+    assert '<input type="checkbox" name="to" value="site" checked> Local site' in html   # our own page: rebuilt
+
+def test_a_channel_with_no_web_address_shows_posted_without_a_box(client, tmp_path):
+    published("a", T0)
+    client.post("/settings/custom-channel", data={"name": "Outbox", "kind": "folder",
+                                                  "target": str(tmp_path / "out"), "format": "markdown"})
+    run_at(T0 + timedelta(minutes=1))
+    assert "custom-outbox" in store.get_mission("a").channels
+    html = client.get("/published").text
+    assert '<span class="tick posted">Outbox<span class="hint"> (posted)</span></span>' in html
+    assert 'value="custom-outbox"' not in html
 
 # ---------- publishing again ----------
 
@@ -102,9 +116,20 @@ def test_publishing_again_skips_bluesky_gap_and_goes_ahead_of_the_queue(client, 
     assert '<a href="#a-old">' in queue and "<strong>requested</strong>" in queue
     run_at(T0 + timedelta(minutes=1))                  # inside the 10-minute gap, but a human asked
     assert on_bluesky("old") and len(sky.roots) == 2 and not store.get_mission("old").publish_requests
-    client.post("/m/newer/republish", data={"to": "bluesky"})
-    run_at(T0 + timedelta(minutes=2))                  # posted already, but asked again: it goes again
-    assert len(sky.roots) == 3 and not store.get_mission("newer").publish_requests
+
+def test_a_channel_already_posted_to_is_never_asked_again(client, sky, monkeypatch):
+    monkeypatch.setattr(ui, "loop_running", lambda: True)
+    monkeypatch.setattr(ui, "wake", lambda: None)
+    backlog("a")
+    run_at(T0)
+    assert on_bluesky("a") and len(sky.roots) == 1
+    r = client.post("/m/a/republish", data={"to": "bluesky", "back": "/published"}, follow_redirects=False)
+    assert r.headers["location"] == "/published?error=places"   # a hand-made post can't do it either
+    assert not store.get_mission("a").publish_requests
+    client.post("/m/a/republish", data={"to": ["site", "bluesky"], "back": "/published"})
+    assert set(store.get_mission("a").publish_requests) == {"site"}   # the page is rebuilt, no second post
+    run_at(T0 + timedelta(minutes=30))
+    assert len(sky.roots) == 1
 
 @pytest.fixture
 def publish_waits(monkeypatch):
