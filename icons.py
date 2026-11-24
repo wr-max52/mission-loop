@@ -1,5 +1,6 @@
-"""Small line icons for the UI's section headings, drawn inline so nothing loads from elsewhere. Each is a
+"""The site's own mark (LOGO: a page with the AI sparkle on it and a pen) and small line icons for the UI's section headings, drawn inline so nothing loads from elsewhere. Each is a
 24x24 outline that takes the text color (styled by .ico in ui.UI_CSS and render's CSS)."""
+from urllib.parse import quote
 
 PATHS = {
     # anything waiting on a human decision: a finger tapping
@@ -67,3 +68,22 @@ CSS = """.ico { display:inline-flex; flex:none; width:1.05em; height:1.05em; }
 .ico svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round;
            stroke-linejoin:round; }
 """
+
+# The mark: a sheet of paper with the four-pointed AI sparkle on it and a pen. Its own colors, so it reads the same in
+# light and dark. Used as the favicon (FAVICON, in the page head) and beside the name (logo()), in the app and on the
+# published site, local or GitHub Pages. Drawn inline, like the icons: nothing loads from elsewhere.
+LOGO = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<path d="M7 3h13l6 6v20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="#fff" stroke="#1f2937" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M20 3v6h6" fill="#e5e7eb" stroke="#1f2937" stroke-width="1.8" stroke-linejoin="round"/>'
+        '<path d="M13 10Q14 16 20 17Q14 18 13 24Q12 18 6.5 17Q12 16 13 10z" fill="#7c3aed"/>'
+        '<g transform="translate(24 18) rotate(45)">'
+        '<rect x="-2.3" y="-9" width="4.6" height="11" rx="1" fill="#f59e0b" stroke="#1f2937" stroke-width="1.4"/>'
+        '<path d="M-2.3 2L0 6.5L2.3 2z" fill="#fde68a" stroke="#1f2937" stroke-width="1.4" stroke-linejoin="round"/>'
+        '</g>'
+        '</svg>')
+FAVICON = f'<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,{quote(LOGO)}">'
+
+def logo() -> str:
+    """The mark at the size of the text beside it, hidden from screen readers (the name next to it says it)."""
+    return LOGO.replace("<svg ", '<svg class="logo" aria-hidden="true" width="1.3em" height="1.3em" '
+                        'style="vertical-align:-.28em;margin-right:.4em;flex:none" ', 1)
