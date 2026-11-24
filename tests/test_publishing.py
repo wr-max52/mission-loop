@@ -295,3 +295,62 @@ def test_long_model_work_still_gets_publishing_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "post_to_channels", lambda now, *a: passes.append(now) or 0)
     run_at(T0)
     assert len(passes) > 2                             # not only at the start and the end
+
+# ---------- how long each queue takes (#119) ----------
+
+def test_a_paced_channel_says_how_long_its_queue_takes_and_one_without_pace_says_nothing():
+    import types
+    from agents import channel
+    spent = T0.replace(hour=0) + timedelta(days=1)     # today's post is spent until the next UTC day
+    daily = types.SimpleNamespace(PACE=timedelta(days=1), wait_until=lambda: spent)
+    assert channel.estimate(daily, 21, T0) == "about 3 weeks (one a day)"
+    assert channel.backlog_time(daily, 21, T0) == spent - T0 + timedelta(days=20)   # wait, then one a day
+    uncapped = types.SimpleNamespace(wait_until=lambda: None)
+    assert channel.backlog_time(uncapped, 21, T0) is None and channel.estimate(uncapped, 21, T0) == ""
+    gap = types.SimpleNamespace(PACE=bluesky.POST_GAP, wait_until=lambda: T0 - timedelta(hours=1))   # long past
+    assert channel.estimate(gap, 4, T0) == "about 30 minutes (one every 10 minutes)"
+    assert channel.estimate(gap, 1, T0) == "under a minute (one every 10 minutes)"
+    assert channel.estimate(gap, 0, T0) == ""
+    assert f916.PACE == timedelta(days=1) and bluesky.PACE == bluesky.POST_GAP
+    assert not hasattr(custom.Channel({"id": "x", "name": "X"}), "PACE")
+
+def test_durations_round_to_the_unit_that_reads_well():
+    import clock
+    m = lambda n: timedelta(minutes=n)
+    words = [clock.about(t) for t in (timedelta(seconds=10), m(1), m(40), m(59.6), m(150), timedelta(hours=23.6),
+                                      timedelta(days=9), timedelta(days=13.6), timedelta(days=20.6))]
+    assert words == ["under a minute", "about 1 minute", "about 40 minutes", "about 1 hour", "about 3 hours",
+                     "about 1 day", "about 9 days", "about 2 weeks", "about 3 weeks"]
+    assert [clock.every(t) for t in (timedelta(days=1), m(10), timedelta(hours=2), m(90), m(1), timedelta(weeks=1))] \
+        == ["one a day", "one every 10 minutes", "one every 2 hours", "one every 90 minutes", "one a minute", "one a week"]
+    assert clock.backlog(None, timedelta(days=1)) == "" and clock.backlog(m(5), None) == ""
+
+def test_the_queue_card_published_page_and_status_say_how_long_each_backlog_takes(client, sky, monkeypatch, capsys):
+    import run as cli
+    monkeypatch.setattr(ui.clock, "now", lambda: T0)
+    slugs = [f"old-{i:02}" for i in range(21)]
+    backlog(*slugs)
+    store.save_mission(Mission(slug="ready", topic="Ready to go", state=State.ARTICLE_READY, reviewed=True))
+    Path("data").mkdir(exist_ok=True)
+    f916.KEY_FILE.write_text(json.dumps({"handle": "loop-desk", "secret": "1f916_sk_test"}))
+    f916.save_state({"spent_until": f916.next_utc_day(T0).isoformat()})   # today's post already went
+    home = client.get("/").text
+    card = home.split('<a class="card publish" href="/published#queue">')[1].split("</a>")[0]
+    assert ("Local site 1 · 1F916 21 · about 3 weeks (one a day) · "
+            "Bluesky 21 · about 3 hours (one every 10 minutes)") in card      # the local site has no cap
+    queue = client.get("/published").text.split('id="queue"')[1].split("<h2")[0]
+    assert '<span>1F916</span><span class="n">21</span><span class="hint">about 3 weeks (one a day)</span>' in queue
+    assert '<span>Local site</span><span class="n">1</span></h3>' in queue
+    cli.status()
+    out = capsys.readouterr().out
+    assert "1F916 as loop-desk: 21 queued · about 3 weeks (one a day), next post after" in out
+    assert "Bluesky as loopdesk.bsky.social: 21 queued · about 3 hours (one every 10 minutes)" in out
+
+def test_the_estimate_is_translated_with_the_ui_and_status_stays_english(client, sky, monkeypatch, capsys):
+    import run as cli
+    monkeypatch.setattr(ui.clock, "now", lambda: T0)
+    backlog("a", "b", "c", "d")
+    client.post("/settings/language", data={"language": "fr"})
+    assert "Bluesky 4 · environ 30 minutes (un toutes les 10 minutes)" in client.get("/").text
+    cli.status()
+    assert "Bluesky as loopdesk.bsky.social: 4 queued · about 30 minutes (one every 10 minutes)" in capsys.readouterr().out

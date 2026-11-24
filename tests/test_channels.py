@@ -178,7 +178,8 @@ def test_ui_and_status_show_where_it_was_published(joined, capsys, monkeypatch):
     assert "queued, #1 of 1" in client.get("/m/b").text
     cli.status()
     out = capsys.readouterr().out
-    assert "published: Local site, 1F916" in out and "1F916 as loop-desk: 1 queued, next post after" in out
+    assert "published: Local site, 1F916" in out
+    assert "1F916 as loop-desk: 1 queued · about 13 hours (one a day), next post after" in out   # #119
 
 def test_ui_says_how_to_join_when_off():
     published("a", T0)
