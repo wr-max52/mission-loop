@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library backup restore`
-- Tests: `pytest -q` (expects 970 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 972 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -522,7 +522,11 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
     A refusal costs nothing (the reason goes in `Mission.channel_errors` and the next entry is tried); network or key
     failures lose nothing and are retried the next time something is published or the loop starts again. Stub runs have no channels.
   - Publishing again: the Published page (or a published mission's page) ticks the local site and any channels
-    and records them in `Mission.publish_requests` (`orchestrator.request_publish`). While the loop runs, its next
+    the article hasn't reached yet and records them in `Mission.publish_requests` (`orchestrator.request_publish`).
+    An article goes to a channel once (#165): a channel it reached shows a link to the post (`ui.places`' `url`)
+    where its box would be, or its name and "posted" when where it went is no web address (a folder, a webhook), and
+    `request_publish` drops a channel already reached, so nothing posts twice; the local site's box rebuilds the
+    page. While the loop runs, its next
     sweep sees the new request and runs a pass, within seconds even mid-task. With the loop off the UI does it
     itself on a background thread (`ui.publish_now` -> `orchestrator.publish_requested`): only what was asked for,
     the rest of each channel's backlog waits for the loop, and a leftover stop doesn't block it. Every pass, the
@@ -801,7 +805,7 @@ long its queue takes ("1F916 21 · about 3 weeks (one a day)", `ui.queue_pace`, 
 the Published page. Published articles are not listed there, only the Published card at the very bottom of the
 page, for anyone scrolling to find it. The Published button in the top bar opens that page too (`/published`,
 with a link back): the local site, every channel, the queue (`ui.publish_queue`: each place's articles in the
-order they go out, requested ones marked, each capped place's heading with the same estimate), and each article with where it went and boxes to publish it again. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
+order they go out, requested ones marked, each capped place's heading with the same estimate), and each article with where it went, boxes to rebuild its page or post it where it hasn't gone, and a link to each post it has. Its Settings page (`/settings`) is grouped into sections (`ui.SETTINGS_SECTIONS`: Setup, Workers with the loop's rest
 between looks for work, Model providers, Research (the desk profile, web search and the library), MCP server (sharing the tools on this network), Display (appearance, chat colour, board,
 animations, avatars), Publication and Publishing), listed with icons in a nav down its left (a bar across the top on a
 narrow screen): a click glides to its section and scrolling lights the one in view (`ui.SETTINGS_NAV_JS`). Publishing has the local site (always on: feeds, the hosted address), the channels that are set up, and Add a
@@ -918,7 +922,7 @@ appearance and hides its own switch; the published site keeps its switch for rea
 | Stop a lead that can't go on, or change a claim tag | a mission page's Mark as dead lead, or its claim tag (ours only) |
 | Override a parked mission | `python run.py push <slug>` (its last failed draft goes to your review, marked as failed) |
 | View the site | Published in the UI's top bar, open `site/index.html`, or `python -m http.server 8765 -d site` |
-| Publish an article again | tick where on the UI's Published page and press Publish (done within seconds; the loop needn't run) |
+| Publish an article again | tick where on the UI's Published page and press Publish (done within seconds; the loop needn't run; a channel it already reached shows a link to the post instead) |
 | Add a custom channel | Settings → Publishing → Add a channel → Custom channel (a webhook or a folder, and a format) |
 | Subscribe | `site/feed.xml` (RSS) or `site/feed.json` (JSON Feed); set the hosted address on the Settings page once it is hosted |
 | Turn on Bluesky posting | add your handle and an app password on the Settings page (or `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` in `.env`, then `python run.py check-bluesky`) |
