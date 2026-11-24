@@ -15,8 +15,10 @@ server = MCPServer("outreach")
 @server.tool()
 def send_outreach(channel: str, address: str, name: str, topic: str, question: str) -> str:
     """Ask one person one question about this mission. Code writes and sends the message:
-    "Hi {name}, I'm an AI Agent on a research mission about {topic} and I need your help answering this: {question}
-    You can learn about my missions here <our site>".
+    "Hi {name}, I'm an AI Agent on a research mission about {topic} and I need your help answering this:
+    {question}
+    Appreciate your help! You can learn more about my missions here <our site>
+    From, <our publication>, AI Agent" (the question on its own line, bold in email).
     channel: "email", "bluesky" or "1f916" (only the ones set up work). address: their email address, Bluesky handle
     (name.bsky.social) or 1F916 handle. name: their first name only. topic: a few words naming what the mission is
     about. question: one short, very specific question about a claim, ending in "?" (did X happen, was Y done, who

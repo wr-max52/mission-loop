@@ -134,10 +134,21 @@ def send(channel="email", address="jane@agency.gov", name="Jane", topic="the Tex
 
 def test_code_fills_the_template_with_the_site_address():
     assert contacts.message("Jane", "the grid", "Did it fail?") == (
-        "Hi Jane, I'm an AI Agent on a research mission about the grid and I need your help answering this: "
-        "Did it fail? You can learn about my missions here " + SITE)
+        "Hi Jane, I'm an AI Agent on a research mission about the grid and I need your help answering this:\n"
+        "Did it fail?\n"                                                  # the question on a line of its own
+        "Appreciate your help! You can learn more about my missions here " + SITE + "\n"
+        "\n"
+        "From,\n"
+        "Mission Loop, AI Agent")                                          # signed with the publication's name
     settings.set_site_url("")
-    assert contacts.message("Jane", "the grid", "Did it fail?").endswith("answering this: Did it fail?")
+    assert contacts.message("Jane", "the grid", "Did it fail?").split("\n")[1:3] == ["Did it fail?", "Appreciate your help!"]
+
+def test_the_sign_off_uses_the_publication_name_and_email_shows_the_question_bold():
+    settings.set_publication("Grid Desk", "", "")
+    assert contacts.message("Jane", "the grid", "Did it fail?").endswith("From,\nGrid Desk, AI Agent")
+    html = contacts.message_html("Jane <b>", "the grid & dams", "Did it fail?")
+    assert "<strong>Did it fail?</strong>" in html and "Grid Desk, AI Agent" in html
+    assert "Jane &lt;b&gt;" in html and "grid &amp; dams" in html       # what the agent wrote is escaped
 
 # ---------- email ----------
 
@@ -147,8 +158,9 @@ def test_email_is_sent_from_the_template_and_recorded(mail):
     msg = FakeSMTP.sent[0]
     assert msg["To"] == "jane@agency.gov" and "Loop Desk" in msg["From"] and "desk@example.com" in msg["From"]
     assert "Texas grid outage" in msg["Subject"]
-    body = msg.get_content()
+    body = msg.get_body(("plain",)).get_content()
     assert body.startswith("Hi Jane, I'm an AI Agent on a research mission about the Texas grid outage") and Q in body
+    assert f"<strong>{Q}</strong>" in msg.get_body(("html",)).get_content()   # mail apps show the question bold
     [r] = contacts.records("grid")
     assert (r.channel, r.address, r.name, r.question, r.ref) == ("email", "jane@agency.gov", "Jane", Q, msg["Message-ID"])
 
@@ -211,7 +223,8 @@ def test_bluesky_post_mentions_the_person_and_links_the_site(sky, appview):
     assert said.startswith("Sent to Jane (jane.bsky.social) on Bluesky"), said
     post = sky.posts[0]
     assert post["text"].startswith("@jane.bsky.social Hi Jane, I'm an AI Agent on a research mission about")
-    assert post["text"].endswith("You can learn about my missions here desk.example.org")   # shown short
+    assert "You can learn more about my missions here desk.example.org\n" in post["text"]   # shown short
+    assert post["text"].endswith(", AI Agent")
     mention, link = post["facets"]
     assert mention["features"][0] == {"$type": "app.bsky.richtext.facet#mention", "did": "did:plc:jane"}
     assert mention["index"] == {"byteStart": 0, "byteEnd": len("@jane.bsky.social")}
@@ -467,7 +480,7 @@ async def test_the_agent_asks_through_the_tool_for_its_own_mission(mail, monkeyp
     assert "outreach" in FakeToolbox.opened[0][0]
     system, model = seen[0]
     assert model == "big-test:30b"                                   # the Principal Investigator's model
-    assert brief.thesis in system and "I need your help answering this: <question>" in system
+    assert brief.thesis in system and "I need your help answering this:\n<question>\n" in system
     assert "email (an email address)" in system and "bluesky" not in system.split("Channels you can use:")[1][:60]
 
 async def test_the_agent_is_not_started_without_a_channel(monkeypatch):

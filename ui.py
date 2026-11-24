@@ -720,7 +720,7 @@ a.back { font-weight:600; text-decoration:none; }
 ul.places { margin:.5rem 0; padding-left:1.1rem; font-size:.9rem; }
 ul.places li { margin:.2rem 0; overflow-wrap:anywhere; }
 ul.outreach { margin:.5rem 0; padding-left:1.1rem; } ul.outreach li { margin:.6rem 0; overflow-wrap:anywhere; }
-ul.outreach .sent { margin:.25rem 0; font-size:.9rem; } ul.outreach blockquote.reply { margin:.3rem 0 .3rem .4rem; }
+ul.outreach .sent { margin:.25rem 0; font-size:.9rem; white-space:pre-line; } ul.outreach blockquote.reply { margin:.3rem 0 .3rem .4rem; }
 fieldset.channels { border:1px solid var(--rule); border-radius:8px; margin:.8rem 0; padding:.4rem .8rem .6rem; }
 fieldset.channels legend { font-size:.85rem; font-weight:600; padding:0 .3rem; }
 label.tick.out-channel { display:flex; align-items:flex-start; margin:.45rem 0; font-weight:400; }
@@ -3164,8 +3164,8 @@ def outreach_settings() -> str:
         warn = f'<p class="hint"><strong>{_("Outreach is on, but no ticked channel is set up. Missions skip it.")}</strong></p>'
     elif settings.outreach_on() and not settings.site_url():
         warn = f'<p class="hint">{_("No site address, so messages leave out the link to the site.")}</p>'
-    sample = escape(contacts.message("Jane", "the 2024 Texas grid outage",
-                                     "Did ERCOT order the shutdown before the freeze warning?"))
+    sample = contacts.message_html("Jane", "the 2024 Texas grid outage",          # escaped by message_html
+                                   "Did ERCOT order the shutdown before the freeze warning?")
     form = f"""<form method="post" action="/settings/outreach" class="actions">
   <p class="hint">{_("After a brief is approved, the Outreach agent asks a few people one question each. It picks the person, channel and question; code writes the message:")}</p>
   <blockquote lang="en">{sample}</blockquote>
