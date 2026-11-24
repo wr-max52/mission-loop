@@ -1,7 +1,7 @@
 """Outreach: the Outreach agent picks a person, a channel and a question; code (contacts.py) writes the message from
 the template, checks it, sends it on email, Bluesky or 1F916, records it and reads replies back; the orchestrator
 waits for those replies (settings' timer, or until everyone answered) before writing."""
-import json, os, smtplib, stat
+import email, json, os, smtplib, stat
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -21,6 +21,7 @@ Q = "Did the agency approve the contract before the audit?"
 
 class FakeSMTP:
     sent: list = []
+    envelopes: list = []                   # who each message really went to, Bcc included
     bad_login = False
     refuse: set = set()
 
@@ -30,10 +31,11 @@ class FakeSMTP:
     def login(self, user, password):
         if FakeSMTP.bad_login or password != "app-pw":
             raise smtplib.SMTPAuthenticationError(535, b"bad login")
-    def send_message(self, msg):
+    def send_message(self, msg, to_addrs=None):
         if msg["To"] in FakeSMTP.refuse:
             raise smtplib.SMTPRecipientsRefused({msg["To"]: (550, b"no such user")})
         FakeSMTP.sent.append(msg)
+        FakeSMTP.envelopes.append(list(to_addrs) if to_addrs else [msg["To"]])
     def __enter__(self): return self
     def __exit__(self, *exc): pass
 
@@ -43,9 +45,10 @@ class FakeIMAP:
     def __init__(self, host, timeout=30): pass
     def login(self, user, password): pass
     def select(self, box, readonly=False): return "OK", [b"1"]
-    def search(self, charset, *criteria):
+    def search(self, charset, *criteria):  # HEADER In-Reply-To "<ref>": only that header, as a real server does
         ref = criteria[-1].strip('"')
-        nums = [str(i + 1).encode() for i, raw in enumerate(FakeIMAP.inbox) if ref.encode() in raw]
+        nums = [str(i + 1).encode() for i, raw in enumerate(FakeIMAP.inbox)
+                if ref in str(email.message_from_bytes(raw).get("In-Reply-To", ""))]
         return "OK", [b" ".join(nums)]
     def fetch(self, num, what):
         raw = FakeIMAP.inbox[int(num) - 1]
@@ -94,7 +97,7 @@ class FakeF916:
 
 @pytest.fixture(autouse=True)
 def setup(monkeypatch):
-    FakeSMTP.sent, FakeSMTP.bad_login, FakeSMTP.refuse, FakeIMAP.inbox = [], False, set(), []
+    FakeSMTP.sent, FakeSMTP.envelopes, FakeSMTP.bad_login, FakeSMTP.refuse, FakeIMAP.inbox = [], [], False, set(), []
     settings.set_site_url(SITE)
     settings.set_outreach(True, 48, 3, list(settings.OUTREACH_CHANNELS))
     store.save_mission(Mission(slug="grid", topic="Texas grid", state=State.OUTREACH, approved=True))
@@ -148,6 +151,15 @@ def test_email_is_sent_from_the_template_and_recorded(mail):
     assert body.startswith("Hi Jane, I'm an AI Agent on a research mission about the Texas grid outage") and Q in body
     [r] = contacts.records("grid")
     assert (r.channel, r.address, r.name, r.question, r.ref) == ("email", "jane@agency.gov", "Jane", Q, msg["Message-ID"])
+
+def test_email_sends_us_a_blind_copy_that_is_never_read_as_a_reply(mail):
+    send()
+    [msg], [envelope] = FakeSMTP.sent, FakeSMTP.envelopes
+    assert envelope == ["jane@agency.gov", "desk@example.com"]      # a copy lands in our own inbox (#163)
+    assert msg["Bcc"] is None and msg["To"] == "jane@agency.gov"    # and Jane sees no Bcc
+    FakeIMAP.inbox = [bytes(msg)]                                   # the copy, sitting in our inbox
+    [r] = contacts.check_replies(contacts.records("grid"), T0)
+    assert r.replies == [] and r.thanked_at is None
 
 @pytest.mark.parametrize("fields, why", [
     ({"channel": "fax"}, "isn't an outreach channel that is set up. Use one of: email"),
@@ -278,6 +290,7 @@ def test_an_answer_by_email_gets_one_canned_thank_you_in_its_thread(mail):
     [r] = contacts.check_replies([record("email", "jane@agency.gov", "<abc@example.com>")], T0)
     [thanks] = FakeSMTP.sent
     assert thanks["To"] == "jane@agency.gov" and thanks["In-Reply-To"] == "<r1@agency.gov>"
+    assert FakeSMTP.envelopes == [["jane@agency.gov", "desk@example.com"]]   # the thank-you copies us too
     assert thanks["Subject"].startswith("Re: A question from an AI research agent")
     assert thanks.get_content().strip() == ("Thanks Jane, that really helps. I'll weigh your answer in my research. "
                                             "You can learn about my missions here " + SITE)

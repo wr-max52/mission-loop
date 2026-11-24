@@ -191,13 +191,19 @@ def _send_email(m: Mission, address: str, name: str, topic: str, question: str, 
     msg.set_content(body + "\n")
     try:
         with _smtp(cfg) as conn:
-            conn.send_message(msg)
+            conn.send_message(msg, to_addrs=_with_copy(cfg, address))
     except smtplib.SMTPRecipientsRefused:
         raise NotSent(f"the mail server refused {address}; check the address or ask someone else.")
     except smtplib.SMTPAuthenticationError:
         raise NotSent("the email login is wrong, so email can't be used until it is fixed in Settings. "
                       "Use another channel.")
     return _record("email", address, name, topic, question, body, now, where="email", ref=ref)
+
+def _with_copy(cfg: dict, address: str) -> list[str]:
+    """Who the message goes to: the person, and a blind copy to our own address, so it lands in the owner's inbox
+    as well as Sent (#163). The copy is in the envelope only, never a header, so the person sees no Bcc; it has no
+    In-Reply-To, so the reply check never takes it for an answer."""
+    return list(dict.fromkeys(a for a in (address, cfg.get("from_address", "")) if a))
 
 def _smtp(cfg: dict):
     """A logged-in SMTP connection: SSL on port 465, else STARTTLS."""
@@ -414,7 +420,7 @@ def _thank_email(r: OutreachRecord, now: datetime) -> str:
         msg["In-Reply-To"], msg["References"] = theirs, f"{r.ref} {theirs}".strip()
     msg.set_content(thanks(r.name) + "\n")
     with _smtp(cfg) as conn:
-        conn.send_message(msg)
+        conn.send_message(msg, to_addrs=_with_copy(cfg, r.address))
     return "email"
 
 def _thank_bluesky(r: OutreachRecord, now: datetime) -> str:

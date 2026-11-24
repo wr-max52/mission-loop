@@ -38,7 +38,7 @@ The written issue is what Will approves; nothing after it waits on him until the
   whenever it changes, notes a missing uvx or Ollama, then runs `run.py ui`, which opens the browser). `README.md` is the newcomer's guide.
 - CLI: `python run.py <command>` — `ui mcp doctor init add inspire theorize run loop stop auto approve reject review requeue push show status ask join-1f916 check-bluesky epics epic rename-epic merge-epic delete-epic
   combines approve-combine reject-combine link unlink library backup restore`
-- Tests: `pytest -q` (expects 968 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
+- Tests: `pytest -q` (expects 970 passed; no Ollama or network needed; `tests/test_sprites.py` runs the sprite checks in `node` and skips without it; any request to 1F916, GitHub, Bluesky (its
   public read API too), a custom webhook, a cloud model provider, an embedding model, the Wayback Machine, a web search source (DuckDuckGo
   included) or a mail server (SMTP, IMAP) fails the test, and `BLUESKY_*`, `MISSION_LOOP_GITHUB_*`, `MISSION_LOOP_EMBED_MODEL`,
   `MISSION_LOOP_OUTREACH` and every provider's key variable are cleared so a real `.env` never switches one on.
@@ -180,7 +180,9 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
      (`_pick`), so writing goes before a brief, a brief before a new search, and a brief a human approves
      mid-task is next in line. A mission added with "Add and start loop" (`Mission.rush`) goes ahead of all of
      them for the Research Assistant, once; the flag is cleared when it is picked. A failed attempt shows as before and the mission waits until the others with
-     work for that worker have had a turn; then a new round starts from the farthest along.
+     work for that worker have had a turn; then a new round starts from the farthest along. A mission that moved to
+     a later stage since its turn (`FLOW`; a brief written and approved, now in Outreach) is fresh again, so it never
+     waits behind new briefs (#163); only a failed attempt, which stays at its stage or goes back, waits.
   When the Theorist is due, it is the Principal Investigator's first task of the run, and the finder waits for
   it. When the Research Assistant's role has nothing left, the mission finder runs once (what it finds is worked on
   straight away); when no worker has anything left, the loop rests (`--every` minutes, or until the UI wakes
@@ -584,7 +586,10 @@ QUEUED / RESEARCHING / BRIEF_READY / PARKED -> DEAD_LEAD (refuted, no record or 
   writes a message: code (`contacts.send`) fills `contacts.TEMPLATE` ("Hi {name}, I'm an AI Agent on a research mission
   about {topic} and I need your help answering this: {question} You can learn about my missions here {site}", the site
   part only while `settings.site_url()` has one), checks, sends and records it as an `OutreachRecord` in the mission's
-  `outreach` artifact the moment it goes, so a crash or stop loses nothing. A message that fails is not sent and the
+  `outreach` artifact the moment it goes, so a crash or stop loses nothing. Every outreach email and thank-you also goes
+  to our own `from_address` as a blind copy in the envelope only (`contacts._with_copy`, #163), so it lands in the
+  owner's inbox as well as Sent; the person sees no Bcc, and the copy has no `In-Reply-To`, so it is never read as a
+  reply. A message that fails is not sent and the
   agent is told why and what to fix, and tries again or picks someone else: a channel not ready, a malformed address,
   our own address, a name that isn't a first name (or a title and surname), a topic over 12 words, a question that
   isn't one short question ending in "?" (10 to 200 characters, no links), someone already asked on this mission or

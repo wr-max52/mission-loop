@@ -551,14 +551,17 @@ def _as_worker(seat: str, fn, *args):
         checkpoint.use(None)
         activity.clear()
 
-def _pick(worker: str, waiting: list[Mission], turns: set[tuple[str, str]]) -> Mission | None:
+def _pick(worker: str, waiting: list[Mission], turns: dict[tuple[str, str], int]) -> Mission | None:
     """The farthest-along mission for this worker that hasn't had its turn this round. Once every one has,
-    a new round starts, so a mission whose attempt failed waits while the others get a go. Every copy of a
-    worker shares its rounds. A mission a human rushed ("Add and start loop") goes ahead of the rest."""
+    a new round starts, so a mission whose attempt failed waits while the others get a go. A mission that moved
+    to a later stage since its turn (a brief written and approved, now in Outreach) is fresh again (#163): only
+    a failed attempt, which stays at its stage or goes back, waits. Every copy of a worker shares its rounds. A
+    mission a human rushed ("Add and start loop") goes ahead of the rest."""
     mine = [m for m in waiting if settings.worker_for(role(m)) == worker]
-    fresh = [m for m in mine if (worker, m.slug) not in turns]
+    fresh = [m for m in mine if FLOW.index(m.state) < turns.get((worker, m.slug), len(FLOW))]
     if mine and not fresh:
-        turns.difference_update((worker, m.slug) for m in mine)
+        for m in mine:
+            turns.pop((worker, m.slug), None)
         fresh = mine
     fresh.sort(key=lambda m: not m.rush)   # stable: otherwise farthest along first
     return fresh[0] if fresh else None
@@ -587,7 +590,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
     failed: set[str] = set()               # steps that raised: skipped until the loop starts again
     seen: set = set()                      # publish requests the last publishing pass already tried
     last_pass = time.monotonic()
-    turns: set[tuple[str, str]] = set()    # (worker, slug): model turns taken this round
+    turns: dict[tuple[str, str], int] = {}  # (worker, slug) -> the FLOW stage it was at: turns taken this round
     running: dict = {}                     # future -> (seat, mission, its state before) or (seat, None, desk task)
     POLL = 5                               # seconds: a mission a human approves mid-task gets the idle worker soon
     seats = len(settings.WORKERS) * settings.MAX_COUNT       # threads start only as seats need them
@@ -620,7 +623,7 @@ def work(now_fn, max_tasks: int = MAX_TASKS, after_task=None) -> int:
                     m = _pick(worker, waiting, turns)
                     if m:
                         waiting.remove(m)
-                        turns.add((worker, m.slug))
+                        turns[(worker, m.slug)] = FLOW.index(m.state)
                         m.rush = False         # it has its turn; saved with the step's result
                         running[pool.submit(_as_worker, seat, step, m, now_fn())] = (seat, m, m.state)
                         tasks += 1

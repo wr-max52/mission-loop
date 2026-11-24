@@ -392,7 +392,7 @@ def test_a_rushed_mission_is_searched_first():
     and the mark is dropped once it has had its turn."""
     old = [Mission(slug=s, topic="t", state=State.RESEARCHING) for s in ("a", "b")]
     new = Mission(slug="n", topic="t", state=State.RESEARCHING, rush=True)
-    turns: set = set()
+    turns: dict = {}
     assert orchestrator._pick("assistant", old + [new], turns) is new
     assert orchestrator._pick("assistant", old, turns) is old[0]
     researching("r"); store.save_mission(Mission(slug="n", topic="Rushed", rush=True))
