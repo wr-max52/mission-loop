@@ -1,4 +1,4 @@
-import fcntl, socket, threading, time, webbrowser
+import fcntl, socket, threading, time, webbrowser, zipfile
 import typer, yaml
 from pathlib import Path
 from dotenv import load_dotenv
@@ -370,6 +370,33 @@ def doctor_cmd():
     print(doctor.report(found))
     if any(c.blocks_loop and not c.ok for c in found):
         raise typer.Exit(1)
+
+@app.command("backup")
+def backup_cmd(to: str = typer.Option("", help="Folder for the zip (default: the one on Settings → Setup, "
+                                               "else ~/Documents or your home folder); never inside this folder")):
+    """Save everything this machine can't get back (data/ with the database, settings and keys, missions/,
+    missions.yaml, site/) into one zip, mode 600. It holds your keys: keep it private."""
+    import backup
+    try:
+        done = backup.make(to or None)
+    except (ValueError, OSError) as e:
+        print(f"backup failed: {e}")
+        raise typer.Exit(1) from None
+    print(f"backed up {done['files']} files to {done['path']} ({done['bytes'] / 1e6:.1f} MB)")
+    print("It holds your keys (1F916, GitHub, Bluesky, providers, email): keep it private, and never commit it.")
+
+@app.command("restore")
+def restore_cmd(zip_path: str = typer.Argument(..., help="A zip made by `python run.py backup`")):
+    """Put a backup back. Refuses while the loop runs; the current data/, missions/, missions.yaml and site/ are
+    moved into data.before-restore-<date>/ first, so nothing is lost."""
+    import backup
+    try:
+        done = backup.restore(zip_path)
+    except (RuntimeError, ValueError, OSError, zipfile.BadZipFile) as e:
+        print(f"restore refused: {e}")
+        raise typer.Exit(1) from None
+    print(f"restored {done['files']} files from {zip_path}; what was here is in {done['aside']}")
+    print("If the UI is open, restart it so it reads the restored desk.")
 
 @app.command()
 def stop():
