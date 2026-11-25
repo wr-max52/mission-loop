@@ -56,11 +56,13 @@ def strip_links(p: str, ids: set[str]) -> str:
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 def settle_section(sec: Section, brief: ResearchBrief) -> tuple[Section, list[str]]:
-    """Code's fixes for a section still failing after its fix rounds: links taken out of each cited paragraph, and a
-    paragraph with no citation dropped while the section keeps another. Returns the section and what was done."""
+    """Code's fixes for a section still failing after its fix rounds: links taken out of each paragraph that is cited
+    once they are gone (a citation written as a link, like [s1](https://...), becomes [s1]), then a paragraph with no
+    citation dropped while the section keeps another. Returns the section and what was done."""
     ids, fixes, linked, paragraphs = {s.id for s in brief.sources}, [], 0, []
     for p in sec.paragraphs:
-        clean = strip_links(p, ids) if URL.search(p) and cited_ids(p) else p
+        clean = strip_links(p, ids) if URL.search(p) else p
+        clean = clean if cited_ids(clean) else p       # links stay in a paragraph left uncited: it goes below
         linked += clean != p
         if clean:
             paragraphs.append(clean)
