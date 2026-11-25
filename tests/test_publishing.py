@@ -51,7 +51,7 @@ def test_missions_page_runs_the_flow_top_to_bottom_and_only_links_to_what_is_pub
     assert '<a class="card site-link" href="/published">' in html and "1 article</span>" in html
     assert html.index('href="/m/queued"') < html.index('class="card site-link"')
     assert html.index('action="/missions"') < html.index('class="card site-link"')    # the very bottom
-    assert f'<a href="/published">{ui.ICON_SITE}Published</a>' in html.split("</nav>")[0]   # and a button at the top
+    assert f'<a class="tab" href="/published">{ui.ICON_SITE}<span>Published</span></a>' in html.split("</nav>")[0]   # and a tab at the top
     assert f'{ui.ICON_SITE}Published</span>' in html
 
 def test_publishing_is_one_step_on_the_strip_whatever_the_channels(client, monkeypatch, sky):
@@ -69,7 +69,7 @@ def test_publishing_is_one_step_on_the_strip_whatever_the_channels(client, monke
 
 def test_nav_goes_to_the_published_page_which_leads_back(client, sky):
     backlog("a")
-    assert '<a href="/published">' in client.get("/").text and 'href="/site/" target="_blank">' not in \
+    assert '<a class="tab" href="/published">' in client.get("/").text and 'href="/site/" target="_blank">' not in \
         client.get("/").text.split("</nav>")[0]
     html = client.get("/published").text
     assert '<a class="back" href="/">&larr; Missions</a>' in html

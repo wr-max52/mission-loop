@@ -413,6 +413,43 @@ def test_play_pause_sits_beside_auto_on_every_page(client, monkeypatch):
     top = nav(client.get("/").text)
     assert "Stopping" in top and " disabled>" in top                     # nothing to press while it stops
 
+def test_every_page_shares_one_folder_tab_bar_that_stays_put(client):
+    """#177: the same bar on every page, outside <main>, with only the front tab changing."""
+    store.save_mission(Mission(slug="b", topic="Outages"))
+    routes = {"/": "/", "/published": "/published", "/board": "/board", "/settings": "/settings",
+              "/m/b": "/", "/log": "/", "/stats": "/", "/avatars": "/settings"}
+    bars = set()
+    for route, front in routes.items():
+        html = client.get(route).text
+        body = html.split("<body>", 1)[1]
+        assert body.startswith('<nav class="top">') and body.index("</nav>") < body.index("<main>"), route   # outside <main>
+        assert body.count('<nav class="top">') == 1
+        top = nav(html)
+        assert top.count('aria-current="page"') == 1, route
+        assert f'<a class="tab" href="{front}" aria-current="page">' in top, route
+        bars.add(top.replace(' aria-current="page"', ""))
+    assert len(bars) == 1                                                 # the same markup on every page
+    assert nav(client.get("/m/nope").text).count("aria-current") == 0     # Not found: no tab in front
+    top = nav(client.get("/").text)
+    assert [top.index(f'href="{h}"') for h in ("/", "/published", "/board", "/settings")] == \
+        sorted(top.index(f'href="{h}"') for h in ("/", "/published", "/board", "/settings"))
+    assert '<a class="about" href="/about" target="_blank"' in top and top.count('class="tab"') == 4
+
+def test_the_tab_bar_fits_its_text_and_never_shifts(client, monkeypatch):
+    """#177: nothing in the bar is a fixed pixel size, the row scrolls rather than wraps, the scrollbar's room is kept,
+    and the page body's width no longer reaches the bar."""
+    css = ui.UI_CSS
+    assert "scrollbar-gutter:stable" in css
+    tab_rules = [line for line in css.splitlines() if line.startswith("nav.top")]
+    assert tab_rules and not any(re.search(r"(?<![\d.])(width|height|min-width|max-width)\s*:\s*\d+px", r) for r in tab_rules)
+    assert re.search(r"nav\.top \.tabs \{[^}]*overflow-x:auto", css) and re.search(r"nav\.top \.tabs a \{[^}]*white-space:nowrap", css)
+    assert "body:has(.board-wrap) nav.top" not in ui.BOARD_CSS                 # the board keeps the same gap
+    assert "row.scrollLeft" in ui.TABS_JS                                      # the front tab scrolled into view
+    monkeypatch.setattr(ui.i18n, "current", lambda: "de")
+    monkeypatch.setattr(ui, "_", lambda s: {"Settings": "Einstellungen", "Published": "Veröffentlicht"}.get(s, s))
+    top = nav(client.get("/settings").text)
+    assert '<span>Einstellungen</span>' in top and '<span>Veröffentlicht</span>' in top   # whole labels, in their tabs
+
 def test_play_starts_the_loop_with_the_saved_rest_and_goes_back(client, monkeypatch):
     started = []
     monkeypatch.setattr(ui, "start_loop", lambda every: started.append(every))
