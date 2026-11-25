@@ -155,6 +155,14 @@ async def test_a_section_citing_a_source_by_its_url_is_given_the_id(monkeypatch,
     assert "[s1]" in a.sections[0].paragraphs[0] and "https://" not in a.sections[0].paragraphs[0]
     assert len(seen) == 4                  # fixed by code, so no round of feedback was needed
 
+async def test_a_section_citing_by_markdown_links_passes_without_a_fix_round(monkeypatch, m):
+    linked = Section(heading="Finding", paragraphs=["The record shows it [s1](https://a.example.com). " * 12,
+                                                    "So does the report [S1; s2](https://b.example.com/x). " * 12])
+    seen = fake(monkeypatch, [PLAN, linked, section("The record"), section("The other side", "s4")])
+    a = await writer.run_writer(m, BRIEF, [])
+    assert "[s1]." in a.sections[0].paragraphs[0] and "[s1, s2]." in a.sections[0].paragraphs[1]
+    assert "](" not in "".join(a.sections[0].paragraphs) and len(seen) == 4      # no round of feedback needed
+
 async def test_after_its_last_round_code_takes_out_links_and_drops_uncited_paragraphs(monkeypatch, m):
     cited = "The record shows heat pumps hold up in the cold [s1] (see https://x.example.com/a). " * 12
     messy = Section(heading="Finding", paragraphs=[cited, "Nobody cites this paragraph at all."])
